@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      0.9.0
+// @version      0.10.0
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, pojazdy i obsada w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 0.9.0
+ * Wersja 0.10.0
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -24,6 +24,7 @@
  * - wyszukiwanie i filtrowanie po typie budynku,
  * - osobna zakladka Specjalizacje z lista rozbudow/specjalizacji dla kazdego budynku,
  * - osobna zakladka Obsada i pojazdy: liczba pojazdow, pojemnosc, personel, cel, bilans i rekrutacja,
+ * - filtry obsady: brakuje zalogi / za duzo zalogi,
  * - zaznaczanie pojedynczych, widocznych lub wszystkich filtrowanych budynkow,
  * - reczna edycja przygotowanej nazwy,
  * - generator nazw z polami:
@@ -67,6 +68,7 @@
     typeId: '',
     specializationFilter: '',
     specializationPresence: 'all',
+    staffingFilter: 'all',
     vehicles: [],
     vehicleTypes: {},
     selected: new Set(),
@@ -650,13 +652,27 @@
     });
   }
 
+  function filteredStaffingBuildings() {
+    return filteredBuildings().filter(building => {
+      if (state.staffingFilter === 'shortage') {
+        return building.personnelCurrent < building.vehicleCrewTarget;
+      }
+
+      if (state.staffingFilter === 'surplus') {
+        return building.personnelCurrent > building.vehicleCrewTarget;
+      }
+
+      return true;
+    });
+  }
+
   function renderStaffingTable() {
     const tbody = document.getElementById(`${APP_ID}-staffing-tbody`);
     const summary = document.getElementById(`${APP_ID}-staffing-summary`);
     const pager = document.getElementById(`${APP_ID}-staffing-pager`);
     if (!tbody || !summary || !pager) return;
 
-    const filtered = filteredBuildings();
+    const filtered = filteredStaffingBuildings();
     const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     state.staffingPage = Math.max(1, Math.min(state.staffingPage, pages));
 
@@ -696,7 +712,14 @@
     const balance = personnelCurrent - crewTarget;
     const hiring = filtered.filter(b => b.hiringPhase > 0).length;
 
+    const staffingFilterLabel = state.staffingFilter === 'shortage'
+      ? 'Brakuje zalogi'
+      : state.staffingFilter === 'surplus'
+        ? 'Za duzo zalogi'
+        : 'Wszystkie';
+
     summary.innerHTML =
+      `Filtr: <b>${staffingFilterLabel}</b> | ` +
       `Budynki: <b>${filtered.length}</b> / ${state.buildings.length} | ` +
       `Pojazdy: <b>${vehicleCount}</b> | ` +
       `Pracownicy: <b>${personnelCurrent}</b> | ` +
@@ -1322,7 +1345,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.9.0</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.10.0</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1445,6 +1468,11 @@
         </div>
 
         <div class="or-bm-toolbar" id="${APP_ID}-staffing-toolbar" style="display:none">
+          <select id="${APP_ID}-staffing-filter" title="Filtr bilansu zalogi">
+            <option value="all">Wszystkie budynki</option>
+            <option value="shortage">Brakuje zalogi</option>
+            <option value="surplus">Za duzo zalogi</option>
+          </select>
           <span class="or-bm-staffing-note">
             „Docelowa” = cel personelu zapisany w budynku.
             „Potrzeba dla pojazdow” = suma maksymalnych zalog wszystkich pojazdow w budynku.
@@ -1501,6 +1529,12 @@
       state.specializationPresence = event.target.value;
       state.specializationPage = 1;
       renderSpecializationsTable();
+    });
+
+    document.getElementById(`${APP_ID}-staffing-filter`).addEventListener('change', event => {
+      state.staffingFilter = event.target.value;
+      state.staffingPage = 1;
+      renderStaffingTable();
     });
 
     button.addEventListener('click', async () => {
@@ -1594,5 +1628,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 0.9.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 0.10.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();
