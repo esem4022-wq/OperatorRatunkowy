@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.05
+// @version      2.04
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.05
+ * Wersja 2.04
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -30,8 +30,6 @@
  * - v2.03: aktualizacje Tampermonkey z GitHub przez @updateURL / @downloadURL,
  * - v2.03: przydzielanie wolnego personelu do maksymalnej obsady bezposrednio z karty Zaloga,
  * - v2.04: poprawione rozpoznawanie kolumn „Przydzielono do” i „Stan” w tabeli personelu,
- * - v2.05: lista wolnego personelu jest czytana z /buildings/{id}/personals,
- *   a przy zapisie adresy akcji sa pobierane osobno z /vehicles/{id}/zuweisung,
  * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
  * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
@@ -2100,18 +2098,19 @@
   }
 
   async function fetchBuildingPersonnelDetail(buildingId) {
-    // Do liczenia wolnych ludzi używamy strony personelu JEDNOSTKI.
-    // Na /vehicles/{id}/zuweisung widoczne przyciski zależą od konkretnego
-    // pojazdu, więc ta strona nie nadaje się do liczenia ogólnej liczby wolnych osób.
-    const response = await fetch(`/buildings/${encodeURIComponent(buildingId)}/personals`, {
+    const vehicles = state.vehicles.filter(v => String(v.buildingId) === String(buildingId));
+    const reference = vehicles[0];
+    if (!reference) throw new Error('Brak pojazdu referencyjnego w jednostce.');
+
+    const response = await fetch(`/vehicles/${encodeURIComponent(reference.id)}/zuweisung`, {
       credentials: 'same-origin',
       headers: { 'Accept': 'text/html,application/xhtml+xml' },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const html = await response.text();
-    const detail = parseBuildingPersonnelPage(html, buildingId, '');
+    const detail = parseBuildingPersonnelPage(html, buildingId, reference.id);
     if (!detail.personnel.length) {
-      throw new Error('Nie znaleziono tabeli personelu jednostki.');
+      throw new Error('Nie znaleziono tabeli personelu na stronie przydziału.');
     }
     return detail;
   }
@@ -2329,23 +2328,16 @@
       };
     }
 
-    const freeEligiblePeople = detail.personnel.filter(person =>
+    const freePeople = detail.personnel.filter(person =>
       person.available &&
+      person.assignHref &&
       allKeys.every(key => person.trainingKeys.has(key))
     );
 
-    if (freeEligiblePeople.length < missing) {
-      return {
-        ok: false,
-        error: `Wolnych odpowiednich osób: ${freeEligiblePeople.length}; potrzeba ${missing}.`,
-      };
-    }
-
-    const freePeople = freeEligiblePeople.filter(person => person.assignHref);
     if (freePeople.length < missing) {
       return {
         ok: false,
-        error: `Wolnych osób jest ${freeEligiblePeople.length}, ale gra udostępniła przycisk przydziału tylko dla ${freePeople.length}. Odśwież personel i spróbuj ponownie.`,
+        error: `Wolnych odpowiednich osób: ${freePeople.length}; potrzeba ${missing}.`,
       };
     }
 
@@ -2381,78 +2373,16 @@
     return { ok: true, people, missing, maxCrew, training };
   }
 
-  function assignmentRowIsInSchool(row) {
-    const text = String(row?.textContent || '').replace(/\s+/g, ' ').trim();
-    return /(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu|uczestniczy w szkoleniu)/i.test(text);
-  }
-
-  function parseVehicleAssignmentControls(html, vehicle) {
-    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
-    const rows = [...doc.querySelectorAll('tr[id^="personal_"], tr[data-filterable-by]')];
-    const controls = new Map();
-
-    for (const row of rows) {
-      const button = row.querySelector('a.btn-success[personal_id], a.btn-success');
-      const idFromRow = String(row.id || '').match(/^personal_(\d+)$/)?.[1] || '';
-      const personId = idFromRow || String(button?.getAttribute('personal_id') || '');
-      if (!personId) continue;
-
-      const href = String(button?.getAttribute('href') || '');
-      controls.set(personId, {
-        id: personId,
-        assignHref: href,
-        canAssign: !!button && !!href,
-        inSchool: assignmentRowIsInSchool(row),
-        trainingKeys: personnelTrainingKeys(row),
-      });
-    }
-
-    return {
-      vehicleId: String(vehicle.id),
-      buildingId: String(vehicle.buildingId),
-      controls,
-      csrfToken: String(doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''),
-    };
-  }
-
   async function fetchVehiclePersonnelDetail(vehicle) {
-    // 1) Stan wolny/przydzielony bierzemy z listy personelu jednostki.
-    const buildingDetail = await fetchBuildingPersonnelDetail(vehicle.buildingId);
-
-    // 2) Adresy POST do przydzielania pobieramy ze strony KONKRETNEGO pojazdu.
-    // Zielony przycisk a.btn-success jest akcją przydziału dla danej osoby.
     const response = await fetch(`/vehicles/${encodeURIComponent(vehicle.id)}/zuweisung`, {
       credentials: 'same-origin',
       headers: { 'Accept': 'text/html,application/xhtml+xml' },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const html = await response.text();
-    const assignment = parseVehicleAssignmentControls(html, vehicle);
-
-    const personnel = buildingDetail.personnel.map(person => {
-      const control = assignment.controls.get(String(person.id));
-      const mergedTraining = new Set([
-        ...person.trainingKeys,
-        ...(control?.trainingKeys || []),
-      ]);
-
-      return {
-        ...person,
-        trainingKeys: mergedTraining,
-        // Wolność nadal wynika z listy jednostki. Przycisk jest tylko akcją zapisu.
-        available: !!person.available,
-        assignHref: control?.canAssign ? control.assignHref : '',
-        canAssignReferenceVehicle: !!control?.canAssign,
-      };
-    });
-
-    return {
-      ...buildingDetail,
-      referenceVehicleId: String(vehicle.id),
-      personnel,
-      csrfToken: assignment.csrfToken || buildingDetail.csrfToken || '',
-      assignmentControlCount: [...assignment.controls.values()].filter(item => item.canAssign).length,
-    };
+    const detail = parseBuildingPersonnelPage(html, vehicle.buildingId, vehicle.id);
+    if (!detail.personnel.length) throw new Error('Nie znaleziono tabeli personelu na stronie przydziału.');
+    return detail;
   }
 
   async function postPersonnelAssignment(person, csrfToken) {
@@ -2818,7 +2748,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.05</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.04</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -2861,7 +2791,6 @@
             <option value="type_unit">{typ}[{n:typ:02}-{jednostka:[]}]</option>
             <option value="editable_ww">ww[{n:typ:02}-{jednostka:[]}]</option>
             <option value="old_dual">{stara}{n:jednostka+typ:02}-{n:jednostka:02}</option>
-            <option value="old_bracket">{stara}[{n:typ:02}-{jednostka:[]}]</option>
           </select>
           <input id="${APP_ID}-pattern" class="or-fm-pattern" type="text" value="${esc(state.settings.pattern)}" title="Szablon nazwy - po wybraniu gotowego szablonu nadal mozna go dowolnie edytowac">
           <input id="${APP_ID}-start-number" type="number" min="0" value="${esc(state.settings.startNumber)}" style="width:85px" title="Numer poczatkowy">
@@ -3189,9 +3118,6 @@
       } else if (preset === 'old_dual') {
         patternInput.value = '{stara}{n:jednostka+typ:02}-{n:jednostka:02}';
         patternInput.focus();
-      } else if (preset === 'old_bracket') {
-        patternInput.value = '{stara}[{n:typ:02}-{jednostka:[]}]';
-        patternInput.focus();
       }
 
       // Lista jest tylko narzedziem do wstawiania - po wyborze wraca do pozycji startowej.
@@ -3283,5 +3209,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.05 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log('[OR Fleet Manager] Wersja 2.04 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
 })();
