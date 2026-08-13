@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.04
+// @version      2.06
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,20 +16,23 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.04
+ * Wersja 2.06
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
  * - osobna karta Załoga: max, przydzielona i brakujaca obsada pojazdu,
  * - sprawdzanie czy w jednostce jest wystarczajacy wolny personel do pelnej obsady,
  * - przy ocenie personelu uwzgledniane sa wymagane szkolenia/kursy pojazdu,
- * - szczegoly personelu sa pobierane leniwie z /vehicles/{id}/zuweisung, po jednej stronie na jednostke,
+ * - szczegoly personelu sa pobierane leniwie ze strony jednostki oraz /vehicles/{id}/zuweisung,
  * - v2.01: wolny personel jest liczony niezaleznie od kursow pojazdu referencyjnego,
  * - v2.03: strzalki poprzednia/nastepna jednostka w karcie Zaloga,
  * - v2.03: pojazd z pelna obsada jest podswietlany na zielono,
  * - v2.03: aktualizacje Tampermonkey z GitHub przez @updateURL / @downloadURL,
  * - v2.03: przydzielanie wolnego personelu do maksymalnej obsady bezposrednio z karty Zaloga,
  * - v2.04: poprawione rozpoznawanie kolumn „Przydzielono do” i „Stan” w tabeli personelu,
+ * - v2.05: lista wolnego personelu jest czytana ze strony personelu jednostki,
+ *   a przy zapisie adresy akcji sa pobierane osobno z /vehicles/{id}/zuweisung,
+ * - v2.06: automatyczne wykrywanie strony/tabeli personelu jednostki oraz bardziej odporny parser ID pracownikow,
  * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
  * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
@@ -1960,6 +1963,7 @@
       patterns.some(pattern => pattern.test(text))
     );
 
+    let name = findIndex([/^nazwa$/, /pracownik/, /personel/, /^name$/]);
     let assigned = findIndex([
       /przydzielono do/,
       /przypisano do/,
@@ -1981,14 +1985,48 @@
       /ausbildung/,
     ]);
 
-    // Aktualny układ OR widoczny na stronie personelu:
+    // Aktualny układ OR ze screena użytkownika:
     // [checkbox] [Nazwa] [Edukacja] [Przydzielono do] [Stan] [Opcje].
-    // Fallback jest używany tylko wtedy, gdy nagłówki nie zostały znalezione.
+    if (name < 0 && headers.length >= 5) name = 1;
     if (assigned < 0 && headers.length >= 5) assigned = 3;
     if (status < 0 && headers.length >= 5) status = 4;
     if (education < 0 && headers.length >= 3) education = 2;
 
-    return { assigned, status, education, headers };
+    return { name, assigned, status, education, headers };
+  }
+
+  function personnelTableScore(table) {
+    const columns = personnelTableColumns(table);
+    let score = 0;
+    if (columns.assigned >= 0) score += 8;
+    if (columns.status >= 0) score += 4;
+    if (columns.education >= 0) score += 2;
+    if (columns.name >= 0) score += 2;
+
+    const headerText = columns.headers.join(' | ');
+    if (/przydzielono do|przypisano do|assigned to|zugewiesen/i.test(headerText)) score += 10;
+    if (/stan|status/i.test(headerText)) score += 3;
+    if (/nazwa|name|personel|pracownik/i.test(headerText)) score += 2;
+
+    const rows = [...(table?.querySelectorAll('tbody tr') || [])];
+    if (rows.length) score += Math.min(5, rows.length);
+    if (rows.some(row => row.matches('[id^="personal_"], [data-filterable-by]'))) score += 4;
+    if (rows.some(row => row.querySelector('[personal_id], [data-personal-id]'))) score += 4;
+    return score;
+  }
+
+  function findPersonnelTable(doc) {
+    const direct = doc.querySelector('#personal_table');
+    if (direct) return direct;
+
+    const tables = [...doc.querySelectorAll('table')];
+    if (!tables.length) return null;
+
+    const ranked = tables
+      .map(table => ({ table, score: personnelTableScore(table) }))
+      .sort((a, b) => b.score - a.score);
+
+    return ranked[0]?.score >= 8 ? ranked[0].table : null;
   }
 
   function personnelAssignedCell(row, columns) {
@@ -2005,9 +2043,6 @@
     const cell = personnelAssignedCell(row, columns);
     if (!cell) return '';
 
-    // Szukamy linku TYLKO w kolumnie „Przydzielono do”.
-    // Poprzednio skrypt szukał dowolnego /vehicles/... w całym wierszu,
-    // więc przycisk „przydziel do pojazdu” był mylony z aktualnym przydziałem.
     for (const link of cell.querySelectorAll('a[href*="/vehicles/"]')) {
       const href = link.getAttribute('href') || '';
       const match = href.match(/\/vehicles\/(\d+)(?:\/|$|\?)/);
@@ -2017,8 +2052,6 @@
     const text = String(cell.textContent || '').replace(/\s+/g, ' ').trim();
     if (!text || /^(?:-|–|—|brak|none)$/i.test(text)) return '';
 
-    // Gdy nazwa pojazdu jest zwykłym tekstem bez linku, próbujemy dopasować
-    // ją dokładnie do pojazdu w tej samej jednostce.
     const normalized = text.toLocaleLowerCase('pl');
     const matchedVehicle = state.vehicles.find(vehicle =>
       String(vehicle.buildingId) === String(buildingId) &&
@@ -2026,15 +2059,10 @@
     );
 
     if (matchedVehicle) return String(matchedVehicle.id);
-
-    // Nie znamy ID, ale kolumna nie jest pusta — osoba jest przydzielona.
-    // Specjalny identyfikator zapobiega policzeniu jej jako wolnej.
     return `assigned:${text}`;
   }
 
   function personnelRowIsInSchool(row, columns) {
-    // data-education-key opisuje POSIADANE szkolenia/kursy, a nie fakt,
-    // ze dana osoba jest aktualnie w szkole. Sprawdzamy wyłącznie kolumnę „Stan”.
     const cells = [...(row?.children || [])];
     const statusCell = columns?.status >= 0 ? cells[columns.status] : null;
     const statusText = String(statusCell?.textContent || '')
@@ -2044,29 +2072,63 @@
     return /(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu|uczestniczy w szkoleniu)/i.test(statusText);
   }
 
-  function parseBuildingPersonnelPage(html, buildingId, referenceVehicleId) {
-    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
-    const table = doc.querySelector('#personal_table') || doc.querySelector('table');
-    const columns = personnelTableColumns(table);
+  function personnelIdFromRow(row) {
+    const idFromRow = String(row?.id || '').match(/(?:personal|personnel|staff)[_-]?(\d+)/i)?.[1];
+    if (idFromRow) return idFromRow;
 
-    let rows = [...doc.querySelectorAll('#personal_table tbody tr')];
-    if (!rows.length) rows = [...doc.querySelectorAll('tbody tr[data-filterable-by]')];
+    for (const attr of ['personal_id', 'data-personal-id', 'data-personnel-id', 'data-person-id']) {
+      const own = row?.getAttribute?.(attr);
+      if (/^\d+$/.test(String(own || ''))) return String(own);
+      const nested = row?.querySelector?.(`[${attr}]`)?.getAttribute(attr);
+      if (/^\d+$/.test(String(nested || ''))) return String(nested);
+    }
+
+    // Checkbox z listy personelu często niesie ID pracownika w value/name.
+    for (const input of row?.querySelectorAll?.('input[type="checkbox"], input[name], button[name]') || []) {
+      const value = String(input.getAttribute('value') || '');
+      const name = String(input.getAttribute('name') || '');
+      if (/^\d+$/.test(value) && /personal|personnel|staff|selected/i.test(name + ' ' + input.id)) return value;
+      const m = (name + ' ' + input.id).match(/(?:personal|personnel|staff)[^0-9]*(\d+)/i);
+      if (m) return m[1];
+    }
+
+    // Ostatnia deska ratunku: link edycji/usunięcia konkretnego pracownika.
+    for (const link of row?.querySelectorAll?.('a[href]') || []) {
+      const href = String(link.getAttribute('href') || '');
+      const m = href.match(/\/(?:personals?|personnel|staff)(?:\/|_)(\d+)(?:\/|$|\?|\/edit)/i);
+      if (m) return m[1];
+    }
+
+    return '';
+  }
+
+  function parseBuildingPersonnelPage(html, buildingId, referenceVehicleId, sourceUrl = '') {
+    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
+    const table = findPersonnelTable(doc);
+    if (!table) {
+      return {
+        buildingId: String(buildingId), referenceVehicleId: String(referenceVehicleId),
+        personnel: [], totalCount: 0, freeCount: 0, assignedCount: 0, inSchoolCount: 0,
+        csrfToken: String(doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''),
+        loadedAt: Date.now(), sourceUrl, parseReason: 'Brak tabeli z kolumna Przydzielono do.'
+      };
+    }
+
+    const columns = personnelTableColumns(table);
+    let rows = [...table.querySelectorAll('tbody tr')];
+    if (!rows.length) rows = [...table.querySelectorAll('tr')].filter(row => row.querySelector('td'));
 
     const personnel = [];
     const seen = new Set();
 
     for (const row of rows) {
-      const idFromRow = String(row.id || '').match(/^personal_(\d+)$/)?.[1] || '';
-      const buttonWithId = row.querySelector('[personal_id]');
-      const personId = idFromRow || String(buttonWithId?.getAttribute('personal_id') || '');
+      const personId = personnelIdFromRow(row);
       if (!personId || seen.has(personId)) continue;
       seen.add(personId);
 
       const assignedVehicleId = assignedVehicleIdFromPersonnelRow(row, columns, buildingId);
       const inSchool = personnelRowIsInSchool(row, columns);
       const assignButton = row.querySelector('a.btn-success[personal_id], a.btn-success');
-      const canAssignReferenceVehicle = !!assignButton;
-      const assignHref = String(assignButton?.getAttribute('href') || '');
       const trainingKeys = personnelTrainingKeys(row);
 
       personnel.push({
@@ -2075,12 +2137,9 @@
         assignedVehicleId,
         trainingKeys,
         inSchool,
-        // Wolny = brak pojazdu w kolumnie „Przydzielono do” i brak trwającego szkolenia.
-        // Stan „Dostępne” NIE oznacza osoby nieprzydzielonej — na stronie OR taki stan
-        // mają również osoby przypisane do pojazdów.
         available: !assignedVehicleId && !inSchool,
-        canAssignReferenceVehicle,
-        assignHref,
+        canAssignReferenceVehicle: !!assignButton,
+        assignHref: String(assignButton?.getAttribute('href') || ''),
       });
     }
 
@@ -2094,25 +2153,79 @@
       inSchoolCount: personnel.filter(person => person.inSchool).length,
       csrfToken: String(doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''),
       loadedAt: Date.now(),
+      sourceUrl,
+      parseReason: personnel.length ? '' : `Tabela znaleziona (${columns.headers.join(' | ')}), ale nie udalo sie odczytac ID pracownikow.`,
     };
   }
 
-  async function fetchBuildingPersonnelDetail(buildingId) {
-    const vehicles = state.vehicles.filter(v => String(v.buildingId) === String(buildingId));
-    const reference = vehicles[0];
-    if (!reference) throw new Error('Brak pojazdu referencyjnego w jednostce.');
+  function discoverPersonnelUrlsFromBuildingHtml(html, buildingId) {
+    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
+    const result = [];
+    const id = String(buildingId);
 
-    const response = await fetch(`/vehicles/${encodeURIComponent(reference.id)}/zuweisung`, {
-      credentials: 'same-origin',
-      headers: { 'Accept': 'text/html,application/xhtml+xml' },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const html = await response.text();
-    const detail = parseBuildingPersonnelPage(html, buildingId, reference.id);
-    if (!detail.personnel.length) {
-      throw new Error('Nie znaleziono tabeli personelu na stronie przydziału.');
+    for (const link of doc.querySelectorAll('a[href]')) {
+      const hrefRaw = String(link.getAttribute('href') || '');
+      const text = String(link.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!hrefRaw) continue;
+      if (!new RegExp(`/buildings/${id}(?:/|$)`).test(hrefRaw)) continue;
+      if (!/personal|personel|pracownik|staff/i.test(hrefRaw + ' ' + text)) continue;
+      try {
+        const u = new URL(hrefRaw, location.origin);
+        if (u.origin === location.origin) result.push(u.pathname + u.search);
+      } catch (_) {}
     }
-    return detail;
+    return [...new Set(result)];
+  }
+
+  async function fetchBuildingPersonnelDetail(buildingId) {
+    const id = encodeURIComponent(buildingId);
+    const tried = [];
+    const candidates = [
+      `/buildings/${id}`,
+      `/buildings/${id}/personals`,
+      `/buildings/${id}/personal`,
+      `/buildings/${id}/personnel`,
+    ];
+
+    // Najpierw strona jednostki: u użytkownika tabela personelu jest widoczna właśnie
+    // w widoku jednostki. Przy okazji wykrywamy prawdziwy link do sekcji personelu.
+    let buildingHtml = '';
+    try {
+      const rootResponse = await fetch(`/buildings/${id}`, {
+        credentials: 'same-origin', headers: { 'Accept': 'text/html,application/xhtml+xml' },
+      });
+      tried.push(`/buildings/${id}: HTTP ${rootResponse.status}`);
+      if (rootResponse.ok) {
+        buildingHtml = await rootResponse.text();
+        const rootDetail = parseBuildingPersonnelPage(buildingHtml, buildingId, '', `/buildings/${id}`);
+        if (rootDetail.personnel.length) return rootDetail;
+        candidates.unshift(...discoverPersonnelUrlsFromBuildingHtml(buildingHtml, buildingId));
+      }
+    } catch (error) {
+      tried.push(`/buildings/${id}: ${error.message}`);
+    }
+
+    const uniqueCandidates = [...new Set(candidates)].filter(url => url !== `/buildings/${id}`);
+
+    for (const url of uniqueCandidates) {
+      try {
+        const response = await fetch(url, {
+          credentials: 'same-origin', headers: { 'Accept': 'text/html,application/xhtml+xml' },
+        });
+        tried.push(`${url}: HTTP ${response.status}`);
+        if (!response.ok) continue;
+        const html = await response.text();
+        const detail = parseBuildingPersonnelPage(html, buildingId, '', url);
+        if (detail.personnel.length) return detail;
+        tried.push(`${url}: ${detail.parseReason || 'brak personelu'}`);
+      } catch (error) {
+        tried.push(`${url}: ${error.message}`);
+      }
+    }
+
+    throw new Error(
+      'Nie udalo sie odczytac listy personelu jednostki. Probowano: ' + tried.join(' | ')
+    );
   }
 
   function setCrewStatus(message, kind = 'info') {
@@ -2328,16 +2441,23 @@
       };
     }
 
-    const freePeople = detail.personnel.filter(person =>
+    const freeEligiblePeople = detail.personnel.filter(person =>
       person.available &&
-      person.assignHref &&
       allKeys.every(key => person.trainingKeys.has(key))
     );
 
+    if (freeEligiblePeople.length < missing) {
+      return {
+        ok: false,
+        error: `Wolnych odpowiednich osób: ${freeEligiblePeople.length}; potrzeba ${missing}.`,
+      };
+    }
+
+    const freePeople = freeEligiblePeople.filter(person => person.assignHref);
     if (freePeople.length < missing) {
       return {
         ok: false,
-        error: `Wolnych odpowiednich osób: ${freePeople.length}; potrzeba ${missing}.`,
+        error: `Wolnych osób jest ${freeEligiblePeople.length}, ale gra udostępniła przycisk przydziału tylko dla ${freePeople.length}. Odśwież personel i spróbuj ponownie.`,
       };
     }
 
@@ -2373,16 +2493,78 @@
     return { ok: true, people, missing, maxCrew, training };
   }
 
+  function assignmentRowIsInSchool(row) {
+    const text = String(row?.textContent || '').replace(/\s+/g, ' ').trim();
+    return /(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu|uczestniczy w szkoleniu)/i.test(text);
+  }
+
+  function parseVehicleAssignmentControls(html, vehicle) {
+    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
+    const rows = [...doc.querySelectorAll('tr[id^="personal_"], tr[data-filterable-by]')];
+    const controls = new Map();
+
+    for (const row of rows) {
+      const button = row.querySelector('a.btn-success[personal_id], a.btn-success');
+      const idFromRow = String(row.id || '').match(/^personal_(\d+)$/)?.[1] || '';
+      const personId = idFromRow || String(button?.getAttribute('personal_id') || '');
+      if (!personId) continue;
+
+      const href = String(button?.getAttribute('href') || '');
+      controls.set(personId, {
+        id: personId,
+        assignHref: href,
+        canAssign: !!button && !!href,
+        inSchool: assignmentRowIsInSchool(row),
+        trainingKeys: personnelTrainingKeys(row),
+      });
+    }
+
+    return {
+      vehicleId: String(vehicle.id),
+      buildingId: String(vehicle.buildingId),
+      controls,
+      csrfToken: String(doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''),
+    };
+  }
+
   async function fetchVehiclePersonnelDetail(vehicle) {
+    // 1) Stan wolny/przydzielony bierzemy z listy personelu jednostki.
+    const buildingDetail = await fetchBuildingPersonnelDetail(vehicle.buildingId);
+
+    // 2) Adresy POST do przydzielania pobieramy ze strony KONKRETNEGO pojazdu.
+    // Zielony przycisk a.btn-success jest akcją przydziału dla danej osoby.
     const response = await fetch(`/vehicles/${encodeURIComponent(vehicle.id)}/zuweisung`, {
       credentials: 'same-origin',
       headers: { 'Accept': 'text/html,application/xhtml+xml' },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const html = await response.text();
-    const detail = parseBuildingPersonnelPage(html, vehicle.buildingId, vehicle.id);
-    if (!detail.personnel.length) throw new Error('Nie znaleziono tabeli personelu na stronie przydziału.');
-    return detail;
+    const assignment = parseVehicleAssignmentControls(html, vehicle);
+
+    const personnel = buildingDetail.personnel.map(person => {
+      const control = assignment.controls.get(String(person.id));
+      const mergedTraining = new Set([
+        ...person.trainingKeys,
+        ...(control?.trainingKeys || []),
+      ]);
+
+      return {
+        ...person,
+        trainingKeys: mergedTraining,
+        // Wolność nadal wynika z listy jednostki. Przycisk jest tylko akcją zapisu.
+        available: !!person.available,
+        assignHref: control?.canAssign ? control.assignHref : '',
+        canAssignReferenceVehicle: !!control?.canAssign,
+      };
+    });
+
+    return {
+      ...buildingDetail,
+      referenceVehicleId: String(vehicle.id),
+      personnel,
+      csrfToken: assignment.csrfToken || buildingDetail.csrfToken || '',
+      assignmentControlCount: [...assignment.controls.values()].filter(item => item.canAssign).length,
+    };
   }
 
   async function postPersonnelAssignment(person, csrfToken) {
@@ -2748,7 +2930,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.04</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.06</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -2791,6 +2973,7 @@
             <option value="type_unit">{typ}[{n:typ:02}-{jednostka:[]}]</option>
             <option value="editable_ww">ww[{n:typ:02}-{jednostka:[]}]</option>
             <option value="old_dual">{stara}{n:jednostka+typ:02}-{n:jednostka:02}</option>
+            <option value="old_bracket">{stara}[{n:typ:02}-{jednostka:[]}]</option>
           </select>
           <input id="${APP_ID}-pattern" class="or-fm-pattern" type="text" value="${esc(state.settings.pattern)}" title="Szablon nazwy - po wybraniu gotowego szablonu nadal mozna go dowolnie edytowac">
           <input id="${APP_ID}-start-number" type="number" min="0" value="${esc(state.settings.startNumber)}" style="width:85px" title="Numer poczatkowy">
@@ -3118,6 +3301,9 @@
       } else if (preset === 'old_dual') {
         patternInput.value = '{stara}{n:jednostka+typ:02}-{n:jednostka:02}';
         patternInput.focus();
+      } else if (preset === 'old_bracket') {
+        patternInput.value = '{stara}[{n:typ:02}-{jednostka:[]}]';
+        patternInput.focus();
       }
 
       // Lista jest tylko narzedziem do wstawiania - po wyborze wraca do pozycji startowej.
@@ -3209,5 +3395,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.04 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log('[OR Fleet Manager] Wersja 2.06 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
 })();
