@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      0.7.0
+// @version      0.9.0
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, pojazdy i obsada w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
+// @homepageURL   https://github.com/esem4022-wq/OperatorRatunkowy
+// @updateURL     https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-budynkow-or.user.js
+// @downloadURL   https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-budynkow-or.user.js
 // @match        https://operatorratunkowy.pl/*
 // @match        https://www.operatorratunkowy.pl/*
 // @run-at       document-idle
@@ -13,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 0.7.0
+ * Wersja 0.9.0
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -1319,7 +1322,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.7.0</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.9.0</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1591,5 +1594,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 0.7.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 0.9.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();
