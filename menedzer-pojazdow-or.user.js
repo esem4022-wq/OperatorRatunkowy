@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.03
-// @description  Menedzer pojazdow OR: nazwy, filtry, zaloga i przydzielanie personelu
+// @version      2.04
+// @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
-// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-pojazdow-or.user.js
-// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-pojazdow-or.user.js
+// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-pojazdow-or.user.js
+// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-pojazdow-or.user.js
 // @match        https://operatorratunkowy.pl/*
 // @match        https://www.operatorratunkowy.pl/*
 // @run-at       document-idle
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.03
+ * Wersja 2.04
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -25,10 +25,13 @@
  * - przy ocenie personelu uwzgledniane sa wymagane szkolenia/kursy pojazdu,
  * - szczegoly personelu sa pobierane leniwie z /vehicles/{id}/zuweisung, po jednej stronie na jednostke,
  * - v2.01: wolny personel jest liczony niezaleznie od kursow pojazdu referencyjnego,
- * - v2.02: strzalki poprzednia/nastepna jednostka w karcie Zaloga,
- * - v2.02: pojazd z pelna obsada jest podswietlany na zielono,
- * - v2.03: obsluga aktualizacji Tampermonkey przez GitHub,
- * - v2.03: przydzielanie brakujacego personelu do maksymalnej obsady z karty Zaloga,
+ * - v2.03: strzalki poprzednia/nastepna jednostka w karcie Zaloga,
+ * - v2.03: pojazd z pelna obsada jest podswietlany na zielono,
+ * - v2.03: aktualizacje Tampermonkey z GitHub przez @updateURL / @downloadURL,
+ * - v2.03: przydzielanie wolnego personelu do maksymalnej obsady bezposrednio z karty Zaloga,
+ * - v2.04: poprawione rozpoznawanie kolumn „Przydzielono do” i „Stan” w tabeli personelu,
+ * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
+ * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
  * - klasy pojazdow sa pobierane z formularza AAO gry,
  * - parser obsluguje standardowe pola AAO (fire, rw, dlk, rtw itd.)
@@ -1942,30 +1945,110 @@
     return new Set(keys);
   }
 
-  function assignedVehicleIdFromPersonnelRow(row) {
-    for (const link of row.querySelectorAll('a[href^="/vehicles/"]')) {
-      const href = link.getAttribute('href') || '';
-      const match = href.match(/^\/vehicles\/(\d+)(?:\/|$)/);
-      if (match) return match[1];
-    }
-    return '';
+  function normalizePersonnelHeader(text) {
+    return String(text ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('pl');
   }
 
-  function personnelRowIsInSchool(row) {
-    // data-education-key opisuje POSIADANE szkolenia/kursy, a nie fakt,
-    // ze dana osoba jest aktualnie w szkole. Stan szkolenia jest widoczny
-    // tekstowo w kolumnie statusu strony przydzialu personelu.
+  function personnelTableColumns(table) {
+    const headers = [...(table?.querySelectorAll('thead th') || [])]
+      .map(th => normalizePersonnelHeader(th.textContent));
+
+    const findIndex = patterns => headers.findIndex(text =>
+      patterns.some(pattern => pattern.test(text))
+    );
+
+    let assigned = findIndex([
+      /przydzielono do/,
+      /przypisano do/,
+      /zugewiesen/,
+      /assigned to/,
+    ]);
+
+    let status = findIndex([
+      /^stan$/,
+      /^status$/,
+      /status personelu/,
+    ]);
+
+    let education = findIndex([
+      /^edukacja$/,
+      /szkolen/,
+      /kurs/,
+      /education/,
+      /ausbildung/,
+    ]);
+
+    // Aktualny układ OR widoczny na stronie personelu:
+    // [checkbox] [Nazwa] [Edukacja] [Przydzielono do] [Stan] [Opcje].
+    // Fallback jest używany tylko wtedy, gdy nagłówki nie zostały znalezione.
+    if (assigned < 0 && headers.length >= 5) assigned = 3;
+    if (status < 0 && headers.length >= 5) status = 4;
+    if (education < 0 && headers.length >= 3) education = 2;
+
+    return { assigned, status, education, headers };
+  }
+
+  function personnelAssignedCell(row, columns) {
     const cells = [...(row?.children || [])];
-    const statusText = String(cells[2]?.textContent || row?.textContent || '')
+    if (columns?.assigned >= 0 && cells[columns.assigned]) return cells[columns.assigned];
+
+    return row?.querySelector(
+      'td[data-title*="Przydziel" i], td[data-label*="Przydziel" i], ' +
+      'td[data-title*="Assigned" i], td[data-label*="Assigned" i]'
+    ) || null;
+  }
+
+  function assignedVehicleIdFromPersonnelRow(row, columns, buildingId) {
+    const cell = personnelAssignedCell(row, columns);
+    if (!cell) return '';
+
+    // Szukamy linku TYLKO w kolumnie „Przydzielono do”.
+    // Poprzednio skrypt szukał dowolnego /vehicles/... w całym wierszu,
+    // więc przycisk „przydziel do pojazdu” był mylony z aktualnym przydziałem.
+    for (const link of cell.querySelectorAll('a[href*="/vehicles/"]')) {
+      const href = link.getAttribute('href') || '';
+      const match = href.match(/\/vehicles\/(\d+)(?:\/|$|\?)/);
+      if (match) return match[1];
+    }
+
+    const text = String(cell.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || /^(?:-|–|—|brak|none)$/i.test(text)) return '';
+
+    // Gdy nazwa pojazdu jest zwykłym tekstem bez linku, próbujemy dopasować
+    // ją dokładnie do pojazdu w tej samej jednostce.
+    const normalized = text.toLocaleLowerCase('pl');
+    const matchedVehicle = state.vehicles.find(vehicle =>
+      String(vehicle.buildingId) === String(buildingId) &&
+      String(vehicle.name || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase('pl') === normalized
+    );
+
+    if (matchedVehicle) return String(matchedVehicle.id);
+
+    // Nie znamy ID, ale kolumna nie jest pusta — osoba jest przydzielona.
+    // Specjalny identyfikator zapobiega policzeniu jej jako wolnej.
+    return `assigned:${text}`;
+  }
+
+  function personnelRowIsInSchool(row, columns) {
+    // data-education-key opisuje POSIADANE szkolenia/kursy, a nie fakt,
+    // ze dana osoba jest aktualnie w szkole. Sprawdzamy wyłącznie kolumnę „Stan”.
+    const cells = [...(row?.children || [])];
+    const statusCell = columns?.status >= 0 ? cells[columns.status] : null;
+    const statusText = String(statusCell?.textContent || '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    return /^(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu)\b/i.test(statusText) ||
-      /\b(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu)\b/i.test(statusText);
+    return /(?:Im Unterricht|W trakcie szkolenia|Na szkoleniu|W szkoleniu|uczestniczy w szkoleniu)/i.test(statusText);
   }
 
   function parseBuildingPersonnelPage(html, buildingId, referenceVehicleId) {
     const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
+    const table = doc.querySelector('#personal_table') || doc.querySelector('table');
+    const columns = personnelTableColumns(table);
+
     let rows = [...doc.querySelectorAll('#personal_table tbody tr')];
     if (!rows.length) rows = [...doc.querySelectorAll('tbody tr[data-filterable-by]')];
 
@@ -1979,9 +2062,11 @@
       if (!personId || seen.has(personId)) continue;
       seen.add(personId);
 
-      const assignedVehicleId = assignedVehicleIdFromPersonnelRow(row);
-      const inSchool = personnelRowIsInSchool(row);
-      const canAssignReferenceVehicle = !!row.querySelector('a.btn-success[personal_id], a.btn-success');
+      const assignedVehicleId = assignedVehicleIdFromPersonnelRow(row, columns, buildingId);
+      const inSchool = personnelRowIsInSchool(row, columns);
+      const assignButton = row.querySelector('a.btn-success[personal_id], a.btn-success');
+      const canAssignReferenceVehicle = !!assignButton;
+      const assignHref = String(assignButton?.getAttribute('href') || '');
       const trainingKeys = personnelTrainingKeys(row);
 
       personnel.push({
@@ -1990,11 +2075,12 @@
         assignedVehicleId,
         trainingKeys,
         inSchool,
-        // Wolny personel liczymy niezaleznie od pojazdu referencyjnego.
-        // Zielony przycisk na /zuweisung oznacza mozliwosc przydzielenia
-        // do TEGO konkretnego pojazdu i moze zalezec od wymaganego kursu.
+        // Wolny = brak pojazdu w kolumnie „Przydzielono do” i brak trwającego szkolenia.
+        // Stan „Dostępne” NIE oznacza osoby nieprzydzielonej — na stronie OR taki stan
+        // mają również osoby przypisane do pojazdów.
         available: !assignedVehicleId && !inSchool,
         canAssignReferenceVehicle,
+        assignHref,
       });
     }
 
@@ -2006,6 +2092,7 @@
       freeCount: personnel.filter(person => person.available).length,
       assignedCount: personnel.filter(person => !!person.assignedVehicleId).length,
       inSchoolCount: personnel.filter(person => person.inSchool).length,
+      csrfToken: String(doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''),
       loadedAt: Date.now(),
     };
   }
@@ -2166,207 +2253,219 @@
     };
   }
 
-  function parseVehicleAssignmentPage(html, vehicle) {
-    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
-    const csrfToken = doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-    let rows = [...doc.querySelectorAll('#personal_table tbody tr')];
-    if (!rows.length) rows = [...doc.querySelectorAll('tbody tr[data-filterable-by]')];
+  function selectPersonnelForNumericTraining(requirements, assignedPeople, freePeople) {
+    const numeric = requirements.filter(req => !req.all && req.amount > 0);
+    if (!numeric.length) return [];
 
-    const personnel = [];
-    const seen = new Set();
+    const caps = numeric.map(req => Math.max(0, Number(req.amount) || 0));
+    const initialKey = new Array(caps.length).fill(0).join(',');
+    const targetKey = caps.join(',');
+    let states = new Map([[initialKey, []]]);
 
-    for (const row of rows) {
-      const idFromRow = String(row.id || '').match(/^personal_(\d+)$/)?.[1] || '';
-      const actionLink = row.querySelector('a.btn-success[personal_id], a.btn-success');
-      const personId = idFromRow || String(actionLink?.getAttribute('personal_id') || '');
-      if (!personId || seen.has(personId)) continue;
-      seen.add(personId);
+    const processPerson = (person, isFree) => {
+      const before = [...states.entries()];
+      for (const [stateKey, selected] of before) {
+        const vector = stateKey.split(',').map(Number);
+        for (let i = 0; i < numeric.length; i++) {
+          if (vector[i] >= caps[i]) continue;
+          if (!person.trainingKeys.has(numeric[i].key)) continue;
 
-      const assignedVehicleId = assignedVehicleIdFromPersonnelRow(row);
-      const inSchool = personnelRowIsInSchool(row);
-      const trainingKeys = personnelTrainingKeys(row);
+          const next = [...vector];
+          next[i] = Math.min(caps[i], next[i] + 1);
+          const nextKey = next.join(',');
+          const nextSelected = isFree ? [...selected, person] : selected;
+          const previous = states.get(nextKey);
 
-      personnel.push({
-        id: personId,
-        assignedVehicleId,
-        inSchool,
-        trainingKeys,
-        assignUrl: actionLink?.href || actionLink?.getAttribute('href') || '',
-        canAssign: !!actionLink,
-      });
-    }
-
-    return {
-      csrfToken,
-      personnel,
-      assignedPeople: personnel.filter(person => person.assignedVehicleId === String(vehicle.id)),
-      freeAssignable: personnel.filter(person => !person.assignedVehicleId && !person.inSchool && person.canAssign && person.assignUrl),
+          if (!previous || nextSelected.length < previous.length) {
+            states.set(nextKey, nextSelected);
+          }
+        }
+      }
     };
+
+    assignedPeople.forEach(person => processPerson(person, false));
+    freePeople.forEach(person => processPerson(person, true));
+
+    return states.get(targetKey) || null;
   }
 
-  function selectPersonnelForVehicle(vehicle, pageDetail) {
+  function buildPersonnelAssignmentPlan(vehicle, detail) {
     const maxCrew = vehicleMaxCrew(vehicle);
-    const assigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
-    if (maxCrew === null || maxCrew <= assigned) return [];
+    if (maxCrew === null || maxCrew <= 0) {
+      return { ok: false, error: 'Nie udało się ustalić maksymalnej załogi tego pojazdu.' };
+    }
 
-    const missing = Math.max(0, maxCrew - assigned);
+    const assignedPeople = detail.personnel.filter(
+      person => person.assignedVehicleId === String(vehicle.id)
+    );
+    const apiAssigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
+
+    // Przy operacji zapisującej wymagamy zgodności obu źródeł. Lepiej odmówić
+    // niż przez rozbieżność przydzielić o jedną osobę za dużo.
+    if (assignedPeople.length !== apiAssigned) {
+      return {
+        ok: false,
+        error: `Niezgodna liczba przydzielonych osób: API ${apiAssigned}, strona przydziału ${assignedPeople.length}. Odśwież personel i spróbuj ponownie.`,
+      };
+    }
+
+    const missing = Math.max(0, maxCrew - assignedPeople.length);
+    if (missing <= 0) return { ok: true, people: [], missing: 0, maxCrew };
+
     const training = extractTrainingDefinition(vehicle.typeId, maxCrew);
     if (!training.known) {
-      throw new Error('Nie można bezpiecznie przydzielić personelu: nieznane wymagania kursów dla tego typu.');
+      return { ok: false, error: 'Nie znam wymagań kursów dla tego typu pojazdu.' };
     }
 
     const allKeys = training.requirements.filter(req => req.all).map(req => req.key);
-    const assignedPeople = pageDetail.assignedPeople || [];
-    const assignedWithoutAll = assignedPeople.filter(person => !allKeys.every(key => person.trainingKeys.has(key)));
-    if (assignedWithoutAll.length) {
-      throw new Error('Już przydzielony personel nie spełnia wymagań kursów dla całej załogi.');
+    const invalidAssigned = assignedPeople.filter(
+      person => !allKeys.every(key => person.trainingKeys.has(key))
+    );
+    if (invalidAssigned.length) {
+      return {
+        ok: false,
+        error: `${invalidAssigned.length} już przydzielonych osób nie spełnia wymagań kursów dla całej załogi.`,
+      };
     }
 
-    const candidates = (pageDetail.freeAssignable || [])
-      .filter(person => allKeys.every(key => person.trainingKeys.has(key)));
+    const freePeople = detail.personnel.filter(person =>
+      person.available &&
+      person.assignHref &&
+      allKeys.every(key => person.trainingKeys.has(key))
+    );
 
-    if (candidates.length < missing) {
-      throw new Error(`Za mało wolnego personelu możliwego do przydzielenia: ${candidates.length}, potrzeba ${missing}.`);
+    if (freePeople.length < missing) {
+      return {
+        ok: false,
+        error: `Wolnych odpowiednich osób: ${freePeople.length}; potrzeba ${missing}.`,
+      };
     }
 
-    const numeric = training.requirements
-      .filter(req => !req.all && Number(req.amount) > 0)
-      .map(req => ({ key: req.key, amount: Number(req.amount) }));
-
-    if (!numeric.length) return candidates.slice(0, missing);
-
-    const target = numeric.map(req => {
-      const already = assignedPeople.filter(person => person.trainingKeys.has(req.key)).length;
-      return Math.max(0, req.amount - already);
-    });
-
-    const targetKey = target.join(',');
-    if (target.every(value => value <= 0)) return candidates.slice(0, missing);
-
-    // DP z zapamietaniem konkretnych osób. Szukamy podzbioru kursowego,
-    // który spełnia wszystkie minima i mieści się w liczbie brakujących miejsc.
-    let states = new Map([['0'.repeat(0), null]]);
-    states = new Map([[numeric.map(() => 0).join(','), []]]);
-
-    for (const person of candidates) {
-      const currentStates = [...states.entries()];
-      for (const [key, selectedIds] of currentStates) {
-        if (selectedIds.length >= missing) continue;
-        const counts = key.split(',').map(Number);
-        const next = counts.slice();
-        let useful = false;
-
-        numeric.forEach((req, index) => {
-          if (next[index] >= target[index]) return;
-          if (person.trainingKeys.has(req.key)) {
-            next[index] += 1;
-            useful = true;
-          }
-        });
-
-        if (!useful) continue;
-        const capped = next.map((value, index) => Math.min(value, target[index]));
-        const nextKey = capped.join(',');
-        const nextSelected = [...selectedIds, person.id];
-        const existing = states.get(nextKey);
-        if (!existing || nextSelected.length < existing.length) states.set(nextKey, nextSelected);
-      }
+    const requiredPeople = selectPersonnelForNumericTraining(
+      training.requirements,
+      assignedPeople,
+      freePeople
+    );
+    if (requiredPeople === null || requiredPeople.length > missing) {
+      return {
+        ok: false,
+        error: 'Brakuje wolnego personelu z wymaganymi kursami.',
+      };
     }
 
-    const requiredIds = states.get(targetKey);
-    if (!requiredIds || requiredIds.length > missing) {
-      throw new Error('Liczba osób wystarcza, ale nie da się dobrać wymaganych kursów do wolnych miejsc.');
+    const selectedIds = new Set(requiredPeople.map(person => person.id));
+    const people = [...requiredPeople];
+
+    for (const person of freePeople) {
+      if (people.length >= missing) break;
+      if (selectedIds.has(person.id)) continue;
+      selectedIds.add(person.id);
+      people.push(person);
     }
 
-    const requiredSet = new Set(requiredIds);
-    const selected = candidates.filter(person => requiredSet.has(person.id));
-    for (const person of candidates) {
-      if (selected.length >= missing) break;
-      if (!requiredSet.has(person.id)) selected.push(person);
+    if (people.length < missing) {
+      return {
+        ok: false,
+        error: `Wybrano ${people.length} osób, a potrzeba ${missing}.`,
+      };
     }
 
-    if (selected.length < missing) {
-      throw new Error(`Nie udało się dobrać pełnej załogi. Wybrano ${selected.length}, potrzeba ${missing}.`);
-    }
-
-    return selected.slice(0, missing);
+    return { ok: true, people, missing, maxCrew, training };
   }
 
-  async function assignPersonnelLink(url, csrfToken) {
-    const response = await fetch(url, {
+  async function fetchVehiclePersonnelDetail(vehicle) {
+    const response = await fetch(`/vehicles/${encodeURIComponent(vehicle.id)}/zuweisung`, {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'text/html,application/xhtml+xml' },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    const detail = parseBuildingPersonnelPage(html, vehicle.buildingId, vehicle.id);
+    if (!detail.personnel.length) throw new Error('Nie znaleziono tabeli personelu na stronie przydziału.');
+    return detail;
+  }
+
+  async function postPersonnelAssignment(person, csrfToken) {
+    if (!person?.assignHref) throw new Error(`Brak adresu przydziału dla osoby ${person?.id || '?'}.`);
+
+    const response = await fetch(person.assignHref, {
       method: 'POST',
       credentials: 'same-origin',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'x-csrf-token': csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || '',
+        'x-requested-with': 'XMLHttpRequest',
       },
-      body: '',
     });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} podczas przydzielania osoby ${person.id}.`);
+    }
+
     return response.text();
   }
 
   async function assignCrewToMax(vehicleId) {
     const vehicle = state.vehicles.find(v => String(v.id) === String(vehicleId));
-    if (!vehicle) return;
-    if (state.crewAssigning.has(String(vehicle.id))) return;
+    if (!vehicle || state.crewAssigning.has(String(vehicleId))) return;
 
-    const maxCrew = vehicleMaxCrew(vehicle);
-    const assigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
-    const missing = maxCrew === null ? null : Math.max(0, maxCrew - assigned);
-    if (missing === null || missing <= 0) {
-      setCrewStatus('Ten pojazd ma już pełną obsadę.', 'info');
-      return;
-    }
-
-    const availability = crewAvailability(vehicle);
-    if (!['ok', 'warn'].includes(availability.kind)) {
-      setCrewStatus(`Nie można przydzielić: ${availability.detail}`, 'warn');
-      return;
-    }
-
-    state.crewAssigning.add(String(vehicle.id));
+    state.crewAssigning.add(String(vehicleId));
     renderCrewTable();
-    setCrewStatus(`Pobieram listę personelu dla ${vehicle.name}…`, 'info');
+    setCrewStatus(`Sprawdzam przydział dla ${vehicle.name}…`, 'info');
 
-    let assignedNow = 0;
     try {
-      const response = await fetch(`/vehicles/${encodeURIComponent(vehicle.id)}/zuweisung`, {
-        credentials: 'same-origin',
-        headers: { 'Accept': 'text/html,application/xhtml+xml' },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const html = await response.text();
-      const pageDetail = parseVehicleAssignmentPage(html, vehicle);
-      const selectedPeople = selectPersonnelForVehicle(vehicle, pageDetail);
+      // Pobieramy stronę konkretnego pojazdu tuż przed zapisem, aby przyciski
+      // przydziału i CSRF były aktualne dla tego pojazdu.
+      const detail = await fetchVehiclePersonnelDetail(vehicle);
+      const plan = buildPersonnelAssignmentPlan(vehicle, detail);
 
-      if (!selectedPeople.length) {
-        setCrewStatus('Nie znaleziono personelu do przydzielenia.', 'warn');
+      if (!plan.ok) throw new Error(plan.error);
+      if (!plan.people.length) {
+        setCrewStatus(`${vehicle.name}: pojazd ma już maksymalną załogę.`, 'ok');
         return;
       }
 
-      for (let i = 0; i < selectedPeople.length; i++) {
-        const person = selectedPeople[i];
-        setCrewStatus(`Przydzielam ${i + 1}/${selectedPeople.length} osób do ${vehicle.name}…`, 'info');
-        await assignPersonnelLink(person.assignUrl, pageDetail.csrfToken);
-        assignedNow += 1;
-        await sleep(100);
+      const accepted = window.confirm(
+        `Przydzielić ${plan.people.length} osób do pojazdu „${vehicle.name}” ` +
+        `i uzupełnić obsadę do ${plan.maxCrew}?\n\n` +
+        `Skrypt wybierze wyłącznie wolny personel spełniający rozpoznane wymagania kursów.`
+      );
+      if (!accepted) {
+        setCrewStatus('Anulowano przydzielanie personelu.', 'info');
+        return;
       }
 
-      vehicle.assignedPersonnelCount = assigned + assignedNow;
-      state.crewDetails.delete(String(vehicle.buildingId));
-      setCrewStatus(`Przydzielono ${assignedNow} osób do ${vehicle.name}. Odświeżam dane…`, 'ok');
-      await ensureCrewDetailsForVehicles([vehicle], true);
+      let assignedNow = 0;
+      for (const person of plan.people) {
+        await postPersonnelAssignment(person, detail.csrfToken);
+        assignedNow += 1;
+        setCrewStatus(
+          `Przydzielam personel do ${vehicle.name}: ${assignedNow}/${plan.people.length}…`,
+          'info'
+        );
+        if (assignedNow < plan.people.length) await sleep(80);
+      }
+
+      vehicle.assignedPersonnelCount = Math.max(
+        0,
+        Number(vehicle.assignedPersonnelCount) || 0
+      ) + assignedNow;
+
+      // Ponownie pobieramy jednostkę po operacji, żeby tabela i status kursów
+      // od razu odpowiadały stanowi gry.
+      const refreshed = await fetchBuildingPersonnelDetail(vehicle.buildingId);
+      state.crewDetails.set(String(vehicle.buildingId), { status: 'loaded', detail: refreshed });
+
+      setCrewStatus(
+        `${vehicle.name}: przydzielono ${assignedNow} osób. Obsada uzupełniona do maksimum.`,
+        'ok'
+      );
     } catch (error) {
       console.error('[OR Fleet Manager] Błąd przydzielania personelu:', error);
-      if (assignedNow) vehicle.assignedPersonnelCount = assigned + assignedNow;
-      state.crewDetails.delete(String(vehicle.buildingId));
-      setCrewStatus(`Błąd przydzielania po ${assignedNow} osobach: ${error?.message || error}`, 'error');
-      await ensureCrewDetailsForVehicles([vehicle], true).catch(() => {});
+      state.crewDetails.delete(String(vehicle?.buildingId || ''));
+      setCrewStatus(`Nie udało się przydzielić personelu: ${error.message}`, 'error');
     } finally {
-      state.crewAssigning.delete(String(vehicle.id));
+      state.crewAssigning.delete(String(vehicleId));
       renderCrewTable();
     }
   }
@@ -2396,7 +2495,12 @@
       const status = crewAvailability(vehicle);
       const fullCrew = maxCrew !== null && maxCrew > 0 && assigned >= maxCrew;
       const assigning = state.crewAssigning.has(String(vehicle.id));
-      const canAssign = !fullCrew && missing !== null && missing > 0 && ['ok', 'warn'].includes(status.kind);
+      const canAssign = !fullCrew && missing > 0 && status.kind === 'ok' && !assigning;
+      const assignTitle = fullCrew
+        ? 'Pojazd ma już maksymalną załogę.'
+        : status.kind === 'ok'
+          ? 'Przydziel wolny personel do maksymalnej załogi.'
+          : 'Przydział jest dostępny po pozytywnej weryfikacji personelu i kursów.';
       return `<tr class="${fullCrew ? 'or-fm-crew-full' : ''}">` +
         `<td class="or-fm-id"><a href="/vehicles/${esc(vehicle.id)}" target="_blank" rel="noopener">${esc(vehicle.id)}</a></td>` +
         `<td>${esc(vehicle.buildingName)}</td>` +
@@ -2406,11 +2510,7 @@
         `<td class="or-fm-center or-fm-number">${esc(assigned)}</td>` +
         `<td class="or-fm-center or-fm-number ${missing > 0 ? 'or-fm-missing' : ''}">${missing === null ? '?' : esc(missing)}</td>` +
         `<td class="or-fm-crew-status-cell">${crewStatusHtml(status)}</td>` +
-        `<td class="or-fm-center">` +
-          (fullCrew
-            ? `<span class="or-fm-muted">Pełna</span>`
-            : `<button type="button" class="or-fm-btn or-fm-btn-small or-fm-crew-assign" data-id="${esc(vehicle.id)}" ${(!canAssign || assigning) ? 'disabled' : ''}>${assigning ? 'Przydzielam…' : 'Przydziel do max'}</button>`) +
-        `</td>` +
+        `<td class="or-fm-center"><button type="button" class="or-fm-btn or-fm-btn-small or-fm-assign-btn" data-vehicle-id="${esc(vehicle.id)}" title="${esc(assignTitle)}" ${canAssign ? '' : 'disabled'}>${assigning ? 'Przydzielam…' : fullCrew ? 'Pełna' : 'Do max'}</button></td>` +
         `</tr>`;
     }).join('') || `<tr><td colspan="9" class="or-fm-empty">Brak pojazdów dla wybranych filtrów.</td></tr>`;
 
@@ -2433,8 +2533,8 @@
       renderCrewTable();
     });
 
-    tbody.querySelectorAll('.or-fm-crew-assign').forEach(button => {
-      button.addEventListener('click', () => assignCrewToMax(button.dataset.id));
+    tbody.querySelectorAll('.or-fm-assign-btn').forEach(button => {
+      button.addEventListener('click', () => assignCrewToMax(button.dataset.vehicleId));
     });
 
     if (state.activeTab === 'crew' && current.length) {
@@ -2648,7 +2748,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.03</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.04</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -2806,7 +2906,7 @@
           </div>
           <div class="or-fm-help-wrap">
             <div class="or-fm-help-toggle" style="cursor:default">
-              <span>👥 Załoga: „Czy można do max?” uwzględnia cały wolny, nieprzydzielony personel w tej samej jednostce, a następnie osobno sprawdza wymagane kursy/szkolenia pojazdu. Zielony wiersz oznacza pojazd z przydzieloną maksymalną załogą. Przycisk „Przydziel do max” dobiera wolny personel z wymaganymi kursami i przydziela brakujące osoby bez opuszczania tej karty.</span>
+              <span>👥 Załoga: wolny personel jest liczony na podstawie pustej kolumny „Przydzielono do” (nie na podstawie stanu „Dostępne”). „Czy można do max?” uwzględnia też wymagane kursy. Przycisk „Do max” jest aktywny tylko po pozytywnej weryfikacji; przed zapisem zawsze pojawia się potwierdzenie. Zielony wiersz oznacza pojazd z maksymalną obsadą.</span>
             </div>
           </div>
           <div class="or-fm-body">
@@ -2821,7 +2921,7 @@
                   <th>Przydzielona załoga</th>
                   <th>Brakująca załoga</th>
                   <th>Czy w jednostce można uzupełnić do max?</th>
-                  <th>Akcja</th>
+                  <th>Przydział</th>
                 </tr></thead>
                 <tbody id="${APP_ID}-crew-tbody"><tr><td colspan="9" class="or-fm-empty">Otwórz kartę Załoga, aby sprawdzić personel.</td></tr></tbody>
               </table>
@@ -3109,5 +3209,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.03 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log('[OR Fleet Manager] Wersja 2.04 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
 })();
