@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      0.10.0
+// @version      0.11.0
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, pojazdy i obsada w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 0.10.0
+ * Wersja 0.11.0
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -25,6 +25,8 @@
  * - osobna zakladka Specjalizacje z lista rozbudow/specjalizacji dla kazdego budynku,
  * - osobna zakladka Obsada i pojazdy: liczba pojazdow, pojemnosc, personel, cel, bilans i rekrutacja,
  * - filtry obsady: brakuje zalogi / za duzo zalogi,
+ * - edycja docelowej liczby pracownikow i sterowanie rekrutacja bezposrednio z tabeli,
+ * - mozliwosc ukrycia kolumny Typ budynku w zakladce Obsada i pojazdy,
  * - zaznaczanie pojedynczych, widocznych lub wszystkich filtrowanych budynkow,
  * - reczna edycja przygotowanej nazwy,
  * - generator nazw z polami:
@@ -82,9 +84,10 @@
         pattern: '{stara}',
         startNumber: 1,
         numbering: 'type',
+        showStaffingBuildingType: true,
       }, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'));
     } catch (_) {
-      return { pattern: '{stara}', startNumber: 1, numbering: 'type' };
+      return { pattern: '{stara}', startNumber: 1, numbering: 'type', showStaffingBuildingType: true };
     }
   }
 
@@ -270,6 +273,90 @@
     }
 
     return automatic ? 'NIE — auto wlaczone' : 'NIE';
+  }
+
+  function recruitmentValue(building) {
+    if (building.hiringAutomatic) return 'automatic';
+    const phase = Math.max(0, numberValue(building.hiringPhase, 0));
+    return ['1', '2', '3'].includes(String(phase)) ? String(phase) : '0';
+  }
+
+  function recruitmentOptions(building) {
+    const current = recruitmentValue(building);
+    return [
+      ['0', 'Wylaczona'],
+      ['1', '1 dzien'],
+      ['2', '2 dni'],
+      ['3', '3 dni'],
+      ['automatic', 'Automatyczna'],
+    ].map(([value, label]) =>
+      `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`
+    ).join('');
+  }
+
+  function csrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  }
+
+  async function savePersonnelTarget(building, target) {
+    const value = Math.max(0, Math.trunc(numberValue(target, building.personnelTarget)));
+    const token = csrfToken();
+    if (!token) throw new Error('Nie znaleziono tokenu CSRF strony.');
+
+    const params = new URLSearchParams();
+    params.set('utf8', '✓');
+    params.set('_method', 'put');
+    params.set('authenticity_token', token);
+    params.set('building[personal_count_target]', String(value));
+
+    const response = await fetch(`/buildings/${encodeURIComponent(building.id)}?personal_count_target_only=1`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-CSRF-Token': token,
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Thirdparty-Script': 'OR-Building-Manager',
+        'Accept': 'text/javascript, application/json, */*; q=0.01',
+      },
+      body: params.toString(),
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Nie mozna zapisac docelowej liczby pracownikow (HTTP ${response.status}).`);
+    }
+
+    building.personnelTarget = value;
+    return value;
+  }
+
+  async function saveRecruitment(building, value) {
+    const allowed = new Set(['0', '1', '2', '3', 'automatic']);
+    const action = allowed.has(String(value)) ? String(value) : '0';
+
+    const response = await fetch(`/buildings/${encodeURIComponent(building.id)}/hire_do/${encodeURIComponent(action)}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Thirdparty-Script': 'OR-Building-Manager',
+        'Accept': 'text/javascript, text/html, application/json, */*; q=0.01',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Nie mozna zmienic rekrutacji (HTTP ${response.status}).`);
+    }
+
+    if (action === 'automatic') {
+      building.hiringAutomatic = true;
+      building.hiringPhase = 0;
+    } else {
+      building.hiringAutomatic = false;
+      building.hiringPhase = Number(action);
+    }
   }
 
   function balanceClass(balance) {
@@ -670,7 +757,10 @@
     const tbody = document.getElementById(`${APP_ID}-staffing-tbody`);
     const summary = document.getElementById(`${APP_ID}-staffing-summary`);
     const pager = document.getElementById(`${APP_ID}-staffing-pager`);
-    if (!tbody || !summary || !pager) return;
+    const panel = document.getElementById(`${APP_ID}-staffing-panel`);
+    if (!tbody || !summary || !pager || !panel) return;
+
+    panel.classList.toggle('or-bm-hide-staffing-type', !state.settings.showStaffingBuildingType);
 
     const filtered = filteredStaffingBuildings();
     const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -693,24 +783,93 @@
       return `
         <tr data-id="${esc(building.id)}">
           <td class="or-bm-id"><a href="/buildings/${esc(building.id)}" target="_blank" rel="noopener">${esc(building.id)}</a></td>
-          <td>${esc(building.typeName)}</td>
+          <td class="or-bm-staffing-type">${esc(building.typeName)}</td>
           <td><a href="/buildings/${esc(building.id)}" target="_blank" rel="noopener"><b>${esc(building.name)}</b></a></td>
           <td class="or-bm-center">${building.level}</td>
           <td class="or-bm-center"><b>${building.vehicleCount}</b></td>
           <td class="or-bm-center ${capacityClass}"><b>${capacityText}</b></td>
           <td class="or-bm-center"><b>${building.personnelCurrent}</b></td>
-          <td class="or-bm-center">${building.personnelTarget}</td>
+          <td class="or-bm-center or-bm-inline-edit">
+            <input type="number" min="0" step="1" class="or-bm-personnel-target" data-id="${esc(building.id)}" value="${building.personnelTarget}" aria-label="Pracownicy docelowo: ${esc(building.name)}">
+            <button type="button" class="or-bm-btn or-bm-btn-small or-bm-personnel-save" data-id="${esc(building.id)}" title="Zapisz docelowa liczbe pracownikow">💾</button>
+          </td>
           <td class="or-bm-center ${crewNeedClass(building)}"><b>${building.vehicleCrewTarget}</b></td>
           <td class="or-bm-center ${balanceClass(building.personnelBalance)}"><b>${signedNumber(building.personnelBalance)}</b></td>
-          <td class="or-bm-center">${esc(recruitmentText(building))}</td>
+          <td class="or-bm-center">
+            <select class="or-bm-hiring-select" data-id="${esc(building.id)}" aria-label="Rekrutacja: ${esc(building.name)}">
+              ${recruitmentOptions(building)}
+            </select>
+          </td>
         </tr>`;
-    }).join('') || `<tr><td colspan="11" class="or-bm-empty">Brak budynkow dla wybranych filtrow.</td></tr>`;
+    }).join('') || `<tr><td colspan="${state.settings.showStaffingBuildingType ? 11 : 10}" class="or-bm-empty">Brak budynkow dla wybranych filtrow.</td></tr>`;
+
+    tbody.querySelectorAll('.or-bm-personnel-save').forEach(button => {
+      button.addEventListener('click', async () => {
+        const id = button.dataset.id;
+        const building = state.buildings.find(item => item.id === id);
+        const input = tbody.querySelector(`.or-bm-personnel-target[data-id="${CSS.escape(id)}"]`);
+        if (!building || !input) return;
+
+        const nextValue = Math.max(0, Math.trunc(numberValue(input.value, building.personnelTarget)));
+        input.value = String(nextValue);
+        button.disabled = true;
+        input.disabled = true;
+        setStatus(`Zapisuje docelowa liczbe pracownikow dla: ${building.name}...`, 'info');
+
+        try {
+          await savePersonnelTarget(building, nextValue);
+          setStatus(`Zapisano: ${building.name} — pracownicy docelowo: ${nextValue}.`, 'ok');
+          button.classList.add('or-bm-save-ok');
+          setTimeout(() => button.classList.remove('or-bm-save-ok'), 1200);
+        } catch (error) {
+          console.error('[OR Building Manager] Blad zapisu docelowej liczby pracownikow:', error);
+          input.value = String(building.personnelTarget);
+          setStatus(`Blad zapisu dla ${building.name}: ${error.message}`, 'error');
+        } finally {
+          button.disabled = false;
+          input.disabled = false;
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.or-bm-personnel-target').forEach(input => {
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          tbody.querySelector(`.or-bm-personnel-save[data-id="${CSS.escape(input.dataset.id)}"]`)?.click();
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.or-bm-hiring-select').forEach(select => {
+      select.addEventListener('change', async () => {
+        const id = select.dataset.id;
+        const building = state.buildings.find(item => item.id === id);
+        if (!building) return;
+
+        const previous = recruitmentValue(building);
+        const nextValue = select.value;
+        select.disabled = true;
+        setStatus(`Zmieniam rekrutacje dla: ${building.name}...`, 'info');
+
+        try {
+          await saveRecruitment(building, nextValue);
+          setStatus(`Zmieniono rekrutacje: ${building.name}.`, 'ok');
+          renderStaffingTable();
+        } catch (error) {
+          console.error('[OR Building Manager] Blad zmiany rekrutacji:', error);
+          select.value = previous;
+          setStatus(`Blad rekrutacji dla ${building.name}: ${error.message}`, 'error');
+          select.disabled = false;
+        }
+      });
+    });
 
     const vehicleCount = filtered.reduce((sum, b) => sum + b.vehicleCount, 0);
     const personnelCurrent = filtered.reduce((sum, b) => sum + b.personnelCurrent, 0);
     const crewTarget = filtered.reduce((sum, b) => sum + b.vehicleCrewTarget, 0);
     const balance = personnelCurrent - crewTarget;
-    const hiring = filtered.filter(b => b.hiringPhase > 0).length;
+    const hiring = filtered.filter(b => b.hiringPhase > 0 || b.hiringAutomatic).length;
 
     const staffingFilterLabel = state.staffingFilter === 'shortage'
       ? 'Brakuje zalogi'
@@ -723,7 +882,7 @@
       `Budynki: <b>${filtered.length}</b> / ${state.buildings.length} | ` +
       `Pojazdy: <b>${vehicleCount}</b> | ` +
       `Pracownicy: <b>${personnelCurrent}</b> | ` +
-      `Potrzeba do maks. obsady pojazdow: <b>${crewTarget}</b> | ` +
+      `Potrzeba zalogi: <b>${crewTarget}</b> | ` +
       `Bilans: <b class="${balanceClass(balance)}">${signedNumber(balance)}</b> | ` +
       `Trwa rekrutacja: <b>${hiring}</b>`;
 
@@ -1217,6 +1376,12 @@
       .or-bm-crew-ok { color:#1b5e20 !important; background:#e8f5e9 !important; }
       .or-bm-crew-shortage { color:#7a5d00 !important; background:#fff8b8 !important; }
       .or-bm-staffing-note { font-size:12px; color:#546e7a; }
+      .or-bm-hide-staffing-type .or-bm-staffing-type { display:none !important; }
+      .or-bm-check-label { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; background:#fff; border:1px solid #bbb; border-radius:4px; cursor:pointer; white-space:nowrap; }
+      .or-bm-inline-edit { white-space:nowrap; min-width:145px; }
+      .or-bm-personnel-target { width:78px; min-height:30px; box-sizing:border-box; border:1px solid #bbb; border-radius:4px; padding:4px 6px; text-align:center; }
+      .or-bm-hiring-select { min-height:30px; border:1px solid #bbb; border-radius:4px; padding:4px 6px; background:#fff; color:#222; }
+      .or-bm-save-ok { background:#e8f5e9 !important; border-color:#66bb6a !important; }
       .or-bm-toolbar {
         display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px;
         border-bottom:1px solid #ddd; background:#f7f7f7; align-items:center;
@@ -1345,7 +1510,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.10.0</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.11.0</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1473,10 +1638,13 @@
             <option value="shortage">Brakuje zalogi</option>
             <option value="surplus">Za duzo zalogi</option>
           </select>
+          <label class="or-bm-check-label" title="Pokaz lub ukryj kolumne Typ budynku">
+            <input type="checkbox" id="${APP_ID}-staffing-show-type" ${state.settings.showStaffingBuildingType ? 'checked' : ''}>
+            Typ budynku
+          </label>
           <span class="or-bm-staffing-note">
-            „Docelowa” = cel personelu zapisany w budynku.
-            „Potrzeba dla pojazdow” = suma maksymalnych zalog wszystkich pojazdow w budynku.
-            Bilans = obecny personel minus potrzeba dla pojazdow.
+            Docelowa = cel personelu. Potrzeba zalogi = suma maksymalnych zalog pojazdow.
+            Bilans = obecny personel minus potrzeba zalogi.
           </span>
         </div>
 
@@ -1486,14 +1654,14 @@
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Typ budynku</th>
+                  <th class="or-bm-staffing-type">Typ budynku</th>
                   <th>Budynek</th>
                   <th>Poziom</th>
                   <th>Ilosc pojazdow</th>
-                  <th>Max pojazdow<br>na obecnym poziomie</th>
+                  <th>Max pojazdow</th>
                   <th>Pracownicy<br>obecnie</th>
                   <th>Pracownicy<br>docelowo</th>
-                  <th>Potrzeba dla pojazdow<br>(max zalogi)</th>
+                  <th>Potrzeba zalogi</th>
                   <th>Bilans<br>+ / -</th>
                   <th>Rekrutacja</th>
                 </tr>
@@ -1534,6 +1702,12 @@
     document.getElementById(`${APP_ID}-staffing-filter`).addEventListener('change', event => {
       state.staffingFilter = event.target.value;
       state.staffingPage = 1;
+      renderStaffingTable();
+    });
+
+    document.getElementById(`${APP_ID}-staffing-show-type`).addEventListener('change', event => {
+      state.settings.showStaffingBuildingType = !!event.target.checked;
+      saveSettings();
       renderStaffingTable();
     });
 
@@ -1628,5 +1802,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 0.10.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 0.11.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();
