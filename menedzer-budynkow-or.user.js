@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      0.5.0
+// @version      0.7.0
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, pojazdy i obsada w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -13,7 +13,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 0.5.0
+ * Wersja 0.7.0
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -271,6 +271,12 @@
     if (balance < 0) return 'or-bm-balance-negative';
     if (balance > 0) return 'or-bm-balance-positive';
     return 'or-bm-balance-zero';
+  }
+
+  function crewNeedClass(building) {
+    if (building.personnelCurrent > building.vehicleCrewTarget) return 'or-bm-crew-surplus';
+    if (building.personnelCurrent === building.vehicleCrewTarget) return 'or-bm-crew-ok';
+    return 'or-bm-crew-shortage';
   }
 
   function signedNumber(value) {
@@ -657,9 +663,13 @@
     tbody.innerHTML = current.map(building => {
       const capacityText = building.maxVehicles === null ? '—' : building.maxVehicles;
       const capacityClass =
-        building.maxVehicles !== null && building.vehicleCount > building.maxVehicles
-          ? 'or-bm-balance-negative'
-          : '';
+        building.maxVehicles === null
+          ? ''
+          : building.vehicleCount > building.maxVehicles
+            ? 'or-bm-balance-negative'
+            : building.vehicleCount < building.maxVehicles
+              ? 'or-bm-balance-positive'
+              : '';
 
       return `
         <tr data-id="${esc(building.id)}">
@@ -671,7 +681,7 @@
           <td class="or-bm-center ${capacityClass}"><b>${capacityText}</b></td>
           <td class="or-bm-center"><b>${building.personnelCurrent}</b></td>
           <td class="or-bm-center">${building.personnelTarget}</td>
-          <td class="or-bm-center"><b>${building.vehicleCrewTarget}</b></td>
+          <td class="or-bm-center ${crewNeedClass(building)}"><b>${building.vehicleCrewTarget}</b></td>
           <td class="or-bm-center ${balanceClass(building.personnelBalance)}"><b>${signedNumber(building.personnelBalance)}</b></td>
           <td class="or-bm-center">${esc(recruitmentText(building))}</td>
         </tr>`;
@@ -1177,6 +1187,9 @@
       .or-bm-balance-negative { color:#b71c1c !important; background:#ffebee !important; }
       .or-bm-balance-positive { color:#1b5e20 !important; background:#e8f5e9 !important; }
       .or-bm-balance-zero { color:#455a64 !important; }
+      .or-bm-crew-surplus { color:#0d47a1 !important; background:#e3f2fd !important; }
+      .or-bm-crew-ok { color:#1b5e20 !important; background:#e8f5e9 !important; }
+      .or-bm-crew-shortage { color:#7a5d00 !important; background:#fff8b8 !important; }
       .or-bm-staffing-note { font-size:12px; color:#546e7a; }
       .or-bm-toolbar {
         display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px;
@@ -1306,7 +1319,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.5.0</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.7.0</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1578,5 +1591,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 0.5.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 0.7.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();
