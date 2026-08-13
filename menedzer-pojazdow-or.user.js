@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.06
+// @version      2.07
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.06
+ * Wersja 2.07
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -33,6 +33,8 @@
  * - v2.05: lista wolnego personelu jest czytana ze strony personelu jednostki,
  *   a przy zapisie adresy akcji sa pobierane osobno z /vehicles/{id}/zuweisung,
  * - v2.06: automatyczne wykrywanie strony/tabeli personelu jednostki oraz bardziej odporny parser ID pracownikow,
+ * - v2.07: zaznaczanie wielu pojazdow w karcie Zaloga i zbiorcze „Do max”,
+ * - v2.07: zbiorczy przydzial wykonywany sekwencyjnie z ponownym odczytem personelu przed kazdym pojazdem,
  * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
  * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
@@ -148,6 +150,8 @@
     crewLoading: false,
     crewLoadGeneration: 0,
     crewAssigning: new Set(),
+    crewSelected: new Set(),
+    crewBatchAssigning: false,
     selected: new Set(),
     draftNames: new Map(),
     settings: loadSettings(),
@@ -774,6 +778,7 @@
     try {
       if (force) {
         state.selected.clear();
+        state.crewSelected.clear();
         state.draftNames.clear();
         state.crewDetails.clear();
         state.crewLoadGeneration += 1;
@@ -2587,44 +2592,54 @@
     return response.text();
   }
 
-  async function assignCrewToMax(vehicleId) {
+  async function assignCrewToMax(vehicleId, options = {}) {
     const vehicle = state.vehicles.find(v => String(v.id) === String(vehicleId));
-    if (!vehicle || state.crewAssigning.has(String(vehicleId))) return;
+    if (!vehicle || state.crewAssigning.has(String(vehicleId))) {
+      return { ok: false, skipped: true, error: 'Pojazd jest niedostepny albo trwa juz jego przydzielanie.' };
+    }
+
+    const askConfirmation = options.confirm !== false;
+    const quiet = options.quiet === true;
 
     state.crewAssigning.add(String(vehicleId));
     renderCrewTable();
-    setCrewStatus(`Sprawdzam przydział dla ${vehicle.name}…`, 'info');
+    if (!quiet) setCrewStatus(`Sprawdzam przydział dla ${vehicle.name}…`, 'info');
 
     try {
-      // Pobieramy stronę konkretnego pojazdu tuż przed zapisem, aby przyciski
-      // przydziału i CSRF były aktualne dla tego pojazdu.
+      // Zawsze pobieramy aktualny stan tuz przed zapisem. Jest to szczegolnie
+      // wazne przy zbiorczym przydziale, bo poprzedni pojazd mogl juz zajac
+      // czesc wolnego personelu tej samej jednostki.
       const detail = await fetchVehiclePersonnelDetail(vehicle);
       const plan = buildPersonnelAssignmentPlan(vehicle, detail);
 
       if (!plan.ok) throw new Error(plan.error);
       if (!plan.people.length) {
-        setCrewStatus(`${vehicle.name}: pojazd ma już maksymalną załogę.`, 'ok');
-        return;
+        if (!quiet) setCrewStatus(`${vehicle.name}: pojazd ma już maksymalną załogę.`, 'ok');
+        return { ok: true, assigned: 0, vehicle };
       }
 
-      const accepted = window.confirm(
-        `Przydzielić ${plan.people.length} osób do pojazdu „${vehicle.name}” ` +
-        `i uzupełnić obsadę do ${plan.maxCrew}?\n\n` +
-        `Skrypt wybierze wyłącznie wolny personel spełniający rozpoznane wymagania kursów.`
-      );
-      if (!accepted) {
-        setCrewStatus('Anulowano przydzielanie personelu.', 'info');
-        return;
+      if (askConfirmation) {
+        const accepted = window.confirm(
+          `Przydzielić ${plan.people.length} osób do pojazdu „${vehicle.name}” ` +
+          `i uzupełnić obsadę do ${plan.maxCrew}?\n\n` +
+          `Skrypt wybierze wyłącznie wolny personel spełniający rozpoznane wymagania kursów.`
+        );
+        if (!accepted) {
+          if (!quiet) setCrewStatus('Anulowano przydzielanie personelu.', 'info');
+          return { ok: false, cancelled: true, vehicle };
+        }
       }
 
       let assignedNow = 0;
       for (const person of plan.people) {
         await postPersonnelAssignment(person, detail.csrfToken);
         assignedNow += 1;
-        setCrewStatus(
-          `Przydzielam personel do ${vehicle.name}: ${assignedNow}/${plan.people.length}…`,
-          'info'
-        );
+        if (!quiet) {
+          setCrewStatus(
+            `Przydzielam personel do ${vehicle.name}: ${assignedNow}/${plan.people.length}…`,
+            'info'
+          );
+        }
         if (assignedNow < plan.people.length) await sleep(80);
       }
 
@@ -2633,21 +2648,94 @@
         Number(vehicle.assignedPersonnelCount) || 0
       ) + assignedNow;
 
-      // Ponownie pobieramy jednostkę po operacji, żeby tabela i status kursów
-      // od razu odpowiadały stanowi gry.
       const refreshed = await fetchBuildingPersonnelDetail(vehicle.buildingId);
       state.crewDetails.set(String(vehicle.buildingId), { status: 'loaded', detail: refreshed });
 
-      setCrewStatus(
-        `${vehicle.name}: przydzielono ${assignedNow} osób. Obsada uzupełniona do maksimum.`,
-        'ok'
-      );
+      if (!quiet) {
+        setCrewStatus(
+          `${vehicle.name}: przydzielono ${assignedNow} osób. Obsada uzupełniona do maksimum.`,
+          'ok'
+        );
+      }
+      return { ok: true, assigned: assignedNow, vehicle };
     } catch (error) {
       console.error('[OR Fleet Manager] Błąd przydzielania personelu:', error);
       state.crewDetails.delete(String(vehicle?.buildingId || ''));
-      setCrewStatus(`Nie udało się przydzielić personelu: ${error.message}`, 'error');
+      if (!quiet) setCrewStatus(`Nie udało się przydzielić personelu: ${error.message}`, 'error');
+      return { ok: false, error: error.message, vehicle };
     } finally {
       state.crewAssigning.delete(String(vehicleId));
+      renderCrewTable();
+    }
+  }
+
+  async function assignSelectedCrewToMax() {
+    if (state.crewBatchAssigning) return;
+
+    const selectedVehicles = sortVehicles(
+      state.vehicles.filter(vehicle => state.crewSelected.has(String(vehicle.id)))
+    );
+
+    if (!selectedVehicles.length) {
+      alert('Najpierw zaznacz pojazdy w karcie Załoga.');
+      return;
+    }
+
+    const candidates = selectedVehicles.filter(vehicle => {
+      const missing = vehicleMissingCrew(vehicle);
+      return missing !== null && missing > 0;
+    });
+
+    if (!candidates.length) {
+      setCrewStatus('Wszystkie zaznaczone pojazdy mają już maksymalną załogę.', 'info');
+      return;
+    }
+
+    const totalMissing = candidates.reduce((sum, vehicle) => sum + (vehicleMissingCrew(vehicle) || 0), 0);
+    const accepted = window.confirm(
+      `Uzupełnić do maksimum ${candidates.length} zaznaczonych pojazdów?\n\n` +
+      `Łącznie brakuje obecnie ${totalMissing} osób.\n` +
+      `Pojazdy będą obsługiwane kolejno. Przed każdym przydziałem skrypt ponownie sprawdzi wolny personel i wymagane kursy, więc ta sama osoba nie zostanie przydzielona dwa razy.`
+    );
+    if (!accepted) return;
+
+    state.crewBatchAssigning = true;
+    renderCrewTable();
+
+    let successVehicles = 0;
+    let assignedPeople = 0;
+    const failures = [];
+
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        const vehicle = candidates[i];
+        setCrewStatus(
+          `Zbiorczy przydział ${i + 1}/${candidates.length}: ${vehicle.name}…`,
+          'info'
+        );
+
+        const result = await assignCrewToMax(vehicle.id, { confirm: false, quiet: true });
+        if (result.ok) {
+          successVehicles += 1;
+          assignedPeople += Number(result.assigned) || 0;
+        } else if (!result.cancelled) {
+          failures.push(`${vehicle.name}: ${result.error || 'nie udało się przydzielić'}`);
+        }
+
+        if (i < candidates.length - 1) await sleep(120);
+      }
+
+      setCrewStatus(
+        `Zbiorczy przydział zakończony: pojazdy uzupełnione ${successVehicles}/${candidates.length}, przydzielono ${assignedPeople} osób` +
+        (failures.length ? `, błędy: ${failures.length}. Szczegóły w konsoli.` : '.') ,
+        failures.length ? 'warn' : 'ok'
+      );
+
+      if (failures.length) {
+        console.warn('[OR Fleet Manager] Błędy zbiorczego przydziału:', failures);
+      }
+    } finally {
+      state.crewBatchAssigning = false;
       renderCrewTable();
     }
   }
@@ -2664,6 +2752,12 @@
     const pager = document.getElementById(`${APP_ID}-crew-pager`);
     if (!tbody || !summary || !pager) return;
 
+    const batchButton = document.getElementById(`${APP_ID}-crew-assign-selected`);
+    if (batchButton) {
+      batchButton.disabled = state.crewBatchAssigning || state.crewSelected.size === 0;
+      batchButton.textContent = state.crewBatchAssigning ? 'Przydzielam zaznaczone…' : 'Przydziel do max zaznaczone';
+    }
+
     const filtered = crewFilteredVehicles();
     const pages = Math.max(1, Math.ceil(filtered.length / CREW_PAGE_SIZE));
     state.crewPage = Math.max(1, Math.min(state.crewPage, pages));
@@ -2671,6 +2765,7 @@
     const current = filtered.slice(start, start + CREW_PAGE_SIZE);
 
     tbody.innerHTML = current.map(vehicle => {
+      const selected = state.crewSelected.has(String(vehicle.id));
       const maxCrew = vehicleMaxCrew(vehicle);
       const assigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
       const missing = maxCrew === null ? null : Math.max(0, maxCrew - assigned);
@@ -2684,6 +2779,7 @@
           ? 'Przydziel wolny personel do maksymalnej załogi.'
           : 'Przydział jest dostępny po pozytywnej weryfikacji personelu i kursów.';
       return `<tr class="${fullCrew ? 'or-fm-crew-full' : ''}">` +
+        `<td class="or-fm-center"><input type="checkbox" class="or-fm-crew-row-check" data-vehicle-id="${esc(vehicle.id)}" ${selected ? 'checked' : ''}></td>` +
         `<td class="or-fm-id"><a href="/vehicles/${esc(vehicle.id)}" target="_blank" rel="noopener">${esc(vehicle.id)}</a></td>` +
         `<td>${esc(vehicle.buildingName)}</td>` +
         `<td>${esc(vehicle.typeName)}</td>` +
@@ -2694,12 +2790,12 @@
         `<td class="or-fm-crew-status-cell">${crewStatusHtml(status)}</td>` +
         `<td class="or-fm-center"><button type="button" class="or-fm-btn or-fm-btn-small or-fm-assign-btn" data-vehicle-id="${esc(vehicle.id)}" title="${esc(assignTitle)}" ${canAssign ? '' : 'disabled'}>${assigning ? 'Przydzielam…' : fullCrew ? 'Pełna' : 'Do max'}</button></td>` +
         `</tr>`;
-    }).join('') || `<tr><td colspan="9" class="or-fm-empty">Brak pojazdów dla wybranych filtrów.</td></tr>`;
+    }).join('') || `<tr><td colspan="10" class="or-fm-empty">Brak pojazdów dla wybranych filtrów.</td></tr>`;
 
     const missingCount = filtered.filter(vehicle => (vehicleMissingCrew(vehicle) || 0) > 0).length;
     const loadedBuildings = [...new Set(current.map(v => v.buildingId))]
       .filter(id => state.crewDetails.get(String(id))?.status === 'loaded').length;
-    summary.textContent = `Widoczne: ${filtered.length} / ${state.vehicles.length} | Z brakującą załogą: ${missingCount} | Strona ${state.crewPage}/${pages}`;
+    summary.textContent = `Widoczne: ${filtered.length} / ${state.vehicles.length} | Zaznaczone: ${state.crewSelected.size} | Z brakującą załogą: ${missingCount} | Strona ${state.crewPage}/${pages}`;
 
     pager.innerHTML = `
       <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-crew-prev" ${state.crewPage <= 1 ? 'disabled' : ''}>‹ Poprzednia</button>
@@ -2713,6 +2809,15 @@
     document.getElementById(`${APP_ID}-crew-next`)?.addEventListener('click', () => {
       state.crewPage += 1;
       renderCrewTable();
+    });
+
+    tbody.querySelectorAll('.or-fm-crew-row-check').forEach(checkbox => {
+      checkbox.addEventListener('change', () => {
+        const id = String(checkbox.dataset.vehicleId || '');
+        if (checkbox.checked) state.crewSelected.add(id);
+        else state.crewSelected.delete(id);
+        renderCrewTable();
+      });
     });
 
     tbody.querySelectorAll('.or-fm-assign-btn').forEach(button => {
@@ -2930,7 +3035,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.06</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.07</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -3085,17 +3190,22 @@
             <label class="or-fm-check" title="Pokaż tylko pojazdy, które nie mają jeszcze maksymalnej liczby przydzielonych osób">
               <input type="checkbox" id="${APP_ID}-crew-only-missing"> Tylko brakująca załoga
             </label>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-crew-select-page">Zaznacz stronę</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-crew-select-filtered">Zaznacz filtrowane</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-crew-clear-selection">Wyczyść zaznaczenie</button>
+            <button type="button" class="or-fm-btn or-fm-btn-primary" id="${APP_ID}-crew-assign-selected">Przydziel do max zaznaczone</button>
             <button type="button" class="or-fm-btn" id="${APP_ID}-crew-refresh">↻ Odśwież personel</button>
           </div>
           <div class="or-fm-help-wrap">
             <div class="or-fm-help-toggle" style="cursor:default">
-              <span>👥 Załoga: wolny personel jest liczony na podstawie pustej kolumny „Przydzielono do” (nie na podstawie stanu „Dostępne”). „Czy można do max?” uwzględnia też wymagane kursy. Przycisk „Do max” jest aktywny tylko po pozytywnej weryfikacji; przed zapisem zawsze pojawia się potwierdzenie. Zielony wiersz oznacza pojazd z maksymalną obsadą.</span>
+              <span>👥 Załoga: wolny personel jest liczony na podstawie pustej kolumny „Przydzielono do” (nie na podstawie stanu „Dostępne”). „Czy można do max?” uwzględnia też wymagane kursy. Możesz zaznaczyć kilka pojazdów i użyć „Przydziel do max zaznaczone”; skrypt obsługuje je kolejno i przed każdym pojazdem ponownie sprawdza personel. Zielony wiersz oznacza pojazd z maksymalną obsadą.</span>
             </div>
           </div>
           <div class="or-fm-body">
             <div class="or-fm-table-wrap">
               <table class="or-fm-table">
                 <thead><tr>
+                  <th style="width:36px">✓</th>
                   <th>ID</th>
                   <th>Jednostka</th>
                   <th>Typ</th>
@@ -3106,7 +3216,7 @@
                   <th>Czy w jednostce można uzupełnić do max?</th>
                   <th>Przydział</th>
                 </tr></thead>
-                <tbody id="${APP_ID}-crew-tbody"><tr><td colspan="9" class="or-fm-empty">Otwórz kartę Załoga, aby sprawdzić personel.</td></tr></tbody>
+                <tbody id="${APP_ID}-crew-tbody"><tr><td colspan="10" class="or-fm-empty">Otwórz kartę Załoga, aby sprawdzić personel.</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -3157,6 +3267,27 @@
       state.crewOnlyMissing = !!event.target.checked;
       state.crewPage = 1;
       renderCrewTable();
+    });
+
+    document.getElementById(`${APP_ID}-crew-select-page`).addEventListener('click', () => {
+      const filtered = crewFilteredVehicles();
+      const start = (state.crewPage - 1) * CREW_PAGE_SIZE;
+      filtered.slice(start, start + CREW_PAGE_SIZE).forEach(vehicle => state.crewSelected.add(String(vehicle.id)));
+      renderCrewTable();
+    });
+
+    document.getElementById(`${APP_ID}-crew-select-filtered`).addEventListener('click', () => {
+      crewFilteredVehicles().forEach(vehicle => state.crewSelected.add(String(vehicle.id)));
+      renderCrewTable();
+    });
+
+    document.getElementById(`${APP_ID}-crew-clear-selection`).addEventListener('click', () => {
+      state.crewSelected.clear();
+      renderCrewTable();
+    });
+
+    document.getElementById(`${APP_ID}-crew-assign-selected`).addEventListener('click', () => {
+      assignSelectedCrewToMax();
     });
 
     document.getElementById(`${APP_ID}-crew-refresh`).addEventListener('click', () => {
@@ -3395,5 +3526,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.06 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log('[OR Fleet Manager] Wersja 2.07 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
 })();
