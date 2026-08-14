@@ -1,0 +1,1406 @@
+// ==UserScript==
+// @name         Menedżer ZR OR
+// @namespace    https://www.operatorratunkowy.pl/
+// @version      0.21
+// @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
+// @author       ChatGPT + użytkownik
+// @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
+// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-zr-or.user.js
+// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-zr-or.user.js
+// @match        https://www.operatorratunkowy.pl/*
+// @match        https://operatorratunkowy.pl/*
+// @match        https://policja.operatorratunkowy.pl/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_openInTab
+// @grant        GM_xmlhttpRequest
+// @connect      operatorratunkowy.pl
+// @connect      www.operatorratunkowy.pl
+// @connect      policja.operatorratunkowy.pl
+// @run-at       document-end
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    const TAG = '[OR Menedżer ZR]';
+    const VERSION = '0.21';
+    const CAPTURE_KEY = 'or_zr_capture_v020';
+    const MAP_KEY = 'or_zr_map_v020';
+
+    const state = {
+        capture: loadJSON(CAPTURE_KEY, null),
+        map: loadJSON(MAP_KEY, {}),
+        fields: []
+    };
+
+    function log(...args) {
+        console.log(TAG, ...args);
+    }
+
+    function loadJSON(key, fallback) {
+        try {
+            const raw = GM_getValue(key, null);
+            if (raw == null) return fallback;
+            return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function saveJSON(key, value) {
+        GM_setValue(key, JSON.stringify(value));
+    }
+
+    function normalize(text) {
+        return String(text ?? '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\u00a0/g, ' ')
+            .replace(/[\/|]/g, ' lub ')
+            .replace(/[()[\]{},.:;!?]/g, ' ')
+            .replace(/[-–—]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function cleanLines(text) {
+        return String(text ?? '')
+            .replace(/\u00a0/g, ' ')
+            .split(/\r?\n/)
+            .map(x => x.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+    }
+
+    function isVisible(el) {
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 10 && r.height > 10 &&
+            r.bottom > 0 && r.right > 0 &&
+            r.top < innerHeight && r.left < innerWidth;
+    }
+
+    function parseIntLoose(text) {
+        const m = String(text ?? '').match(/\d[\d\s.]*/);
+        if (!m) return null;
+        const digits = m[0].replace(/[^\d]/g, '');
+        return digits ? Number.parseInt(digits, 10) : null;
+    }
+
+    // ------------------------------------------------------------------
+    // WYKRYWANIE NAGŁÓWKA MISJI
+    // ------------------------------------------------------------------
+
+    function isDarkColor(rgb) {
+        const m = String(rgb).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+        if (!m) return false;
+        const r = +m[1], g = +m[2], b = +m[3];
+        return (r * 0.299 + g * 0.587 + b * 0.114) < 110;
+    }
+
+    function findMissionHeader() {
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,header,section')) {
+            if (!isVisible(el)) continue;
+
+            const r = el.getBoundingClientRect();
+            if (r.top > 100 || r.height < 45 || r.height > 105 || r.width < 700) continue;
+
+            const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
+            if (!text || text.length > 500) continue;
+
+            const cs = getComputedStyle(el);
+            let score = 0;
+
+            if (isDarkColor(cs.backgroundColor)) score += 10;
+            if (r.top <= 10) score += 5;
+            if (r.width > innerWidth * 0.7) score += 5;
+            if (/minut|dzis|wczoraj/i.test(text)) score += 3;
+
+            // Nagłówek misji zwykle zawiera nazwę dużymi literami.
+            if (/[A-ZĄĆĘŁŃÓŚŹŻ]{4,}/.test(text)) score += 4;
+
+            candidates.push({ el, score, area: r.width * r.height });
+        }
+
+        candidates.sort((a, b) => b.score - a.score || a.area - b.area);
+        return candidates[0]?.score >= 10 ? candidates[0].el : null;
+    }
+
+
+    function findOpenedMissionHeader() {
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,header,section')) {
+            if (!isVisible(el)) continue;
+
+            const r = el.getBoundingClientRect();
+
+            // Nagłówek otwartej misji jest szeroki, niski i znajduje się przy górnej krawędzi.
+            if (r.top > 120 || r.height < 45 || r.height > 110 || r.width < innerWidth * 0.65) continue;
+
+            const text = (el.innerText || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!text || text.length > 600) continue;
+
+            const n = normalize(text);
+            const cs = getComputedStyle(el);
+
+            // Charakterystyczny tekst nagłówka misji:
+            // "4 minuty temu (Dziś o 11:44)", "godzinę temu", "Wczoraj o..."
+            const hasTimeMeta =
+                /\btemu\b/i.test(text) ||
+                /\bDziś o\b/i.test(text) ||
+                /\bDzis o\b/i.test(text) ||
+                /\bWczoraj o\b/i.test(text);
+
+            if (!hasTimeMeta) continue;
+            if (!isDarkColor(cs.backgroundColor)) continue;
+
+            // Szukamy przycisku zamknięcia "x/×" w samym nagłówku lub tuż obok.
+            let hasClose = false;
+
+            for (const child of el.querySelectorAll('button,a,span,i')) {
+                const t = (child.textContent || '').trim();
+                const cls = `${child.className || ''} ${child.id || ''}`.toLowerCase();
+
+                if (
+                    t === '×' ||
+                    t.toLowerCase() === 'x' ||
+                    cls.includes('close') ||
+                    cls.includes('mission_close') ||
+                    cls.includes('mission-close')
+                ) {
+                    hasClose = true;
+                    break;
+                }
+            }
+
+            // Czasem X jest rodzeństwem nagłówka.
+            if (!hasClose && el.parentElement) {
+                for (const child of el.parentElement.querySelectorAll(':scope > button, :scope > a, :scope > span')) {
+                    const t = (child.textContent || '').trim();
+                    const cls = `${child.className || ''} ${child.id || ''}`.toLowerCase();
+
+                    if (t === '×' || t.toLowerCase() === 'x' || cls.includes('close')) {
+                        hasClose = true;
+                        break;
+                    }
+                }
+            }
+
+            let score = 0;
+            if (hasClose) score += 20;
+            if (/\btemu\b/i.test(text)) score += 10;
+            if (/\b(?:Dziś|Dzis|Wczoraj)\s+o\b/i.test(text)) score += 10;
+            if (/[A-ZĄĆĘŁŃÓŚŹŻ]{4,}/.test(text)) score += 5;
+            if (r.top < 20) score += 5;
+
+            candidates.push({ el, score, area: r.width * r.height, hasClose });
+        }
+
+        candidates.sort((a, b) => b.score - a.score || a.area - b.area);
+
+        // Wymagamy wysokiego wyniku, żeby na stronie głównej nie złapać paska nawigacji.
+        const best = candidates[0];
+        if (!best || best.score < 20) return null;
+
+        return best.el;
+    }
+
+    function findMissionTitleElement(header) {
+        if (!header) return null;
+
+        const candidates = [...header.querySelectorAll('h1,h2,h3,h4,strong,span,div')];
+
+        let best = null;
+        let bestScore = -999;
+
+        for (const el of candidates) {
+            if (!isVisible(el)) continue;
+
+            const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!text || text.length < 4 || text.length > 100) continue;
+
+            const r = el.getBoundingClientRect();
+            if (r.height > 50 || r.width < 80) continue;
+
+            let score = 0;
+
+            const fs = Number.parseFloat(getComputedStyle(el).fontSize) || 0;
+            score += fs;
+
+            if (/[A-ZĄĆĘŁŃÓŚŹŻ]{4,}/.test(text)) score += 10;
+            if (/minut|dzis|wczoraj/i.test(text)) score -= 15;
+
+            if (score > bestScore) {
+                best = el;
+                bestScore = score;
+            }
+        }
+
+        return best;
+    }
+
+    // ------------------------------------------------------------------
+    // ODCZYT MISJI
+    // ------------------------------------------------------------------
+
+    function findMissionInfoBlock() {
+        const strictCandidates = [];
+        const fallbackCandidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!isVisible(el)) continue;
+
+            const r = el.getBoundingClientRect();
+            if (r.width < 280 || r.height < 80) continue;
+
+            const rawText = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+
+            const text = rawText.replace(/\s+/g, ' ').trim();
+
+            if (text.length < 10 || text.length > 9000) continue;
+            if (!/\bPojazdy\b/i.test(text)) continue;
+            if (!/\b\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(text)) continue;
+
+            const containsUnitsArea =
+                /\bDostępne jednostki\b/i.test(text) ||
+                /\bDostepne jednostki\b/i.test(text) ||
+                /\bAlarmowo\b/i.test(text);
+
+            let score = 0;
+
+            if (/Może się rozwinąć|Moze sie rozwinac/i.test(text)) score += 15;
+            if (/\bPacjenci\b/i.test(text)) score += 5;
+            if (/\bMinimum pacjent/i.test(text)) score += 5;
+            if (/\bMaksimum pacjent/i.test(text)) score += 5;
+            if (/\bwoda\b|\bpiana\b/i.test(text)) score += 3;
+
+            // Karta wymagań jest po prawej stronie okna misji.
+            if (r.left > innerWidth * 0.30) score += 5;
+
+            // Mniejszy kontener jest lepszy.
+            score -= Math.floor(text.length / 800);
+
+            const item = { el, score, len: text.length };
+
+            // Kontener zawierający "Dostępne jednostki" nie może być preferowany.
+            if (containsUnitsArea) fallbackCandidates.push(item);
+            else strictCandidates.push(item);
+        }
+
+        strictCandidates.sort((a, b) => b.score - a.score || a.len - b.len);
+        fallbackCandidates.sort((a, b) => b.score - a.score || a.len - b.len);
+
+        // Najpierw wybieramy wyłącznie czystą kartę misji.
+        const chosen =
+            strictCandidates[0]?.el ||
+            fallbackCandidates[0]?.el ||
+            null;
+
+        if (chosen) log('Pole informacji o misji:', chosen, chosen.innerText);
+
+        return chosen;
+    }
+
+    function getMissionName(infoBlock) {
+        if (infoBlock) {
+            const headings = infoBlock.querySelectorAll('h1,h2,h3,h4,h5,.panel-title,.modal-title');
+
+            for (const h of headings) {
+                const text = h.textContent.replace(/\s+/g, ' ').trim();
+                if (text && text.length <= 120 && normalize(text) !== 'pojazdy') return text;
+            }
+
+            // Wersja bez polegania na nowych liniach:
+            const compact = (infoBlock.innerText || infoBlock.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            const m = compact.match(/^(.+?)\s+Pojazdy\b/i);
+            if (m && m[1].trim().length <= 120) {
+                return m[1].trim();
+            }
+        }
+
+        const header = findOpenedMissionHeader() || findMissionHeader();
+        const title = findMissionTitleElement(header);
+
+        if (title) {
+            return title.textContent
+                .replace(/^[*✱✳✽❉\s]+/, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        return 'Misja bez nazwy';
+    }
+
+    function parseChanceFromLabel(label) {
+        const m = String(label).match(/\((\d+)\s*%\)\s*$/);
+        return m ? Number.parseInt(m[1], 10) : null;
+    }
+
+    function cleanVehicleLabel(label) {
+        return String(label)
+            .replace(/\s*\(\d+\s*%\)\s*$/, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function looksLikeVehicleLabel(label) {
+        const raw = String(label || '').trim();
+        const n = normalize(raw);
+
+        if (!n || n.length < 2 || n.length > 150) return false;
+
+        const bad = [
+            'minut',
+            'kredyt',
+            'pacjent',
+            'posterunk',
+            'dostepne jednostki',
+            'alarmowo',
+            'moze sie rozwinac',
+            'woda',
+            'piana'
+        ];
+
+        if (bad.some(x => n.includes(x))) return false;
+
+        // Czasy dojazdu z listy dostępnych pojazdów: "min 50 s", "02 min 05 s".
+        if (/\b(?:\d+\s+)?min\s+\d+\s*s\b/i.test(raw)) return false;
+
+        // Nazwy jednostek/pojazdów użytkownika zawierające kody typu [R09], [S16], [K04].
+        // Takie ciągi nie są nazwami wymagań misji.
+        if (/\[[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\d+[^\]]*\]/.test(raw)) return false;
+
+        // Typowy format nazw własnych pojazdów użytkownika, np.
+        // "P[07-R09]01-01 ..." / "SRWys[06-S16]..."
+        if (/^[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{1,12}\[[^\]]+\]/.test(raw)) return false;
+
+        return true;
+    }
+
+    function addVehicle(result, map, label, count, chance = null) {
+        label = cleanVehicleLabel(label);
+        if (!count || !looksLikeVehicleLabel(label)) return;
+
+        const key = normalize(label);
+        const prev = map.get(key);
+
+        if (prev) {
+            prev.count = Math.max(prev.count, count);
+            if (prev.chance == null && chance != null) prev.chance = chance;
+            return;
+        }
+
+        const item = {
+            kind: 'vehicle',
+            label,
+            count,
+            chance
+        };
+
+        map.set(key, item);
+        result.push(item);
+    }
+
+    function extractVehiclesFromDom(block) {
+        const result = [];
+        const map = new Map();
+
+        if (!block) return result;
+
+        // Najpierw próbujemy czytać najmniejsze elementy DOM.
+        const nodes = block.querySelectorAll(
+            'li,p,span,div,td,dd,strong,b,[class*="vehicle"],[class*="require"]'
+        );
+
+        for (const el of nodes) {
+            const text = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!text || text.length > 180) continue;
+
+            // Jeżeli potomny element ma dokładnie ten sam tekst, użyjemy potomka,
+            // żeby nie dublować wyniku.
+            const sameChild = [...el.children].some(ch => {
+                const ct = (ch.innerText || ch.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                return ct === text;
+            });
+            if (sameChild) continue;
+
+            const m = text.match(/^(\d+)\s+(.+?)$/);
+            if (!m) continue;
+
+            const count = Number.parseInt(m[1], 10);
+            const rawLabel = m[2].trim();
+            const chance = parseChanceFromLabel(rawLabel);
+
+            addVehicle(result, map, rawLabel, count, chance);
+        }
+
+        return result;
+    }
+
+    function getVehiclesTextSegment(block) {
+        const text = (block?.innerText || block?.textContent || document.body?.innerText || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const start = text.search(/\bPojazdy\b/i);
+        if (start < 0) return '';
+
+        let segment = text.slice(start).replace(/^\s*Pojazdy\s*/i, '');
+
+        // Kończymy przed kolejną sekcją.
+        const stops = [
+            /\s+Może się rozwinąć\b/i,
+            /\s+Moze sie rozwinac\b/i,
+            /\s+Pacjenci\b/i,
+            /\s+Personel\b/i,
+            /\s+Potrzebna woda\b/i,
+            /\s+Wymagana woda\b/i,
+            /\s+Woda\b/i,
+            /\s+Wymagana piana\b/i,
+            /\s+Piana\b/i,
+            /\s+Dostępne jednostki\b/i,
+            /\s+Dostepne jednostki\b/i
+        ];
+
+        let cut = segment.length;
+
+        for (const re of stops) {
+            const m = re.exec(segment);
+            if (m && m.index < cut) cut = m.index;
+        }
+
+        return segment.slice(0, cut).trim();
+    }
+
+    function extractVehiclesFromFlatText(block) {
+        const result = [];
+        const map = new Map();
+        const segment = getVehiclesTextSegment(block);
+
+        if (!segment) return result;
+
+        log('Segment Pojazdy:', segment);
+
+        // Przykład:
+        // "1 SLOP/SLRr (35%) 2 Samochody pożarnicze"
+        const re = /(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+        let m;
+
+        while ((m = re.exec(segment)) !== null) {
+            const count = Number.parseInt(m[1], 10);
+            const rawLabel = m[2].trim();
+            const chance = parseChanceFromLabel(rawLabel);
+
+            addVehicle(result, map, rawLabel, count, chance);
+        }
+
+        return result;
+    }
+
+    function mergeVehicles(a, b) {
+        const result = [];
+        const map = new Map();
+
+        for (const item of [...a, ...b]) {
+            addVehicle(result, map, item.label, item.count, item.chance);
+        }
+
+        return result;
+    }
+
+    function extractResourceFromText(text, type) {
+        const compact = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const patterns = type === 'water'
+            ? [
+                /(?:Potrzebna|Wymagana)?\s*woda(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
+                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*wody\b/i
+            ]
+            : [
+                /(?:Wymagana|Potrzebna)?\s*piana(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
+                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*piany\b/i
+            ];
+
+        for (const re of patterns) {
+            const m = compact.match(re);
+            if (!m) continue;
+
+            const digits = m[1].replace(/[^\d]/g, '');
+            const value = digits ? Number.parseInt(digits, 10) : 0;
+
+            if (value > 0) return value;
+        }
+
+        return 0;
+    }
+
+    function extractResource(block, type) {
+        let value = extractResourceFromText(
+            block?.innerText || block?.textContent || '',
+            type
+        );
+
+        if (!value) {
+            value = extractResourceFromText(document.body?.innerText || '', type);
+        }
+
+        return value || 0;
+    }
+
+    function extractMaxPatientsFromText(text) {
+        const compact = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Operator pokazuje to m.in. jako:
+        // "2 Maksimum pacjentów"
+        // albo na stronie szczegółów: "Maks. Pacjenci | 2".
+        //
+        // Celowo NIE bierzemy żadnej innej liczby z sekcji Pacjenci.
+        const patterns = [
+            /\b(\d+)\s+Maksimum\s+pacjent(?:ów|ow)\b/i,
+            /\bMaksimum\s+pacjent(?:ów|ow)\s*:?\s*(\d+)\b/i,
+            /\bMaks\.?\s*Pacjenci\s*:?\s*(\d+)\b/i,
+            /\bMaksymalna\s+liczba\s+pacjent(?:ów|ow)\s*:?\s*(\d+)\b/i,
+            /\bMaksymalnie\s+pacjent(?:ów|ow)\s*:?\s*(\d+)\b/i,
+            /\bPacjenci\s*\(maks\.?\)\s*:?\s*(\d+)\b/i
+        ];
+
+        for (const re of patterns) {
+            const m = compact.match(re);
+            if (!m) continue;
+
+            const value = Number.parseInt(m[1], 10);
+            if (Number.isFinite(value) && value >= 0) return value;
+        }
+
+        return 0;
+    }
+
+    function extractMaxPatients(block) {
+        // 1. Najpierw szukamy NAJMNIEJSZEGO elementu DOM zawierającego dokładnie
+        //    frazę "Maksimum pacjentów". Nie korzystamy już z szerokich kontenerów,
+        //    które zawierają Minimum, procent transportu i LPR jednocześnie.
+        const root = block || document;
+
+        const nodes = [
+            ...root.querySelectorAll?.('tr,li,p,span,div,dt,dd,td,th,strong,b') || []
+        ];
+
+        const candidates = [];
+
+        for (const el of nodes) {
+            const text = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!text || text.length > 180) continue;
+
+            const n = normalize(text);
+
+            if (
+                !n.includes('maksimum pacjent') &&
+                !n.includes('maks pacjent') &&
+                !n.includes('maksymalna liczba pacjent')
+            ) {
+                continue;
+            }
+
+            const value = extractMaxPatientsFromText(text);
+            if (value <= 0) continue;
+
+            // Preferujemy najmniejszy element, czyli dokładnie pojedynczy wiersz/linijkę.
+            candidates.push({
+                value,
+                textLength: text.length,
+                childCount: el.children?.length || 0
+            });
+        }
+
+        if (candidates.length) {
+            candidates.sort((a, b) =>
+                a.textLength - b.textLength ||
+                a.childCount - b.childCount
+            );
+
+            return candidates[0].value;
+        }
+
+        // 2. Tekst samej żółtej karty.
+        let value = extractMaxPatientsFromText(
+            block?.innerText || block?.textContent || ''
+        );
+
+        if (value > 0) return value;
+
+        // 3. Ostateczny fallback: cały ekran, ale nadal WYŁĄCZNIE regex przy
+        //    frazie "Maksimum pacjentów", więc np. 80% i 10% nie mogą wejść.
+        value = extractMaxPatientsFromText(document.body?.innerText || '');
+
+        return value > 0 ? value : 0;
+    }
+
+    function findMissionDetailsLink(block) {
+        const roots = [block, block?.parentElement, document].filter(Boolean);
+
+        for (const root of roots) {
+            const links = root.querySelectorAll?.('a[href*="/einsaetze/"]') || [];
+
+            for (const a of links) {
+                const href = a.href || a.getAttribute('href') || '';
+                if (/\/einsaetze\/\d+(?:[/?#]|$)/.test(href)) return href;
+            }
+        }
+
+        return null;
+    }
+
+    function xhrText(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url,
+                timeout: 20000,
+                onload: r => {
+                    if (r.status >= 200 && r.status < 400) resolve(r.responseText);
+                    else reject(new Error(`HTTP ${r.status}`));
+                },
+                onerror: () => reject(new Error('Błąd połączenia')),
+                ontimeout: () => reject(new Error('Przekroczono czas połączenia'))
+            });
+        });
+    }
+
+    function parsePublicMissionDetails(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const vehicles = [];
+        const byName = new Map();
+        const chances = [];
+        let water = 0;
+        let foam = 0;
+        let maxPatients = 0;
+
+        for (const tr of doc.querySelectorAll('tr')) {
+            const cells = [...tr.querySelectorAll('th,td')];
+            if (cells.length < 2) continue;
+
+            const label = cells[0].textContent.replace(/\s+/g, ' ').trim();
+            const valueText = cells[1].textContent.replace(/\s+/g, ' ').trim();
+            const value = parseIntLoose(valueText);
+
+            if (!label || value == null) continue;
+
+            const nl = normalize(label);
+
+            if (
+                nl === 'maks pacjenci' ||
+                nl === 'maksimum pacjentow' ||
+                nl === 'maksimum pacjentów' ||
+                (nl.includes('pacjent') && nl.includes('maks'))
+            ) {
+                // W tabeli szczegółów wartość znajduje się w osobnej komórce,
+                // np. "Maks. Pacjenci | 2".
+                maxPatients = Math.max(maxPatients, value);
+                continue;
+            }
+
+            if (nl.includes('szanse') || nl.includes('szansa')) {
+                chances.push({ label, value });
+                continue;
+            }
+
+            if (nl.includes('woda')) {
+                water = Math.max(water, value);
+                continue;
+            }
+
+            if (nl.includes('piana')) {
+                foam = Math.max(foam, value);
+                continue;
+            }
+
+            if (!nl.startsWith('wymagane') && !nl.startsWith('wymagany') && !nl.startsWith('wymagana')) {
+                continue;
+            }
+
+            // Odfiltrowujemy personel, budynki i posterunki.
+            if (
+                nl.includes('posterunk') ||
+                nl.includes('personel') ||
+                nl.includes('strazak') ||
+                nl.includes('policjant') ||
+                nl.includes('ratownik') ||
+                nl.includes('rozbudow')
+            ) {
+                continue;
+            }
+
+            let vehicleLabel = label
+                .replace(/^Wymagan(?:e|y|a)\s+/i, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            addVehicle(vehicles, byName, vehicleLabel, value, null);
+        }
+
+        // Przypisanie procentów do odpowiadających pojazdów.
+        for (const ch of chances) {
+            const n = normalize(ch.label);
+
+            let best = null;
+            let bestScore = 0;
+
+            for (const v of vehicles) {
+                const vn = normalize(v.label);
+                let score = 0;
+
+                for (const token of vn.split(' ')) {
+                    if (token.length >= 3 && n.includes(token)) score++;
+                }
+
+                if (score > bestScore) {
+                    best = v;
+                    bestScore = score;
+                }
+            }
+
+            if (best && bestScore > 0) best.chance = ch.value;
+        }
+
+        return { vehicles, water, foam, maxPatients };
+    }
+
+    function hasContaminatedVehicleList(vehicles) {
+        if (!Array.isArray(vehicles) || !vehicles.length) return false;
+
+        return vehicles.some(v => {
+            const label = String(v?.label || '');
+            return (
+                /\b(?:\d+\s+)?min\s+\d+\s*s\b/i.test(label) ||
+                /\[[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\d+[^\]]*\]/.test(label) ||
+                /posterunek/i.test(label) ||
+                /dostępne jednostki|dostepne jednostki|alarmowo/i.test(label)
+            );
+        });
+    }
+
+    async function captureMission() {
+        const block = findMissionInfoBlock();
+
+        // v0.20: odczytujemy WYŁĄCZNIE tekst sekcji "Pojazdy".
+        // Nie skanujemy już wszystkich elementów DOM wewnątrz dużego kontenera,
+        // bo mogła się tam znaleźć lista "Dostępne jednostki".
+        let vehicles = extractVehiclesFromFlatText(block);
+
+        // Jeżeli cokolwiek wygląda jak nazwa własnego pojazdu/jednostki albo czas
+        // dojazdu, odrzucamy całą listę zamiast tworzyć błędny ZR.
+        if (hasContaminatedVehicleList(vehicles)) {
+            console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
+            vehicles = [];
+        }
+
+        let water = extractResource(block, 'water');
+        let foam = extractResource(block, 'foam');
+        let maxPatients = extractMaxPatients(block);
+
+        // Publiczne szczegóły wykorzystujemy nie tylko jako fallback dla pojazdów.
+        // Mogą też zawierać Maks. Pacjenci, nawet jeśli lista pojazdów z okna
+        // została odczytana poprawnie.
+        const detailsLink = findMissionDetailsLink(block);
+
+        if (detailsLink && (!vehicles.length || !water || !foam || !maxPatients)) {
+            try {
+                log('Uzupełniam dane z publicznych szczegółów:', detailsLink);
+                const html = await xhrText(detailsLink);
+                const pub = parsePublicMissionDetails(html);
+
+                if (!vehicles.length) vehicles = pub.vehicles;
+                if (!water) water = pub.water;
+                if (!foam) foam = pub.foam;
+                if (!maxPatients) maxPatients = pub.maxPatients;
+
+                if (hasContaminatedVehicleList(vehicles)) {
+                    console.warn(TAG, 'Fallback również zwrócił podejrzaną listę - odrzucam ją.');
+                    vehicles = [];
+                }
+            } catch (err) {
+                console.warn(TAG, 'Uzupełnienie z publicznych szczegółów nie powiodło się:', err);
+            }
+        }
+
+        const data = {
+            name: getMissionName(block),
+            vehicles,
+            water,
+            foam,
+            maxPatients,
+            sourceUrl: location.href,
+            capturedAt: Date.now()
+        };
+
+        state.capture = data;
+        saveJSON(CAPTURE_KEY, data);
+        log('Odczyt misji:', data);
+
+        return data;
+    }
+
+    // ------------------------------------------------------------------
+    // PRZYCISKI W NAGŁÓWKU
+    // ------------------------------------------------------------------
+
+    function removeHeaderButtons() {
+        document.getElementById('orzr-header-actions')?.remove();
+    }
+
+    function ensureHeaderButtons() {
+        if (/^\/aaos\//.test(location.pathname)) {
+            removeHeaderButtons();
+            return;
+        }
+
+        const header = findOpenedMissionHeader();
+
+        // Jeżeli nie ma OTWARTEGO okna misji, przycisku nie może być nigdzie.
+        if (!header) {
+            removeHeaderButtons();
+            return;
+        }
+
+        // Jeśli przycisk istnieje, ale został w starym/innym nagłówku, przenieś go.
+        const existing = document.getElementById('orzr-header-actions');
+        if (existing && existing.parentElement !== header) {
+            existing.remove();
+        } else if (existing) {
+            return;
+        }
+
+        const title = findMissionTitleElement(header);
+
+        // Header musi być pozycjonowany, aby przycisk został w jego obrębie.
+        const cs = getComputedStyle(header);
+        if (cs.position === 'static') header.style.position = 'relative';
+
+        const wrap = document.createElement('div');
+        wrap.id = 'orzr-header-actions';
+
+        let left = 360;
+
+        if (title) {
+            const hr = header.getBoundingClientRect();
+            const tr = title.getBoundingClientRect();
+            left = Math.round(tr.right - hr.left + 18);
+        }
+
+        // Bezpieczny zakres.
+        left = Math.max(330, Math.min(left, 720));
+
+        wrap.style.cssText = [
+            'position:absolute',
+            `left:${left}px`,
+            'top:5px',
+            'z-index:99999',
+            'display:flex',
+            'gap:7px',
+            'align-items:center'
+        ].join(';');
+
+        const create = document.createElement('button');
+        create.type = 'button';
+        create.textContent = '➕ UTWÓRZ ZR';
+        create.title = 'Utwórz ZR na podstawie aktualnej misji';
+        create.style.cssText = [
+            'display:inline-block !important',
+            'visibility:visible !important',
+            'opacity:1 !important',
+            'height:34px !important',
+            'padding:0 14px !important',
+            'border:1px solid #3e8f3e !important',
+            'border-radius:4px !important',
+            'background:#5cb85c !important',
+            'background-image:none !important',
+            'color:#ffffff !important',
+            'font:700 13px/32px Arial,sans-serif !important',
+            'text-shadow:none !important',
+            'box-shadow:0 1px 3px rgba(0,0,0,.35) !important',
+            'cursor:pointer !important'
+        ].join(';');
+
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '💾';
+        save.title = 'Zapamiętaj dane aktualnej misji';
+        save.style.cssText = [
+            'display:inline-block !important',
+            'visibility:visible !important',
+            'opacity:1 !important',
+            'width:36px !important',
+            'height:34px !important',
+            'padding:0 !important',
+            'border:1px solid #aaa !important',
+            'border-radius:4px !important',
+            'background:#f5f5f5 !important',
+            'background-image:none !important',
+            'color:#222 !important',
+            'font:700 15px/32px Arial,sans-serif !important',
+            'text-shadow:none !important',
+            'cursor:pointer !important'
+        ].join(';');
+
+        create.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const data = await captureMission();
+
+            if (!data.vehicles.length && !data.water && !data.foam && !data.maxPatients) {
+                alert(
+                    'Menedżer ZR: nie udało się bezpiecznie odczytać wymagań tej misji.\n\n' +
+                    'Skrypt odrzucił wynik, aby nie pobrać listy dostępnych jednostek.\n\n' +
+                    'Nazwa: ' + data.name
+                );
+                return;
+            }
+
+            const url = new URL('/aaos/new', location.origin);
+            url.searchParams.set('orzr_from_mission', '1');
+
+            try {
+                GM_openInTab(url.href, { active: true, insert: true });
+            } catch {
+                window.open(url.href, '_blank');
+            }
+        });
+
+        save.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const data = await captureMission();
+            save.textContent = '✓';
+
+            setTimeout(() => {
+                if (document.contains(save)) save.textContent = '💾';
+            }, 1400);
+        });
+
+        wrap.append(create, save);
+        header.appendChild(wrap);
+
+        log('Dodano przyciski do nagłówka misji.', header);
+    }
+
+    // ------------------------------------------------------------------
+    // EDYTOR ZR
+    // ------------------------------------------------------------------
+
+    function isAAOEditor() {
+        return /^\/aaos\/(?:new|\d+\/(?:edit|copy))\/?$/.test(location.pathname);
+    }
+
+    function labelFor(input) {
+        if (input.id) {
+            try {
+                const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+                if (label) return label.textContent.replace(/\s+/g, ' ').trim();
+            } catch {}
+        }
+
+        return input.closest('.form-group,.control-group,.row')?.querySelector('label')?.textContent
+            ?.replace(/\s+/g, ' ').trim() || '';
+    }
+
+    function collectFields() {
+        const result = [];
+
+        for (const input of document.querySelectorAll('input[name]')) {
+            if (input.disabled) continue;
+            if (['hidden', 'button', 'submit', 'checkbox', 'radio'].includes(input.type)) continue;
+
+            const label = labelFor(input);
+            const name = input.name || '';
+            const nl = normalize(label);
+            const nn = normalize(name);
+
+            let kind = 'other';
+
+            if (nn.includes('caption') || nl === 'nazwa' || nl.includes('nazwa zr') || nl.includes('nazwa reguly')) {
+                kind = 'caption';
+            } else if (nl.includes('wod') || nn.includes('water')) {
+                kind = 'water';
+            } else if (nl.includes('pian') || nn.includes('foam')) {
+                kind = 'foam';
+            } else if (/^(aao\[|vehicle_type_ids\[|vehicle_type_caption\[)/.test(name) || input.type === 'number') {
+                kind = 'vehicle';
+            }
+
+            result.push({ input, name, label: label || name, kind });
+        }
+
+        state.fields = result;
+        return result;
+    }
+
+    function expand(text) {
+        let n = normalize(text);
+
+        const aliases = [
+            [/samochody? pozarnicze/g, ' straz pozarna samochod pozarniczy '],
+            [/samochody? ratownictwa technicznego/g, ' technik ratownictwo techniczne '],
+            [/samochody? wezowe/g, ' weze wezowy '],
+            [/samochody? dowodzenia i lacznosci/g, ' dil dowodzenie lacznosc '],
+            [/sp rchem/g, ' rchem '],
+            [/samochody? spgaz/g, ' spgaz '],
+            [/radiowozy? wrd/g, ' radiowoz wrd '],
+            [/radiowozy?/g, ' radiowoz '],
+            [/sh lub sd/g, ' drabina sh sd '],
+            [/slop lub slrr/g, ' oficer operacyjny slop slrr '],
+            [/slop slrr/g, ' oficer operacyjny slop slrr '],
+            [/cysterny?/g, ' cysterna '],
+            [/piana gasnicza/g, ' piana '],
+            [/ambulanse? s lub p/g, ' ambulans s p ratownictwo medyczne '],
+            [/ambulanse?/g, ' ambulans s p ratownictwo medyczne ']
+        ];
+
+        for (const [re, value] of aliases) n = n.replace(re, value);
+        return n.replace(/\s+/g, ' ').trim();
+    }
+
+    function words(text) {
+        const stop = new Set(['i', 'oraz', 'lub', 'albo', 'do', 'na', 'z', 'ze', 'w', 'pojazd', 'pojazdy']);
+        return new Set(expand(text).split(' ').filter(x => x.length > 1 && !stop.has(x)));
+    }
+
+    function score(a, b) {
+        const na = expand(a);
+        const nb = expand(b);
+
+        if (!na || !nb) return 0;
+        if (na === nb) return 1;
+        if (na.includes(nb) || nb.includes(na)) return .9;
+
+        const aa = words(na);
+        const bb = words(nb);
+        if (!aa.size || !bb.size) return 0;
+
+        let common = 0;
+        for (const w of aa) if (bb.has(w)) common++;
+
+        let s = common / new Set([...aa, ...bb]).size;
+
+        if ([...aa].some(w => w.length >= 3 && w.length <= 7 && bb.has(w))) s += .22;
+
+        return Math.min(1, s);
+    }
+
+    function requirementKey(req) {
+        return `${req.kind}:${normalize(req.label)}`;
+    }
+
+    function bestField(req) {
+        const manualName = state.map[requirementKey(req)];
+        if (manualName) {
+            const f = state.fields.find(x => x.name === manualName);
+            if (f) return f;
+        }
+
+        // Pacjenci: nie używamy tu fuzzy-matchingu. Szukamy konkretnego pola
+        // odpowiadającego ambulansowi S/P. W interfejsie Operatora najczęściej
+        // jest ono opisane po prostu jako "Ambulans".
+        if (
+            req.kind === 'vehicle' &&
+            normalize(req.label) === 'ambulans s lub p'
+        ) {
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+
+            const exactLabels = [
+                'ambulans s lub p',
+                'ambulans p lub s',
+                'ambulans',
+                'ambulans ratunkowy'
+            ];
+
+            for (const wanted of exactLabels) {
+                const f = vehicleFields.find(x => normalize(x.label) === wanted);
+                if (f) return f;
+            }
+
+            // Jeżeli gra używa pełniejszej nazwy, dopuszczamy pole zawierające
+            // "ambulans", ale wykluczamy transportowy T.
+            const fallback = vehicleFields.find(x => {
+                const n = normalize(x.label);
+                return n.includes('ambulans') &&
+                    !n.includes('ambulans t') &&
+                    !n.includes('transport');
+            });
+
+            if (fallback) return fallback;
+        }
+
+        if (req.kind === 'water') {
+            const f = state.fields.find(x => x.kind === 'water');
+            if (f) return f;
+        }
+
+        if (req.kind === 'foam') {
+            const f = state.fields.find(x => x.kind === 'foam');
+            if (f) return f;
+        }
+
+        const pool = req.kind === 'vehicle'
+            ? state.fields.filter(x => x.kind === 'vehicle')
+            : state.fields.filter(x => x.kind !== 'caption');
+
+        let best = null;
+        let bestScore = 0;
+
+        for (const f of pool) {
+            const s = score(req.label, f.label);
+            if (s > bestScore) {
+                best = f;
+                bestScore = s;
+            }
+        }
+
+        return bestScore >= .58 ? best : null;
+    }
+
+    function setInput(input, value) {
+        input.value = String(value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function requirements() {
+        if (!state.capture) return [];
+
+        const list = state.capture.vehicles.map(v => ({
+            kind: 'vehicle',
+            label: v.label,
+            value: v.count,
+            chance: v.chance
+        }));
+
+        if (state.capture.water > 0) list.push({ kind: 'water', label: 'Woda', value: state.capture.water });
+        if (state.capture.foam > 0) list.push({ kind: 'foam', label: 'Piana', value: state.capture.foam });
+
+        // Zasada Menedżera ZR OR:
+        // maksymalna liczba pacjentów = dokładnie tyle Ambulansów S lub P.
+        const maxPatients = Number.parseInt(state.capture.maxPatients, 10);
+
+        if (Number.isFinite(maxPatients) && maxPatients > 0) {
+            list.push({
+                kind: 'vehicle',
+                label: 'Ambulans S lub P',
+                value: maxPatients,
+                chance: null
+            });
+        }
+
+        return list;
+    }
+
+    function renderEditor() {
+        const tbody = document.getElementById('orzr-editor-body');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        const reqs = requirements();
+
+        if (!reqs.length) {
+            tbody.innerHTML = '<tr><td colspan="4">Brak zapisanej misji.</td></tr>';
+            return;
+        }
+
+        for (const req of reqs) {
+            const tr = document.createElement('tr');
+            const field = bestField(req);
+
+            const td1 = document.createElement('td');
+            td1.textContent = req.label + (req.chance ? ` (${req.chance}%)` : '');
+
+            const td2 = document.createElement('td');
+            td2.textContent = req.value;
+
+            const td3 = document.createElement('td');
+
+            const select = document.createElement('select');
+            select.className = 'form-control input-sm';
+
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— nie przypisano —';
+            select.append(none);
+
+            for (const f of state.fields.filter(x => x.kind !== 'caption')) {
+                const opt = document.createElement('option');
+                opt.value = f.name;
+                opt.textContent = f.label;
+                if (field?.name === f.name) opt.selected = true;
+                select.append(opt);
+            }
+
+            select.addEventListener('change', () => {
+                if (select.value) state.map[requirementKey(req)] = select.value;
+                else delete state.map[requirementKey(req)];
+
+                saveJSON(MAP_KEY, state.map);
+                renderEditor();
+            });
+
+            td3.append(select);
+
+            const td4 = document.createElement('td');
+            td4.textContent = field ? (field.input.value || '0') : '—';
+
+            tr.append(td1, td2, td3, td4);
+            tbody.append(tr);
+        }
+    }
+
+    function applyCapturedMission(replace = false) {
+        const reqs = requirements();
+
+        if (replace) {
+            for (const f of state.fields.filter(x => x.kind !== 'caption')) {
+                if (f.input.type === 'number' || /^(aao\[|vehicle_type_ids\[|vehicle_type_caption\[)/.test(f.name)) {
+                    setInput(f.input, 0);
+                }
+            }
+        }
+
+        for (const req of reqs) {
+            const f = bestField(req);
+            if (!f) continue;
+
+            const current = Number.parseInt(f.input.value || '0', 10) || 0;
+            const isPatientAmbulance =
+                req.kind === 'vehicle' &&
+                normalize(req.label) === 'ambulans s lub p';
+
+            // Dla pacjentów obowiązuje dokładna zasada:
+            // Maksimum pacjentów = dokładnie tyle ambulansów S/P.
+            // Nie używamy Math.max(), bo poprzednia/błędna wartość pola
+            // (np. 1212) nie może zostać zachowana.
+            const target = isPatientAmbulance
+                ? Number(req.value)
+                : (replace ? req.value : Math.max(current, req.value));
+
+            setInput(f.input, target);
+        }
+
+        const caption = state.fields.find(x => x.kind === 'caption');
+        if (caption && state.capture?.name && !caption.input.value.trim()) {
+            setInput(caption.input, state.capture.name);
+        }
+
+        renderEditor();
+    }
+
+    function buildEditorPanel() {
+        if (!isAAOEditor()) return;
+        if (document.getElementById('orzr-editor')) return;
+
+        collectFields();
+
+        const form = document.querySelector('form');
+        if (!form) return;
+
+        const panel = document.createElement('div');
+        panel.id = 'orzr-editor';
+        panel.className = 'panel panel-info';
+
+        panel.innerHTML = `
+            <div class="panel-heading">
+                <strong>Menedżer ZR v${VERSION}</strong>
+                <span style="margin-left:12px;">${state.capture ? state.capture.name : 'Brak zapisanej misji'}</span>
+                ${state.capture?.maxPatients ? `<span style="margin-left:12px;" class="label label-info">Maks. pacjentów: ${state.capture.maxPatients}</span>` : ''}
+            </div>
+            <div class="panel-body">
+                <div class="table-responsive">
+                    <table class="table table-condensed">
+                        <thead>
+                            <tr>
+                                <th>Wymaganie</th>
+                                <th>Ilość</th>
+                                <th>Pole ZR</th>
+                                <th>Obecnie</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orzr-editor-body"></tbody>
+                    </table>
+                </div>
+                <button type="button" id="orzr-fill" class="btn btn-success">Uzupełnij ZR</button>
+                <button type="button" id="orzr-replace" class="btn btn-warning">Zastąp ZR</button>
+            </div>
+        `;
+
+        form.parentNode.insertBefore(panel, form);
+
+        document.getElementById('orzr-fill').addEventListener('click', () => applyCapturedMission(false));
+        document.getElementById('orzr-replace').addEventListener('click', () => {
+            if (confirm('Wyzerować wymagania i wpisać dane z misji?')) applyCapturedMission(true);
+        });
+
+        renderEditor();
+
+        if (new URLSearchParams(location.search).get('orzr_from_mission') === '1' && state.capture) {
+            const caption = state.fields.find(x => x.kind === 'caption');
+            if (caption && !caption.input.value.trim()) setInput(caption.input, state.capture.name);
+        }
+    }
+
+    function init() {
+        log(`Start v${VERSION}`, location.href);
+
+        if (isAAOEditor()) {
+            buildEditorPanel();
+            return;
+        }
+
+        const scan = () => ensureHeaderButtons();
+        scan();
+
+        const observer = new MutationObserver(() => {
+            clearTimeout(window.__orzrScanTimer);
+            window.__orzrScanTimer = setTimeout(scan, 120);
+        });
+
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    init();
+})();
