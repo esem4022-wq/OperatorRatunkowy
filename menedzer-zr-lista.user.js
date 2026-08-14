@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.3
+// @version      0.4
 // @description  Osobny menedżer ZR: lista, szybka edycja nazwy, kolumny i kategorii.
 // @author       ChatGPT + użytkownik
+// @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
+// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
+// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
 // @match        https://www.operatorratunkowy.pl/*
 // @match        https://operatorratunkowy.pl/*
 // @match        https://policja.operatorratunkowy.pl/*
@@ -15,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.3';
+    const VERSION = '0.4';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
