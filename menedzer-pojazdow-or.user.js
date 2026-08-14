@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.07
+// @version      2.08
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.07
+ * Wersja 2.08
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -35,6 +35,7 @@
  * - v2.06: automatyczne wykrywanie strony/tabeli personelu jednostki oraz bardziej odporny parser ID pracownikow,
  * - v2.07: zaznaczanie wielu pojazdow w karcie Zaloga i zbiorcze „Do max”,
  * - v2.07: zbiorczy przydzial wykonywany sekwencyjnie z ponownym odczytem personelu przed kazdym pojazdem,
+ * - v2.08: przycisk Menedzera jest wyswietlany tylko na glownej stronie OperatorRatunkowy.pl,
  * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
  * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
@@ -121,6 +122,11 @@
   ];
 
   if (window.top !== window.self) return;
+
+  // Przycisk Menedzera ma byc dostepny wylacznie na glownej stronie gry.
+  // Parametry zapytania i hash nie maja znaczenia - liczy sie glowna sciezka '/'.
+  if (window.location.pathname !== '/') return;
+
   if (document.getElementById(`${APP_ID}-button`)) return;
 
   const state = {
@@ -3035,7 +3041,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.07</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.08</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -3526,5 +3532,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.07 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log('[OR Fleet Manager] Wersja 2.08 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
 })();
