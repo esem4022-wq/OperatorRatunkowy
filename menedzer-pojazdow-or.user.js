@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.08
+// @version      2.09
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.08
+ * Wersja 2.09
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -345,191 +345,150 @@
         entry => wanted.has(entry.caption.toLocaleLowerCase('pl'))
       );
     };
+    const existingIds = (...typeIds) => typeIds
+      .flat()
+      .map(id => String(id))
+      .filter(id => Object.prototype.hasOwnProperty.call(catalog || {}, id));
 
-    // Reguly sa celowo oparte glownie na polskich nazwach katalogu,
-    // aby dzialaly takze po dodaniu nowych ID tego samego rodzaju.
+    // Mapowanie standardowych grup AAO z OperatorRatunkowy.pl.
+    // ID zostaly zweryfikowane z formularzem AAO i katalogiem pojazdow.
+    // W odroznieniu od v1.03-v2.08 klucz jest juz znormalizowany z aao[fire] -> fire.
+    const fixedGroups = {
+      fire: [0, 1, 12, 29, 38, 39],
+      hlf_only: [12, 38, 39],
+      dlk: [2, 13],
+      rw: [4, 12, 37, 38, 39],
+      elw: [3, 28],
+      elw2: [11, 43, 78],
+      gwhoehenrettung: [27],
+      gwl2wasser: [6, 36, 47, 88, 94],
+      gwgefahrgut: [7, 49],
+      gwa: [10, 42, 52],
+      fwk: [25],
+      hose_trucks: [61, 62, 64],
+      rtw: [5, 31],
+      ktw: [34],
+      ktw_or_rtw: [5, 31, 34],
+      fly_car_any: [9, 32, 33, 35],
+      rth_only: [9],
+      fustw: [8, 76, 77],
+      police_motorcycle: [17],
+      fustw_or_police_motorcycle: [8, 17, 76, 77],
+      municipal_police: [71, 72],
+      polizeihubschrauber: [14],
+      swat: [15, 18],
+      swat_armored_vehicle: [15],
+      swat_suv: [18],
+      k9: [16],
+      any_traffic_car: [30, 73, 74, 75],
+      riot_police: [65, 66, 67],
+      detention_unit: [79, 80],
+      gw_taucher: [24],
+      gw_wasserrettung: [19, 20],
+      boot: [21, 22, 23, 26, 54],
+      mzb: [21],
+      search_and_rescue: [81, 82],
+      rescue_dogs: [82, 84],
+      car_carrier: [97, 98],
+    };
+
+    if (fixedGroups[k]) return existingIds(fixedGroups[k]);
+
     switch (k) {
-      case 'fire':
       case 'lf_only':
       case 'tlf_only':
-        return mergeIds(
-          exact(
-            'Ciężki samochód gaśniczy',
-            'Średni samochód gaśniczy',
-            'Lekki samochód gaśniczy',
-            'GBARt',
-            'GCBARt',
-            'GLBARt'
-          )
-        );
-
-      case 'hlf_only':
-      case 'rw':
-      case 'road_rescue_or_fire_engine':
-        return mergeIds(
-          ids(/(?:^|[\s-])(SRt|SCRt)(?:$|[\s-])/i),
-          ids(/(?:GBARt|GCBARt|GLBARt)/i),
-          ids(/ratownictwa technicznego/i)
-        );
+        return semanticAAOTypeIds('fire', catalog);
 
       case 'rw_only':
-        return mergeIds(
-          exact('SRt', 'SCRt'),
-          ids(/ratownictwa technicznego/i)
-        );
+        return existingIds(4, 37);
 
+      case 'road_rescue_or_fire_engine':
       case 'hlf_or_rw_and_lf':
         return mergeIds(
           semanticAAOTypeIds('fire', catalog),
           semanticAAOTypeIds('rw', catalog)
         );
 
-      case 'dlk':
       case 'dlk_or_tm50':
-        return mergeIds(
-          exact('SD', 'SH'),
-          ids(/drabin|podnośnik|wysięgnik/i)
-        );
+        return semanticAAOTypeIds('dlk', catalog);
 
-      case 'elw':
-      case 'elw2':
       case 'elw1_or_elw2':
       case 'elw2_or_ab_elw':
       case 'ab_einsatzleitung_only':
         return mergeIds(
-          exact('SLOp', 'SLRr', 'Ruchome Stanowisko Dowodzenia'),
-          ids(/dowodzeni|stanowisko dowodzenia/i)
+          semanticAAOTypeIds('elw', catalog),
+          semanticAAOTypeIds('elw2', catalog)
         );
 
-      case 'gwa':
       case 'gw_atemschutz_only':
       case 'ab_atemschutz_only':
-        return mergeIds(
-          exact('Spgaz'),
-          ids(/AODO|aparat.*oddech|sprzętem AODO/i)
-        );
+        return semanticAAOTypeIds('gwa', catalog);
 
       case 'gwoel':
       case 'gw_oel_only':
       case 'ab_oel_only':
         return ids(/olej|ekolog/i);
 
-      case 'gwl2wasser':
       case 'gwl2wasser_only':
       case 'abl2wasser_only':
       case 'gwl2wasser_all':
-      case 'hose_trucks':
-        return mergeIds(
-          exact('SW'),
-          ids(/wężow/i)
-        );
+        return semanticAAOTypeIds('gwl2wasser', catalog);
 
       case 'gwmesstechnik':
-        return mergeIds(
-          exact('SDł'),
-          ids(/pomiar|łączno/i)
-        );
+        return mergeIds(exact('SDł'), ids(/pomiar|łączno/i));
 
-      case 'gwgefahrgut':
       case 'gw_gefahrgut_only':
       case 'ab_gefahrgut_only':
-        return mergeIds(
-          exact('Srchem'),
-          ids(/chemicz|CBRNE|niebezpiecz/i)
-        );
-
-      case 'gwhoehenrettung':
-        return mergeIds(
-          exact('SRWys'),
-          ids(/wysokości/i)
-        );
+        return semanticAAOTypeIds('gwgefahrgut', catalog);
 
       case 'dekon_p':
       case 'only_dekon_p':
       case 'only_ab_dekon_p':
-        return ids(/dekontamin/i);
-
-      case 'fwk':
         return mergeIds(
-          exact('SCDź'),
-          ids(/dźwig|żuraw/i)
+          existingIds(41, 50),
+          ids(/dekontamin/i)
+        );
+
+      case 'flood_equipment':
+        return mergeIds(
+          existingIds(46, 48, 51),
+          ids(/powodzi|pompow/i)
         );
 
       case 'foam':
-      case 'foam_amount':
         return catalogIdsByPredicate(
           catalog,
           entry => Number(entry.data?.foamTank ?? entry.data?.ftank ?? 0) > 0
         );
 
-      case 'rtw':
-        return mergeIds(
-          exact('Ambulans P', 'Ambulans S'),
-          ids(/ambulans.*(?:P|S)$/i)
-        );
+      // Pola ilosciowe nie sa klasa pojazdu i nie powinny tworzyc pozycji filtra.
+      case 'wasser_amount':
+      case 'foam_amount':
+        return [];
 
-      case 'ktw':
-        return mergeIds(
-          exact('Ambulans T'),
-          ids(/transport.*medycz|ambulans T/i)
-        );
-
-      case 'ktw_or_rtw':
-        return mergeIds(
-          semanticAAOTypeIds('rtw', catalog),
-          semanticAAOTypeIds('ktw', catalog)
-        );
+      // Te wymagania odnosza sie do wyposazenia/urzadzen, a nie jednoznacznego typu pojazdu.
+      // Zostaja w diagnostyce AAO jako "brak mapowania", zamiast tworzyc mylacy filtr.
+      case 'helicopter_bucket':
+      case 'fire_aviation_2':
+      case 'drone':
+      case 'hazmat_drone':
+      case 'mobile_shelter':
+      case 'height_equipment':
+      case 'water_rescue_equipment':
+      case 'kdow_orgl':
+        return [];
 
       case 'nef':
-        return mergeIds(
-          exact('Samochód Lekarza', 'Śmigłowiec LPR'),
-          ids(/lekarz|LPR/i)
-        );
+        return mergeIds(existingIds(9, 32), ids(/lekarz|LPR/i));
 
       case 'nef_only':
-        return mergeIds(
-          exact('Samochód Lekarza'),
-          ids(/samochód lekarza/i)
-        );
+        return mergeIds(existingIds(32), ids(/samochód lekarza/i));
 
-      case 'rth_only':
       case 'hems':
-        return mergeIds(
-          exact('Śmigłowiec LPR'),
-          ids(/śmigłowiec.*LPR/i)
-        );
+        return semanticAAOTypeIds('rth_only', catalog);
 
-      case 'fustw':
-        return mergeIds(
-          exact('Radiowóz OPI'),
-          ids(/^Radiowóz(?! WRD)/i)
-        );
-
-      case 'k9':
-        return ids(/K-9|pies|przewodnik.*ps/i);
-
-      case 'polizeihubschrauber':
-        return ids(/helikopter policyjny/i);
-
-      case 'police_motorcycle':
-        return ids(/motocykl.*WRD|motocykl.*polic/i);
-
-      case 'fustw_or_police_motorcycle':
-        return mergeIds(
-          semanticAAOTypeIds('fustw', catalog),
-          semanticAAOTypeIds('police_motorcycle', catalog)
-        );
-
-      case 'gw_wasserrettung':
-        return mergeIds(
-          exact('S.WOPR', 'Samochód SLRw'),
-          ids(/WOPR|SLRw|wodn/i)
-        );
-
-      case 'boot':
-      case 'mzb':
       case 'rescueboat':
-        return ids(/Łódź|Ponton|Skuter|łód/i);
+        return semanticAAOTypeIds('boot', catalog);
 
       default:
         return [];
@@ -559,16 +518,22 @@
 
     if (/^vehicle_type_ids\[/.test(name)) return name;
 
-    // W formularzu AAO standardowe wymagania wystepuja bezposrednio jako
-    // nazwy typu fire, rw, dlk, rtw itd. Pomijamy pola techniczne formularza.
+    // OperatorRatunkowy zapisuje standardowe pola jako aao[fire], aao[rw],
+    // aao[dlk] itd. v1.03-v2.08 przekazywaly cale "aao[fire]" do mapowania,
+    // podczas gdy reguly oczekiwaly samego "fire". To bylo zrodlem problemu.
+    let key = name;
+    const aaoMatch = name.match(/^aao\[([^\]]+)\](?:\[\])?$/);
+    if (aaoMatch) key = aaoMatch[1];
+
     const ignored = new Set([
       'authenticity_token', 'utf8', '_method', 'commit',
-      'aao[name]', 'aao[caption]', 'name', 'caption',
-      'building_ids', 'custom'
+      'name', 'caption', 'color', 'text_color', 'automatic_text_color',
+      'column_number', 'aao_category_id', 'building_ids', 'hotkey',
+      'equipment_mode', 'reset', 'custom'
     ]);
-    if (ignored.has(name)) return '';
+    if (ignored.has(key)) return '';
 
-    return name;
+    return key;
   }
 
   function parseVehicleClassesFromAAOHtml(html, catalog) {
