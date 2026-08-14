@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.09
+// @version      2.10
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.09
+ * Wersja 2.10
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -36,6 +36,8 @@
  * - v2.07: zaznaczanie wielu pojazdow w karcie Zaloga i zbiorcze „Do max”,
  * - v2.07: zbiorczy przydzial wykonywany sekwencyjnie z ponownym odczytem personelu przed kazdym pojazdem,
  * - v2.08: przycisk Menedzera jest wyswietlany tylko na glownej stronie OperatorRatunkowy.pl,
+ * - v2.10: wielostopniowe ustalanie nazwy typu: katalog -> API -> AAO -> "Typ ID",
+ * - v2.10: kolumna Typ nigdy nie pozostaje pusta, nawet dla nowych/niestandardowych typow,
  * - v2.04: przycisk przydzialu nie jest juz mylony z informacja o aktualnym przydziale osoby,
  * - przydzial z karty Zaloga jest dostepny tylko po pozytywnej weryfikacji liczby osob i wymaganych kursow,
  * - wyszukiwanie oraz filtrowanie po typie, jednostce i klasie pojazdu,
@@ -542,6 +544,7 @@
 
     const classes = [];
     const diagnostics = [];
+    const typeNames = new Map();
     const seen = new Set();
 
     for (const input of fields) {
@@ -556,6 +559,14 @@
 
       if (typeIds?.length) {
         mappingSource = 'vehicle_type_ids';
+
+        // Pojedyncze pole vehicle_type_ids[ID] jest najlepszym awaryjnym
+        // zrodlem nazwy konkretnego typu pojazdu, gdy katalog/API jej nie podaja.
+        if (typeIds.length === 1 && /^vehicle_type_ids\[\d+\]$/.test(key)) {
+          const directTypeId = String(typeIds[0]);
+          const current = cleanClassLabel(typeNames.get(directTypeId));
+          if (!current && label) typeNames.set(directTypeId, label);
+        }
       } else {
         typeIds = semanticAAOTypeIds(key, catalog);
         if (typeIds.length) mappingSource = 'reguła standardowa';
@@ -593,6 +604,7 @@
         a.label.localeCompare(b.label, 'pl', { numeric: true, sensitivity: 'base' })
       ),
       diagnostics,
+      typeNames: Object.fromEntries(typeNames),
     };
   }
 
@@ -615,6 +627,7 @@
       return {
         classes: parsed.classes,
         diagnostics: parsed.diagnostics,
+        typeNames: parsed.typeNames || {},
         source: 'aao',
         warning: '',
       };
@@ -627,6 +640,7 @@
           typeIds: [...item.typeIds],
         })),
         diagnostics: [],
+        typeNames: {},
         source: 'fallback',
         warning: error?.message || String(error),
       };
@@ -672,7 +686,56 @@
     return fallback;
   }
 
-  function normalizeData(rawVehicles, rawBuildings, catalog) {
+  function nonEmptyText(value) {
+    const text = String(value ?? '').trim();
+    return text || '';
+  }
+
+  function apiVehicleTypeName(vehicle) {
+    const direct = [
+      valueOf(vehicle, ['vehicle_type_caption', 'type_caption'], null),
+      valueOf(vehicle, ['vehicle_type_name', 'type_name'], null),
+      valueOf(vehicle, ['vehicleTypeCaption', 'vehicleTypeName'], null),
+    ];
+
+    for (const candidate of direct) {
+      const text = nonEmptyText(candidate);
+      if (text) return text;
+    }
+
+    const possibleObjects = [vehicle?.vehicle_type, vehicle?.vehicleType, vehicle?.type];
+    for (const candidate of possibleObjects) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      const text = nonEmptyText(
+        candidate.caption ?? candidate.name ?? candidate.title ?? candidate.label
+      );
+      if (text) return text;
+    }
+
+    return '';
+  }
+
+  function resolveVehicleTypeName(vehicle, typeId, catalogEntry, aaoTypeNames = {}) {
+    const catalogName = nonEmptyText(
+      valueOf(catalogEntry, ['caption', 'name', 'title', 'label'], null)
+    );
+    if (catalogName) return { name: catalogName, source: 'catalog' };
+
+    const apiName = apiVehicleTypeName(vehicle);
+    if (apiName) return { name: apiName, source: 'api' };
+
+    const aaoName = nonEmptyText(
+      aaoTypeNames?.[String(typeId)] ?? aaoTypeNames?.[Number(typeId)]
+    );
+    if (aaoName) return { name: aaoName, source: 'aao' };
+
+    return {
+      name: `Typ ${nonEmptyText(typeId) || '?'}`,
+      source: 'fallback',
+    };
+  }
+
+  function normalizeData(rawVehicles, rawBuildings, catalog, aaoTypeNames = {}) {
     const buildings = rawBuildings.map(b => ({
       id: String(valueOf(b, ['id'], '')),
       name: String(valueOf(b, ['caption', 'name'], `Jednostka ${valueOf(b, ['id'], '')}`)),
@@ -687,11 +750,8 @@
       const typeId = String(valueOf(v, ['vehicle_type', 'vehicle_type_id', 'type'], ''));
       const buildingId = String(valueOf(v, ['building_id', 'building'], ''));
       const catalogEntry = catalog?.[typeId] ?? catalog?.[Number(typeId)] ?? null;
-      const typeName = String(
-        valueOf(catalogEntry, ['caption', 'name'], null) ??
-        valueOf(v, ['vehicle_type_caption', 'type_caption'], null) ??
-        `Typ ${typeId || '?'}`
-      );
+      const resolvedType = resolveVehicleTypeName(v, typeId, catalogEntry, aaoTypeNames);
+      const typeName = resolvedType.name;
       const name = String(valueOf(v, ['caption', 'name'], `Pojazd ${id}`));
       const buildingName = buildingsById.get(buildingId)?.name || `Jednostka ${buildingId || '?'}`;
       const assignedPersonnelCount = Math.max(
@@ -716,6 +776,7 @@
         name,
         typeId,
         typeName,
+        typeNameSource: resolvedType.source,
         buildingId,
         buildingName,
         assignedPersonnelCount,
@@ -760,9 +821,11 @@
         fetchVehicleCatalog(),
       ]);
 
-      normalizeData(vehicles, buildings, catalog);
-
       const classResult = await fetchVehicleClassesFromAAO(catalog);
+
+      // Nazwy pojedynczych typow znalezione w AAO sa uzywane jako trzeci
+      // poziom fallbacku przy normalizacji listy pojazdow.
+      normalizeData(vehicles, buildings, catalog, classResult.typeNames || {});
 
       state.vehicleClasses = classResult.classes;
       state.vehicleClassesSource = classResult.source;
@@ -779,10 +842,12 @@
       const sourceText = state.vehicleClassesSource === 'aao' ? 'AAO gry' : 'fallback';
       const diagCount = state.vehicleClassDiagnostics.length;
       const unmappedCount = state.vehicleClassDiagnostics.filter(d => !d.typeIds.length).length;
+      const fallbackTypeCount = state.vehicles.filter(v => v.typeNameSource === 'fallback').length;
       setStatus(
         `Wczytano ${state.vehicles.length} pojazdow, ${state.buildings.length} jednostek i ` +
         `${state.vehicleClasses.length} klas (${sourceText}).` +
-        (diagCount ? ` Pola AAO: ${diagCount}, bez mapowania: ${unmappedCount}.` : ''),
+        (diagCount ? ` Pola AAO: ${diagCount}, bez mapowania: ${unmappedCount}.` : '') +
+        (fallbackTypeCount ? ` Typy bez nazwy katalogowej/API/AAO: ${fallbackTypeCount} (pokazane jako Typ ID).` : ''),
         state.vehicleClassesSource === 'aao' ? 'ok' : 'warn'
       );
     } catch (error) {
