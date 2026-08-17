@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer załogi OR
 // @namespace    operatorratunkowy.local.crewmanager
-// @version      0.1.0
+// @version      0.1.1
 // @description  Osobny menedżer personelu i obsady pojazdów w OperatorRatunkowy.pl
 // @author       ChatGPT + użytkownik
 // @license      CC BY-NC-SA 4.0
@@ -17,7 +17,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '0.1.0';
+  const VERSION = '0.1.1';
   const APP_ID = 'or-crew-manager-v01';
   const PAGE_SIZE = 200;
   const BUILDING_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/buildings';
@@ -838,7 +838,7 @@
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      #${APP_ID}-button{position:fixed;right:260px;bottom:18px;z-index:2147483000;border:1px solid #34495e;border-radius:7px;background:#455a64;color:#fff;padding:8px 12px;font:700 13px Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer}
+      #${APP_ID}-button{position:fixed;right:260px;bottom:18px;z-index:2147483000;border:0;border-radius:999px;background:#455a64;color:#fff;padding:8px 12px;font:700 13px Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer}
       #${APP_ID}-button:hover{background:#37474f}
       #${APP_ID}-modal{display:none;position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.52);align-items:center;justify-content:center;font-family:Arial,sans-serif}
       #${APP_ID}-modal.or-cm-open{display:flex}
@@ -863,6 +863,19 @@
   function positionButton() {
     const btn = document.getElementById(`${APP_ID}-button`);
     if (!btn) return;
+
+    // Priorytet: przycisk Menedżera ZR Lista. Załoga OR ma być zawsze po jego lewej stronie.
+    const zrButton = document.getElementById('orzr-launcher') ||
+      [...document.querySelectorAll('button')].find(el => /menedżer\s*zr/i.test(el.textContent || ''));
+
+    if (zrButton) {
+      const rect = zrButton.getBoundingClientRect();
+      btn.style.right = `${Math.max(10, Math.round(window.innerWidth - rect.left + 10))}px`;
+      btn.style.bottom = `${Math.max(10, Math.round(window.innerHeight - rect.bottom))}px`;
+      return;
+    }
+
+    // Fallback, gdy Menedżer ZR nie zdążył się jeszcze załadować.
     const candidates = [
       document.getElementById('or-building-manager-v01-button'),
       document.getElementById('or-fleet-manager-v01-button'),
