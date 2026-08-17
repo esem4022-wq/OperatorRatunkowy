@@ -1,0 +1,15 @@
+Menedżer załogi OR v0.1.0
+
+Plik instalacyjny Tampermonkey:
+menedzer-zalogi-or.user.js
+
+Repozytorium aktualizacji:
+https://github.com/esem4022-wq/OperatorRatunkowy
+
+Zakres:
+- osobny menedżer, bez usuwania funkcji z Menedżera budynków lub Menedżera pojazdów,
+- zakładka Jednostki: personel obecny, docelowy, potrzeba, bilans i rekrutacja,
+- zakładka Pojazdy: maksymalna/przydzielona/brakująca załoga,
+- filtry braków/OK/nadmiaru,
+- zaznaczanie wielu pojazdów i próba przydziału do maksymalnej obsady przez natywny formularz gry,
+- bezpieczny fallback do otwarcia natywnej strony, jeżeli formularza nie da się automatycznie znaleźć.
