@@ -1,4 +1,4 @@
-Menedżer załogi OR v0.1.0
+Menedżer załogi OR v0.1.1
 
 Plik instalacyjny Tampermonkey:
 menedzer-zalogi-or.user.js
@@ -13,3 +13,7 @@ Zakres:
 - filtry braków/OK/nadmiaru,
 - zaznaczanie wielu pojazdów i próba przydziału do maksymalnej obsady przez natywny formularz gry,
 - bezpieczny fallback do otwarcia natywnej strony, jeżeli formularza nie da się automatycznie znaleźć.
+
+Zmiany v0.1.1:
+- przycisk Załoga OR ma w pełni zaokrąglony kształt,
+- przycisk jest pozycjonowany bezpośrednio po lewej stronie przycisku Menedżera ZR.
