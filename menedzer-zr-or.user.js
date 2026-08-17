@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.21
+// @version      0.23
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,14 +24,16 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.21';
-    const CAPTURE_KEY = 'or_zr_capture_v020';
+    const VERSION = '0.23';
+    const CAPTURE_KEY = 'or_zr_capture_v023';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
         capture: loadJSON(CAPTURE_KEY, null),
         map: loadJSON(MAP_KEY, {}),
-        fields: []
+        fields: [],
+        aaosPromise: null,
+        autoSelectBusy: false
     };
 
     function log(...args) {
@@ -313,35 +315,97 @@
         return chosen;
     }
 
+    function sanitizeMissionName(value) {
+        let text = String(value || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/^[*✱✳✽❉🔥🚑🚒🚓\s]+/, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text) return '';
+
+        // Dane, które czasami znajdują się w tym samym kontenerze co nazwa,
+        // ale NIE są częścią nazwy misji.
+        const cutPatterns = [
+            /\s+POI\b/i,
+            /\s+Pojazdy\b/i,
+            /\s+Pacjenci\b/i,
+            /\s+Może się rozwinąć\b/i,
+            /\s+Moze sie rozwinac\b/i,
+            /\s+Minimum pacjent(?:ów|ow)\b/i,
+            /\s+Maksimum pacjent(?:ów|ow)\b/i,
+            /\s+Potrzebna woda\b/i,
+            /\s+Wymagana woda\b/i,
+            /\s+Wymagana piana\b/i,
+            /\s+Dostępne jednostki\b/i,
+            /\s+Dostepne jednostki\b/i
+        ];
+
+        let cut = text.length;
+        for (const re of cutPatterns) {
+            const m = re.exec(text);
+            if (m && m.index < cut) cut = m.index;
+        }
+
+        text = text.slice(0, cut).replace(/\s+/g, ' ').trim();
+
+        // Metadane czasu/lokalizacji z nagłówka nie mogą wejść do nazwy.
+        text = text
+            .replace(/\s*[|•]\s*\d+\s+(?:sekund(?:y|ę)?|minut(?:y|ę)?|godzin(?:y|ę)?)\s+temu.*$/i, '')
+            .replace(/\s*\(?(?:Dziś|Dzis|Wczoraj)\s+o\s+\d{1,2}:\d{2}\)?\s*$/i, '')
+            .trim();
+
+        return text;
+    }
+
     function getMissionName(infoBlock) {
+        // Najpewniejsze źródło to tytuł w ciemnym nagłówku otwartej misji.
+        // Jest oddzielony od POI, pojazdów i innych danych żółtej karty.
+        const openedHeader = findOpenedMissionHeader();
+        const openedTitle = findMissionTitleElement(openedHeader);
+
+        if (openedTitle) {
+            const name = sanitizeMissionName(openedTitle.textContent);
+            if (name && name.length <= 60) return name;
+        }
+
+        // Drugie źródło: nagłówek wewnątrz żółtej karty.
         if (infoBlock) {
-            const headings = infoBlock.querySelectorAll('h1,h2,h3,h4,h5,.panel-title,.modal-title');
+            const headings = infoBlock.querySelectorAll(
+                'h1,h2,h3,h4,h5,.panel-title,.modal-title,[class*="mission"][class*="title"],strong'
+            );
 
             for (const h of headings) {
-                const text = h.textContent.replace(/\s+/g, ' ').trim();
-                if (text && text.length <= 120 && normalize(text) !== 'pojazdy') return text;
+                const name = sanitizeMissionName(h.textContent);
+                const n = normalize(name);
+
+                if (!name || name.length > 60) continue;
+                if (['pojazdy', 'pacjenci', 'woda', 'piana'].includes(n)) continue;
+                if (/^\d+\s+/.test(name)) continue;
+
+                return name;
             }
 
-            // Wersja bez polegania na nowych liniach:
+            // Awaryjnie można użyć tekstu przed sekcją Pojazdy,
+            // ale zawsze przechodzi on przez sanitizer usuwający POI itp.
             const compact = (infoBlock.innerText || infoBlock.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .replace(/\s+/g, ' ')
                 .trim();
 
             const m = compact.match(/^(.+?)\s+Pojazdy\b/i);
-            if (m && m[1].trim().length <= 120) {
-                return m[1].trim();
+            if (m) {
+                const name = sanitizeMissionName(m[1]);
+                if (name && name.length <= 60) return name;
             }
         }
 
-        const header = findOpenedMissionHeader() || findMissionHeader();
+        // Ostatni fallback - zwykły nagłówek znaleziony starszą metodą.
+        const header = findMissionHeader();
         const title = findMissionTitleElement(header);
-
         if (title) {
-            return title.textContent
-                .replace(/^[*✱✳✽❉\s]+/, '')
-                .replace(/\s+/g, ' ')
-                .trim();
+            const name = sanitizeMissionName(title.textContent);
+            if (name && name.length <= 60) return name;
         }
 
         return 'Misja bez nazwy';
@@ -875,6 +939,152 @@
     }
 
     // ------------------------------------------------------------------
+    // AUTOMATYCZNY WYBÓR ISTNIEJĄCEGO ZR
+    // ------------------------------------------------------------------
+
+    function exactMissionNameKey(value) {
+        return sanitizeMissionName(value)
+            .normalize('NFC')
+            .toLocaleLowerCase('pl-PL')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function unwrapAAOList(data) {
+        if (Array.isArray(data)) return data;
+        if (Array.isArray(data?.result)) return data.result;
+        if (Array.isArray(data?.aaos)) return data.aaos;
+        return [];
+    }
+
+    function loadAAOsForAutoSelect() {
+        if (state.aaosPromise) return state.aaosPromise;
+
+        state.aaosPromise = fetch('/api/v1/aaos', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+        })
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then(unwrapAAOList)
+            .catch(error => {
+                state.aaosPromise = null;
+                console.warn(TAG, 'Nie udało się pobrać listy ZR do auto-wyboru:', error);
+                return [];
+            });
+
+        return state.aaosPromise;
+    }
+
+    function ensureAutoSelectStyle() {
+        if (document.getElementById('orzr-auto-select-style')) return;
+
+        const style = document.createElement('style');
+        style.id = 'orzr-auto-select-style';
+        style.textContent = `
+            #mission-aao-group .aao.orzr-auto-selected-aao {
+                outline: 3px solid #28a745 !important;
+                outline-offset: 1px !important;
+                box-shadow: 0 0 8px rgba(40, 167, 69, .75) !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function currentMissionNameForAutoSelect() {
+        const header = findOpenedMissionHeader();
+        if (!header) return '';
+
+        const title = findMissionTitleElement(header);
+        const name = sanitizeMissionName(title?.textContent || '');
+
+        if (!name || name === 'Misja bez nazwy' || name.length > 60) return '';
+        return name;
+    }
+
+    function isAAOAvailable(aaoElement) {
+        if (!aaoElement) return false;
+        if (aaoElement.querySelector('.label-danger')) return false;
+        if (aaoElement.classList.contains('disabled')) return false;
+        if (aaoElement.getAttribute('aria-disabled') === 'true') return false;
+        return true;
+    }
+
+    async function autoSelectMatchingAAO() {
+        if (isAAOEditor() || state.autoSelectBusy) return;
+
+        const missionName = currentMissionNameForAutoSelect();
+        if (!missionName) return;
+
+        const group = document.getElementById('mission-aao-group');
+        if (!group) return;
+
+        const missionKey = exactMissionNameKey(missionName);
+        if (!missionKey) return;
+
+        // Klikamy najwyżej raz na danym ekranie misji. To krytyczne, ponieważ
+        // drugie kliknięcie tej samej ZR mogłoby ponownie dodać pojazdy.
+        if (group.dataset.orzrAutoSelectedMission === missionKey) return;
+        if (group.dataset.orzrAutoCheckedMission === missionKey) return;
+
+        state.autoSelectBusy = true;
+
+        try {
+            const aaos = await loadAAOsForAutoSelect();
+            if (!aaos.length) return;
+
+            const matches = aaos.filter(aao =>
+                exactMissionNameKey(aao?.caption || '') === missionKey
+            );
+
+            if (!matches.length) {
+                group.dataset.orzrAutoCheckedMission = missionKey;
+                return;
+            }
+
+            for (const aao of matches) {
+                const id = String(aao?.id ?? '').trim();
+                if (!id) continue;
+
+                // W grze ZR są elementami .aao z atrybutem aao_id.
+                const target = group.querySelector(`.aao[aao_id="${CSS.escape(id)}"]`) ||
+                    document.querySelector(`#mission-aao-group .aao[aao_id="${CSS.escape(id)}"]`);
+
+                // ZR może być jeszcze w trakcie doładowywania – MutationObserver
+                // wywoła tę funkcję ponownie, gdy pojawi się w DOM.
+                if (!target) continue;
+
+                // Czerwona etykieta oznacza niedostępne ZR – takiego nie klikamy.
+                if (!isAAOAvailable(target)) {
+                    log(`ZR „${missionName}” istnieje, ale nie jest obecnie dostępna.`);
+                    group.dataset.orzrAutoCheckedMission = missionKey;
+                    return;
+                }
+
+                // Znacznik ustawiamy PRZED kliknięciem, żeby zmiany DOM wywołane
+                // przez grę nie spowodowały drugiego automatycznego kliknięcia.
+                group.dataset.orzrAutoSelectedMission = missionKey;
+                group.dataset.orzrAutoSelectedAaoId = id;
+
+                ensureAutoSelectStyle();
+                target.classList.add('orzr-auto-selected-aao');
+                target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR`;
+
+                target.click();
+                log(`Automatycznie wybrano ZR „${missionName}” (ID ${id}).`);
+                return;
+            }
+        } catch (error) {
+            console.warn(TAG, 'Automatyczny wybór ZR nie powiódł się:', error);
+        } finally {
+            state.autoSelectBusy = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // PRZYCISKI W NAGŁÓWKU
     // ------------------------------------------------------------------
 
@@ -1017,6 +1227,7 @@
         header.appendChild(wrap);
 
         log('Dodano przyciski do nagłówka misji.', header);
+        autoSelectMatchingAAO();
     }
 
     // ------------------------------------------------------------------
@@ -1321,7 +1532,12 @@
 
         const caption = state.fields.find(x => x.kind === 'caption');
         if (caption && state.capture?.name && !caption.input.value.trim()) {
-            setInput(caption.input, state.capture.name);
+            const safeName = sanitizeMissionName(state.capture.name);
+            if (safeName && safeName.length <= 60) {
+                setInput(caption.input, safeName);
+            } else {
+                console.warn(TAG, 'Nie wpisuję podejrzanej nazwy ZR:', state.capture.name);
+            }
         }
 
         renderEditor();
@@ -1376,7 +1592,14 @@
 
         if (new URLSearchParams(location.search).get('orzr_from_mission') === '1' && state.capture) {
             const caption = state.fields.find(x => x.kind === 'caption');
-            if (caption && !caption.input.value.trim()) setInput(caption.input, state.capture.name);
+            if (caption && !caption.input.value.trim()) {
+                const safeName = sanitizeMissionName(state.capture.name);
+                if (safeName && safeName.length <= 60) {
+                    setInput(caption.input, safeName);
+                } else {
+                    console.warn(TAG, 'Nie wpisuję podejrzanej nazwy ZR:', state.capture.name);
+                }
+            }
         }
     }
 
@@ -1388,7 +1611,10 @@
             return;
         }
 
-        const scan = () => ensureHeaderButtons();
+        const scan = () => {
+            ensureHeaderButtons();
+            autoSelectMatchingAAO();
+        };
         scan();
 
         const observer = new MutationObserver(() => {
