@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.35
+// @version      0.36
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.35';
-    const CAPTURE_KEY = 'or_zr_capture_v035';
+    const VERSION = '0.36';
+    const CAPTURE_KEY = 'or_zr_capture_v036';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1888,6 +1888,18 @@
         return true;
     }
 
+    function isSingleFireVehicleRequirement(vehicle) {
+        if (!vehicle || Number(vehicle.count) !== 1) return false;
+        const label = normalize(vehicle.label || '');
+        return (
+            label.includes('samochod pozarniczy') ||
+            label.includes('samochody pozarnicze') ||
+            label.includes('pojazd strazacki') ||
+            label.includes('woz strazacki') ||
+            label.includes('wozy strazackie')
+        );
+    }
+
     async function autoSelectTargetName(missionName) {
         let vehicles = [];
         let maxPatients = 0;
@@ -1901,7 +1913,7 @@
                 vehicles = parsed?.vehicles || [];
                 maxPatients = Number.parseInt(parsed?.maxPatients, 10) || 0;
             } catch (error) {
-                console.warn(TAG, 'Nie udało się sprawdzić reguły Ambulans dla auto-wyboru:', error);
+                console.warn(TAG, 'Nie udało się sprawdzić reguł skrótowych auto-wyboru:', error);
             }
         }
 
@@ -1914,11 +1926,18 @@
             }
         }
 
-        const hasOtherRequiredVehicles =
-            Array.isArray(vehicles) && vehicles.some(v => Number(v?.count) > 0);
+        const requiredVehicles = Array.isArray(vehicles)
+            ? vehicles.filter(v => Number(v?.count) > 0)
+            : [];
 
-        // Specjalny przypadek dotyczy WYŁĄCZNIE auto-zaznaczania istniejącej ZR.
-        if (maxPatients === 1 && !hasOtherRequiredVehicles) return 'Ambulans';
+        // Dokładnie 1 pacjent i brak wymaganych pojazdów -> gotowa ZR „Ambulans”.
+        if (maxPatients === 1 && requiredVehicles.length === 0) return 'Ambulans';
+
+        // Tylko jeden wymagany pojazd i jest nim 1 samochód/pojazd strażacki
+        // -> gotowa ZR „Straż”. Reguła dotyczy wyłącznie auto-zaznaczania.
+        if (requiredVehicles.length === 1 && isSingleFireVehicleRequirement(requiredVehicles[0])) {
+            return 'Straż';
+        }
 
         return missionName;
     }
@@ -1935,7 +1954,7 @@
         const style = document.createElement('style');
         style.id = 'orzr-auto-select-style';
         style.textContent = `
-            #mission-aao-group .aao.orzr-auto-selected-aao {
+            .aao.orzr-auto-selected-aao, [id^="aao_"].orzr-auto-selected-aao {
                 outline: 3px solid #8e44ad !important;
                 outline-offset: 1px !important;
                 box-shadow: 0 0 8px rgba(142, 68, 173, .78) !important;
@@ -2006,10 +2025,129 @@
 
     function isAAOAvailable(aaoElement) {
         if (!aaoElement) return false;
-        if (aaoElement.querySelector('.label-danger')) return false;
         if (aaoElement.classList.contains('disabled')) return false;
         if (aaoElement.getAttribute('aria-disabled') === 'true') return false;
+        if (aaoElement.hasAttribute('disabled')) return false;
         return true;
+    }
+
+    function findAZRControlDirect(group) {
+        // Najpierw klasyczne zakładki Bootstrap/Operatora.
+        const selectors = [
+            '.nav-tabs a', '.nav-pills a', '[role="tab"]',
+            'a[data-toggle="tab"]', 'button[data-toggle="tab"]',
+            'a[data-bs-toggle="tab"]', 'button[data-bs-toggle="tab"]',
+            '.aao-category', '.aao_category'
+        ];
+
+        for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+                if (exactMissionNameKey(el.textContent || '') === 'azr') return el;
+            }
+        }
+
+        // Fallback: przycisk/link o dokładnym tekście AZR, ale nie sam przycisk ZR.
+        for (const el of document.querySelectorAll('a,button')) {
+            if (el.classList.contains('aao')) continue;
+            if (el.closest('.aao')) continue;
+            if (exactMissionNameKey(el.textContent || '') !== 'azr') continue;
+
+            const parent = el.parentElement;
+            if (
+                el.matches('[role="tab"],[data-toggle="tab"],[data-bs-toggle="tab"]') ||
+                parent?.closest('.nav-tabs,.nav-pills,[role="tablist"]')
+            ) {
+                return el;
+            }
+        }
+
+        return null;
+    }
+
+    function categoryControlIsActive(control) {
+        if (!control) return false;
+        return (
+            control.classList.contains('active') ||
+            control.parentElement?.classList.contains('active') ||
+            control.getAttribute('aria-selected') === 'true'
+        );
+    }
+
+    function paneForCategoryControl(control) {
+        if (!control) return null;
+        const raw =
+            control.getAttribute('data-target') ||
+            control.getAttribute('data-bs-target') ||
+            control.getAttribute('href') || '';
+
+        if (!raw || !raw.startsWith('#') || raw.length < 2) return null;
+        try { return document.querySelector(raw); } catch { return null; }
+    }
+
+    function isRenderedInActiveCategory(el) {
+        if (!el || !el.isConnected) return false;
+        if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
+
+        const pane = el.closest('.tab-pane,[role="tabpanel"]');
+        if (pane) {
+            if (pane.hidden || pane.getAttribute('aria-hidden') === 'true') return false;
+            if (
+                pane.classList.contains('tab-pane') &&
+                !pane.classList.contains('active') &&
+                !pane.classList.contains('show') &&
+                !pane.classList.contains('in')
+            ) return false;
+        }
+
+        let node = el;
+        while (node && node !== document.body) {
+            const cs = getComputedStyle(node);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            node = node.parentElement;
+        }
+        return true;
+    }
+
+    function aaoCaptionFromElement(el) {
+        if (!el) return '';
+        const explicit =
+            el.getAttribute('data-caption') ||
+            el.getAttribute('data-name') ||
+            el.getAttribute('title') || '';
+
+        const text = explicit || el.textContent || '';
+        return sanitizeMissionName(text);
+    }
+
+    function findAAOInActiveAZR(group, control, caption) {
+        const wanted = exactMissionNameKey(caption);
+        if (!wanted) return null;
+
+        const pane = paneForCategoryControl(control);
+        const roots = [];
+        if (pane) roots.push(pane);
+        if (group && !roots.includes(group)) roots.push(group);
+
+        for (const root of roots) {
+            const candidates = root.querySelectorAll(
+                'a.aao,button.aao,.aao,[id^="aao_"][aao_id],[id^="aao_"][data-aao-id],a[id^="aao_"],button[id^="aao_"]'
+            );
+            for (const el of candidates) {
+                if (!isRenderedInActiveCategory(el)) continue;
+                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+            }
+        }
+
+        // Niektóre wersje Operatora przeładowują zawartość kategorii bez osobnego pane.
+        // Wtedy po aktywowaniu AZR szukamy tylko elementów faktycznie renderowanych.
+        for (const el of document.querySelectorAll(
+            '#mission-aao-group .aao, a.aao, button.aao, [id^="aao_"]'
+        )) {
+            if (!isRenderedInActiveCategory(el)) continue;
+            if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+        }
+
+        return null;
     }
 
     function findAAOButtonById(group, id) {
@@ -2201,33 +2339,22 @@
         const missionKey = exactMissionNameKey(missionName);
         if (!missionKey) return;
 
-        // v0.35: 1 sekunda opóźnienia po otwarciu misji.
+        // 1 sekunda po otwarciu/zmianie misji.
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
             state.autoSelectAttempts = 0;
-            state.aaosPromise = null;
-            state.aaosLoadedAt = 0;
-            state.aaoCategoriesPromise = null;
-            state.aaoCategoriesLoadedAt = 0;
-            state.azrCategoryId = null;
-
             clearTimeout(state.autoSelectRetryTimer);
-            state.autoSelectRetryTimer = setTimeout(() => {
-                autoSelectMatchingAAO();
-            }, 1000);
-
+            state.autoSelectRetryTimer = setTimeout(() => autoSelectMatchingAAO(), 1000);
             return;
         }
 
         if (Date.now() - state.autoSelectFirstSeenAt < 900) return;
-
         state.autoSelectAttempts += 1;
 
         if (isMissionAlreadyRunning()) {
             removeAutoSelectStatus();
-            const group = document.getElementById('mission-aao-group');
-            group?.querySelectorAll('.orzr-auto-selected-aao').forEach(el =>
+            document.querySelectorAll('.orzr-auto-selected-aao').forEach(el =>
                 el.classList.remove('orzr-auto-selected-aao')
             );
             return;
@@ -2245,90 +2372,60 @@
         state.autoSelectBusy = true;
 
         try {
-            const [aaos, azrCategoryId, targetName] = await Promise.all([
-                loadAAOsForAutoSelect(state.autoSelectAttempts > 1),
-                loadAZRCategoryId(state.autoSelectAttempts > 1),
-                autoSelectTargetName(missionName)
-            ]);
-
-            if (!azrCategoryId) {
-                log('Auto-wybór pominięty: nie znaleziono kategorii AZR.');
-                if (state.autoSelectAttempts < 6) scheduleAutoSelectRetry(700);
-                return;
-            }
-
-            if (!aaos.length) return;
-
+            const targetName = await autoSelectTargetName(missionName);
             const targetKey = exactMissionNameKey(targetName);
-            const matches = aaos.filter(aao =>
-                aaoBelongsToCategory(aao, azrCategoryId) &&
-                exactMissionNameKey(aao?.caption || '') === targetKey
-            );
+            if (!targetKey) return;
 
-            if (!matches.length) {
-                if (state.autoSelectAttempts < 6) {
-                    scheduleAutoSelectRetry(650);
-                    return;
-                }
-                group.dataset.orzrAutoCheckedMission = missionKey;
-                log(`Brak ZR „${targetName}” w kategorii AZR.`);
+            // v0.36: nie polegamy na ID kategorii z API. Kategorię AZR odnajdujemy
+            // bezpośrednio w interfejsie po dokładnej nazwie i przeszukujemy tylko ją.
+            const azrControl = findAZRControlDirect(group);
+            if (!azrControl) {
+                log('Auto-wybór: nie znaleziono zakładki/kategorii AZR w interfejsie.');
+                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
                 return;
             }
 
-            // Auto-wybór ma przeszukiwać WYŁĄCZNIE AZR. Najpierw przełączamy
-            // kategorię AZR, dopiero potem szukamy i klikamy konkretną ZR.
-            if (ensureAZRCategoryActive(group, azrCategoryId)) {
+            if (!categoryControlIsActive(azrControl)) {
+                azrControl.click();
                 scheduleAutoSelectRetry(300);
                 return;
             }
 
-            for (const aao of matches) {
-                const id = String(aao?.id ?? '').trim();
-                if (!id) continue;
-
-                const target =
-                    findAAOButtonById(group, id) ||
-                    findAAOButtonByExactCaption(group, targetName);
-
-                if (!target) {
+            const target = findAAOInActiveAZR(group, azrControl, targetName);
+            if (!target) {
+                if (state.autoSelectAttempts < 12) {
                     scheduleAutoSelectRetry(400);
-                    continue;
-                }
-
-                // Dodatkowe zabezpieczenie: element musi znajdować się w aktualnie
-                // wybranej kategorii AZR. Nie klikamy kopii z innej kategorii.
-                const targetCaption = sanitizeMissionName(target.textContent || '');
-                if (exactMissionNameKey(targetCaption) !== targetKey) continue;
-
-                if (!isAAOAvailable(target)) {
-                    log(`ZR „${targetName}” w AZR istnieje, ale nie jest obecnie dostępna.`);
-                    group.dataset.orzrAutoCheckedMission = missionKey;
                     return;
                 }
-
-                // Ostatnia kontrola przed kliknięciem – trwająca misja nie może
-                // dostać automatycznie zaznaczonej ZR.
-                if (isMissionAlreadyRunning()) {
-                    removeAutoSelectStatus();
-                    return;
-                }
-
-                group.dataset.orzrAutoSelectedMission = missionKey;
-                group.dataset.orzrAutoSelectedAaoId = id;
-
-                ensureAutoSelectStyle();
-                target.classList.add('orzr-auto-selected-aao');
-                target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
-                showAutoSelectStatus(aao?.caption || targetName);
-
-                target.click();
-                log(`Automatycznie wybrano ZR „${targetName}” z kategorii AZR (ID ${id}).`);
+                group.dataset.orzrAutoCheckedMission = missionKey;
+                log(`Brak ZR „${targetName}” w aktywnej kategorii AZR.`);
                 return;
             }
 
-            if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
+            if (!isAAOAvailable(target)) {
+                log(`ZR „${targetName}” w AZR istnieje, ale jest oznaczona jako niedostępna.`);
+                group.dataset.orzrAutoCheckedMission = missionKey;
+                return;
+            }
+
+            // Ostatnia kontrola przed kliknięciem.
+            if (isMissionAlreadyRunning()) {
+                removeAutoSelectStatus();
+                return;
+            }
+
+            group.dataset.orzrAutoSelectedMission = missionKey;
+
+            ensureAutoSelectStyle();
+            target.classList.add('orzr-auto-selected-aao');
+            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
+            showAutoSelectStatus(targetName);
+
+            target.click();
+            log(`Automatycznie wybrano ZR „${targetName}” z kategorii AZR.`);
         } catch (error) {
             console.warn(TAG, 'Automatyczny wybór ZR z kategorii AZR nie powiódł się:', error);
+            if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
         } finally {
             state.autoSelectBusy = false;
         }

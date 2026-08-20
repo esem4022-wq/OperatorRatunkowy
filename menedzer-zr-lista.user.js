@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.10
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie, duplikaty, usuwanie i eksport CSV.
+// @version      0.11
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.10';
+    const VERSION = '0.11';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -477,6 +477,256 @@
             }
         }
         return null;
+    }
+
+
+    function getAZRCategoryId() {
+        for (const [id, name] of state.categories.entries()) {
+            if (name === 'AZR') return Number(id);
+        }
+        return null;
+    }
+
+    function getMissingInAZRRows() {
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) return [];
+
+        // Menedżer ZR OR szuka po dokładnej nazwie, dlatego tutaj również
+        // porównujemy nazwy 1:1. „Bez kategorii” nie bierze udziału w kontroli.
+        const azrNames = new Set(
+            state.aaos
+                .filter(aao => aao.aao_category_id === azrCategoryId)
+                .map(aao => String(aao.caption ?? ''))
+        );
+
+        const sources = state.aaos
+            .filter(aao =>
+                aao.aao_category_id != null &&
+                aao.aao_category_id !== azrCategoryId &&
+                !azrNames.has(String(aao.caption ?? ''))
+            )
+            .sort((a, b) =>
+                a.caption.localeCompare(b.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
+                getCategoryName(a.aao_category_id).localeCompare(getCategoryName(b.aao_category_id), 'pl', { numeric: true, sensitivity: 'base' }) ||
+                a.id - b.id
+            );
+
+        // Jeżeli ta sama dokładna nazwa występuje w kilku zwykłych kategoriach,
+        // do AZR potrzebna jest tylko jedna kopia. Pokazujemy więc jeden wiersz
+        // i informujemy, w ilu/kilku kategoriach źródłowych nazwa występuje.
+        const grouped = new Map();
+        for (const aao of sources) {
+            const key = String(aao.caption ?? '');
+            if (!grouped.has(key)) {
+                grouped.set(key, {
+                    aao,
+                    sourceCategories: new Set(),
+                    sourceIds: []
+                });
+            }
+            const group = grouped.get(key);
+            group.sourceCategories.add(getCategoryName(aao.aao_category_id));
+            group.sourceIds.push(aao.id);
+        }
+
+        return [...grouped.values()].sort((a, b) =>
+            a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
+            a.aao.id - b.aao.id
+        );
+    }
+
+    function updateMissingAZRButtons() {
+        const rows = getMissingInAZRRows();
+        const azrCategoryId = getAZRCategoryId();
+        const all = document.getElementById('orzr-missing-azr-copy-all');
+        if (all) {
+            all.disabled = state.copying || azrCategoryId == null || rows.length === 0;
+            all.textContent = state.copying
+                ? 'Kopiowanie…'
+                : `⧉ Kopiuj wszystkie do AZR (${rows.length})`;
+        }
+        document.querySelectorAll('.orzr-missing-azr-copy').forEach(btn => {
+            btn.disabled = state.copying || azrCategoryId == null;
+        });
+    }
+
+    function renderMissingAZRTable() {
+        const tbody = document.getElementById('orzr-missing-azr-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+
+        const empty = document.getElementById('orzr-missing-azr-empty');
+        const azrCategoryId = getAZRCategoryId();
+        const rows = getMissingInAZRRows();
+
+        if (empty) {
+            empty.hidden = rows.length > 0;
+            if (azrCategoryId == null) {
+                empty.textContent = 'Nie znaleziono kategorii o dokładnej nazwie „AZR”. Utwórz ją lub popraw jej nazwę.';
+            } else {
+                empty.textContent = 'W kategorii AZR są już ZR o wszystkich dokładnych nazwach występujących w pozostałych kategoriach. „Bez kategorii” jest pomijane.';
+            }
+        }
+
+        for (const item of rows) {
+            const aao = item.aao;
+            const categories = [...item.sourceCategories].sort((a, b) => a.localeCompare(b, 'pl', { numeric: true, sensitivity: 'base' }));
+            const sourceInfo = categories.join(', ');
+            const duplicateNote = item.sourceIds.length > 1
+                ? `<div class="orzr-missing-note">Ta sama nazwa występuje w ${item.sourceIds.length} ZR źródłowych — do AZR zostanie utworzona jedna kopia.</div>`
+                : '';
+
+            const tr = document.createElement('tr');
+            tr.dataset.zrId = aao.id;
+            tr.innerHTML = `
+                <td class="orzr-id">${aao.id}</td>
+                <td class="orzr-missing-name">${escapeHTML(aao.caption)}${duplicateNote}</td>
+                <td>${Number(aao.column) || 1}</td>
+                <td>${escapeHTML(sourceInfo)}</td>
+                <td class="orzr-actions">
+                    <button type="button" class="btn btn-primary btn-sm orzr-missing-azr-copy" data-id="${aao.id}">⧉ Kopiuj do AZR</button>
+                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
+                </td>`;
+            tbody.appendChild(tr);
+        }
+
+        document.querySelectorAll('.orzr-missing-azr-copy').forEach(btn => {
+            btn.addEventListener('click', () => copyOneMissingToAZR(Number(btn.dataset.id), btn));
+        });
+
+        updateMissingAZRButtons();
+        updateStats();
+    }
+
+    async function copyOneMissingToAZR(id, button = null) {
+        if (state.copying) return;
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) {
+            setStatus('Nie znaleziono kategorii o dokładnej nazwie „AZR”.', 'danger');
+            return;
+        }
+
+        const source = state.aaos.find(x => x.id === id);
+        if (!source || source.aao_category_id == null || source.aao_category_id === azrCategoryId) return;
+
+        // Nie kopiujemy ponownie, jeśli dokładna nazwa już zdążyła pojawić się w AZR.
+        const alreadyExists = state.aaos.some(aao =>
+            aao.aao_category_id === azrCategoryId && aao.caption === source.caption
+        );
+        if (alreadyExists) {
+            renderMissingAZRTable();
+            setStatus(`ZR „${source.caption}” już znajduje się w kategorii AZR.`, 'success');
+            return;
+        }
+
+        const oldText = button?.textContent;
+        state.copying = true;
+        if (button) button.textContent = 'Kopiuję…';
+        updateCopyButtons();
+        updateMissingAZRButtons();
+
+        try {
+            const target = {
+                column: Math.max(1, Number(source.column) || 1),
+                aao_category_id: azrCategoryId
+            };
+            setStatus(`Kopiuję „${source.caption}” do kategorii AZR…`, 'info');
+            await copyViaNativeEditor(source.id, target);
+            state.aaos = await fetchAAOListNormalized();
+            renderMissingAZRTable();
+            setStatus(`Skopiowano „${source.caption}” do AZR.`, 'success');
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd kopiowania „${source.caption}” do AZR: ${e.message || e}`, 'danger');
+        } finally {
+            state.copying = false;
+            if (button && document.contains(button)) button.textContent = oldText || '⧉ Kopiuj do AZR';
+            updateCopyButtons();
+            updateMissingAZRButtons();
+        }
+    }
+
+    async function copyAllMissingToAZR() {
+        if (state.copying) return;
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) {
+            setStatus('Nie znaleziono kategorii o dokładnej nazwie „AZR”.', 'danger');
+            return;
+        }
+
+        const rows = getMissingInAZRRows().map(item => ({
+            id: item.aao.id,
+            caption: item.aao.caption,
+            column: Math.max(1, Number(item.aao.column) || 1)
+        }));
+
+        if (!rows.length) {
+            setStatus('Nic nie brakuje w AZR.', 'success');
+            return;
+        }
+        if (!confirm(`Skopiować do kategorii AZR wszystkie brakujące ZR (${rows.length})?\n\n„Bez kategorii” jest pomijane.`)) return;
+
+        const button = document.getElementById('orzr-missing-azr-copy-all');
+        state.copying = true;
+        updateCopyButtons();
+        updateMissingAZRButtons();
+
+        let ok = 0;
+        let failed = 0;
+        try {
+            for (let i = 0; i < rows.length; i++) {
+                const item = rows[i];
+                if (button) button.textContent = `Kopiuję ${i + 1}/${rows.length}…`;
+                setStatus(`Kopiuję ${i + 1}/${rows.length}: „${item.caption}” → AZR…`, 'info');
+
+                try {
+                    // Przed każdym kopiowaniem sprawdzamy aktualną listę w pamięci,
+                    // aby nie stworzyć dwóch kopii tej samej dokładnej nazwy.
+                    const exists = state.aaos.some(aao =>
+                        aao.aao_category_id === azrCategoryId && aao.caption === item.caption
+                    );
+                    if (exists) continue;
+
+                    await copyViaNativeEditor(item.id, {
+                        column: item.column,
+                        aao_category_id: azrCategoryId
+                    });
+                    ok++;
+
+                    // Po każdej udanej kopii dokładamy nazwę do pamięci przez pełne
+                    // odświeżenie dopiero na końcu; tymczasowy wpis chroni przed duplikatem.
+                    state.aaos.push({
+                        id: -1000000 - i,
+                        caption: item.caption,
+                        column: item.column,
+                        aao_category_id: azrCategoryId,
+                        __temporaryAZR: true
+                    });
+                } catch (e) {
+                    console.error(TAG, `Błąd kopiowania ZR ${item.id} do AZR`, e);
+                    failed++;
+                }
+            }
+
+            state.aaos = await fetchAAOListNormalized();
+            renderMissingAZRTable();
+            setStatus(
+                failed
+                    ? `Kopiowanie do AZR zakończone. Skopiowano: ${ok}. Błędy: ${failed}.`
+                    : `Skopiowano do AZR wszystkie brakujące ZR: ${ok}.`,
+                failed ? 'warning' : 'success'
+            );
+        } catch (e) {
+            console.error(TAG, e);
+            // Usuwamy ewentualne tymczasowe wpisy po błędzie odświeżenia.
+            state.aaos = state.aaos.filter(aao => !aao.__temporaryAZR);
+            setStatus(`Błąd końcowego odświeżenia po kopiowaniu do AZR: ${e.message || e}`, 'danger');
+        } finally {
+            state.copying = false;
+            updateCopyButtons();
+            updateMissingAZRButtons();
+            updateStats();
+        }
     }
 
 
@@ -1030,33 +1280,41 @@
         const listTable = document.getElementById('orzr-table');
         const copyTable = document.getElementById('orzr-copy-table');
         const cleanupTable = document.getElementById('orzr-cleanup-table');
+        const missingAZRTable = document.getElementById('orzr-missing-azr-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
         const cleanupTools = document.getElementById('orzr-cleanup-tools');
+        const missingAZRTools = document.getElementById('orzr-missing-azr-tools');
         const toolbar = document.getElementById('orzr-toolbar');
         const normalEmpty = document.getElementById('orzr-empty');
         const cleanupEmpty = document.getElementById('orzr-cleanup-empty');
+        const missingAZREmpty = document.getElementById('orzr-missing-azr-empty');
         const shownLabel = document.getElementById('orzr-shown-label');
 
         const copying = state.activeTab === 'copy';
         const cleaning = state.activeTab === 'cleanup';
+        const missingAZR = state.activeTab === 'missing-azr';
         const listing = state.activeTab === 'list';
 
         if (listTable) listTable.hidden = !listing;
         if (copyTable) copyTable.hidden = !copying;
         if (cleanupTable) cleanupTable.hidden = !cleaning;
+        if (missingAZRTable) missingAZRTable.hidden = !missingAZR;
         if (copyBulk) copyBulk.hidden = !copying;
         if (cleanupTools) cleanupTools.hidden = !cleaning;
-        if (toolbar) toolbar.hidden = cleaning;
+        if (missingAZRTools) missingAZRTools.hidden = !missingAZR;
+        if (toolbar) toolbar.hidden = cleaning || missingAZR;
         if (saveAll) saveAll.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
-        if (normalEmpty && cleaning) normalEmpty.hidden = true;
+        if (normalEmpty && (cleaning || missingAZR)) normalEmpty.hidden = true;
         if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
-        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : 'Widocznych';
+        if (missingAZREmpty && !missingAZR) missingAZREmpty.hidden = true;
+        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? 'Brakuje w AZR' : 'Widocznych';
 
         if (copying) renderCopyTable();
         else if (cleaning) renderCleanupTable();
+        else if (missingAZR) renderMissingAZRTable();
         else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
@@ -1065,7 +1323,7 @@
     }
 
     function setActiveTab(tab) {
-        if (!['list', 'copy', 'cleanup'].includes(tab)) return;
+        if (!['list', 'copy', 'cleanup', 'missing-azr'].includes(tab)) return;
         state.activeTab = tab;
         setStatus('', 'info');
         renderActiveTable();
@@ -1086,7 +1344,9 @@
         if (total) total.textContent = state.aaos.length;
         if (shown) shown.textContent = state.activeTab === 'cleanup'
             ? state.cleanupResults.length
-            : sortedFilteredAAOs(state.activeTab).length;
+            : state.activeTab === 'missing-azr'
+                ? getMissingInAZRRows().length
+                : sortedFilteredAAOs(state.activeTab).length;
         if (changed) changed.textContent = state.dirty.size;
     }
 
@@ -1292,8 +1552,8 @@
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
-#orzr-cleanup-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
-#orzr-cleanup-tools[hidden]{display:none}
+#orzr-cleanup-tools,#orzr-missing-azr-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden]{display:none}
 #orzr-cleanup-tools .btn{white-space:nowrap}
 .orzr-cleanup-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-right:10px;border-right:1px solid #ddd}
 .orzr-cleanup-group:last-child{border-right:0}
@@ -1309,9 +1569,9 @@
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table,#orzr-cleanup-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -1333,7 +1593,15 @@
 .orzr-cleanup-check input{width:18px;height:18px;cursor:pointer}
 .orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
 .orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
-#orzr-cleanup-empty{padding:30px;text-align:center;color:#777}
+#orzr-cleanup-empty,#orzr-missing-azr-empty{padding:30px;text-align:center;color:#777}
+#orzr-missing-azr-table th:nth-child(1),#orzr-missing-azr-table td:nth-child(1){width:85px}
+#orzr-missing-azr-table th:nth-child(3),#orzr-missing-azr-table td:nth-child(3){width:120px}
+#orzr-missing-azr-table th:nth-child(4),#orzr-missing-azr-table td:nth-child(4){width:320px}
+#orzr-missing-azr-table th:nth-child(5),#orzr-missing-azr-table td:nth-child(5){width:260px}
+.orzr-missing-name{overflow-wrap:anywhere}
+.orzr-missing-note{margin-top:3px;font-size:11px;color:#777}
+#orzr-missing-azr-copy-all{white-space:nowrap}
+.orzr-missing-azr-info{font-size:12px;color:#555}
 .orzr-copy-action{white-space:nowrap}
 .orzr-actions{white-space:nowrap}
 .orzr-actions .btn+.btn{margin-left:4px}
@@ -1409,6 +1677,7 @@
     <div id="orzr-tabs">
         <button type="button" class="orzr-tab orzr-tab-active" data-tab="list">✎ Lista / edycja</button>
         <button type="button" class="orzr-tab" data-tab="copy">⧉ Kopiuj</button>
+        <button type="button" class="orzr-tab" data-tab="missing-azr">🔎 Brakuje w AZR</button>
         <button type="button" class="orzr-tab" data-tab="cleanup">🧹 Porządkowanie</button>
     </div>
     <div id="orzr-toolbar">
@@ -1447,6 +1716,11 @@
         </div>
         <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów. „Kopiuj wszystkie” kopiuje dokładnie tę widoczną listę.</div>
     </div>
+    <div id="orzr-missing-azr-tools" hidden>
+        <button id="orzr-missing-azr-copy-all" type="button" class="btn btn-success">⧉ Kopiuj wszystkie do AZR (0)</button>
+        <button id="orzr-missing-azr-refresh" type="button" class="btn btn-default">↻ Sprawdź ponownie</button>
+        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. Kopia zachowuje numer kolumny źródłowego ZR.</span>
+    </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
             <strong>Wyszukaj duplikaty:</strong>
@@ -1483,6 +1757,12 @@
             </tr></thead>
             <tbody id="orzr-copy-body"></tbody>
         </table>
+        <table id="orzr-missing-azr-table" hidden>
+            <thead><tr>
+                <th>ID źródła</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria źródłowa</th><th>Akcje</th>
+            </tr></thead>
+            <tbody id="orzr-missing-azr-body"></tbody>
+        </table>
         <table id="orzr-cleanup-table" hidden>
             <thead><tr>
                 <th><input id="orzr-cleanup-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie wyniki"></th>
@@ -1490,6 +1770,7 @@
             </tr></thead>
             <tbody id="orzr-cleanup-body"></tbody>
         </table>
+        <div id="orzr-missing-azr-empty" hidden></div>
         <div id="orzr-cleanup-empty" hidden>Wybierz jedną z operacji porządkowania powyżej.</div>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
@@ -1528,6 +1809,18 @@
         document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);
+        document.getElementById('orzr-missing-azr-copy-all').addEventListener('click', copyAllMissingToAZR);
+        document.getElementById('orzr-missing-azr-refresh').addEventListener('click', async () => {
+            if (state.copying) return;
+            try {
+                state.aaos = await fetchAAOListNormalized();
+                renderMissingAZRTable();
+                setStatus(`Sprawdzono ponownie. Brakuje w AZR: ${getMissingInAZRRows().length}.`, 'success');
+            } catch (e) {
+                console.error(TAG, e);
+                setStatus(`Błąd ponownego sprawdzania AZR: ${e.message || e}`, 'danger');
+            }
+        });
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));

@@ -15,6 +15,20 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.11 — 20.08.2026
+------------------
+- Dodano nową zakładkę „Brakuje w AZR”.
+- Zakładka porównuje ZR znajdujące się w kategorii o dokładnej nazwie „AZR” z ZR ze wszystkich pozostałych kategorii.
+- Kategoria „Bez kategorii” jest całkowicie pomijana przy sprawdzaniu braków.
+- Porównanie odbywa się po dokładnej nazwie ZR, zgodnie z zasadą używaną przez Menedżer ZR OR.
+- Lista pokazuje tylko te nazwy ZR, których nie ma jeszcze w AZR, wraz z ID źródła, numerem kolumny i kategorią źródłową.
+- Przy każdym wyniku dodano przycisk „Kopiuj do AZR”.
+- Dodano zbiorczy przycisk „Kopiuj wszystkie do AZR”.
+- Kopiowanie zachowuje numer kolumny źródłowego ZR i ustawia kategorię docelową na AZR.
+- Jeżeli ta sama dokładna nazwa występuje w kilku zwykłych kategoriach, zakładka pokazuje ją tylko raz, aby nie tworzyć niepotrzebnych duplikatów w AZR.
+- Dodano przycisk „Sprawdź ponownie”, który odświeża listę ZR z API i ponownie wylicza braki.
+- Zachowano wszystkie dotychczasowe funkcje, GitHub, stałą nazwę userscriptu i historię wersji.
+
 v0.10 — 20.08.2026
 ------------------
 - W zakładce „Porządkowanie” dodano przy każdym wyniku czerwony przycisk „Usuń” bezpośrednio obok przycisku „Edycja”.
