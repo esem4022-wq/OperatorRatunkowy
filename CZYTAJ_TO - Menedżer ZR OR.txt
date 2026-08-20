@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.27
+Wersja: 0.28
 
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
@@ -28,6 +28,15 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.28
+- poprawiono wybór żółtej karty: skrypt najpierw szuka dokładnej nazwy bieżącej misji i najbliższego kontenera z sekcją „Pojazdy”,
+- usunięto fałszywe komunikaty o braku powiązania karty dla części poprawnie wyświetlanych misji,
+- dodano parser zachowujący linie sekcji „Pojazdy”; wymagane pojazdy nie znikają już w misjach zawierających sekcję „Pacjenci”,
+- pozostawiono parser płaskiego tekstu jako fallback,
+- po automatycznym wybraniu istniejącej ZR w górnym nagłówku pojawia się fioletowa informacja „Zaznaczono ZR: …”,
+- zachowano fioletową ramkę automatycznie zaznaczonej ZR,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.27
 - poprawiono wykrywanie żółtej karty wymagań w misjach, w których jej element wewnętrzny nie zawierał nazwy misji,
 - skrypt potrafi teraz rozszerzyć znaleziony fragment do właściwego kontenera karty zamiast odrzucać misję,
