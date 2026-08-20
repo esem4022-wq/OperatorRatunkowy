@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.36
+// @version      0.37
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.36';
-    const CAPTURE_KEY = 'or_zr_capture_v036';
+    const VERSION = '0.37';
+    const CAPTURE_KEY = 'or_zr_capture_v037';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -2330,6 +2330,32 @@
         return false;
     }
 
+    async function findTargetAAOInCustomAZR(targetName) {
+        const targetKey = exactMissionNameKey(targetName);
+        if (!targetKey) return { categoryId: null, aao: null };
+
+        // AZR jest własną kategorią użytkownika. Dlatego nie próbujemy już
+        // rozpoznawać jej po zakładkach widocznych w ekranie misji.
+        // Najpierw znajdujemy ID kategorii po dokładnej nazwie przez API,
+        // a następnie przeszukujemy WYŁĄCZNIE ZR przypisane do tego ID.
+        const [categoryId, aaos] = await Promise.all([
+            loadAZRCategoryId(false),
+            loadAAOsForAutoSelect(false)
+        ]);
+
+        if (categoryId == null) {
+            return { categoryId: null, aao: null };
+        }
+
+        const match = (Array.isArray(aaos) ? aaos : []).find(aao => {
+            if (!aaoBelongsToCategory(aao, categoryId)) return false;
+            const caption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
+            return exactMissionNameKey(caption) === targetKey;
+        }) || null;
+
+        return { categoryId, aao: match };
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
@@ -2376,29 +2402,60 @@
             const targetKey = exactMissionNameKey(targetName);
             if (!targetKey) return;
 
-            // v0.36: nie polegamy na ID kategorii z API. Kategorię AZR odnajdujemy
-            // bezpośrednio w interfejsie po dokładnej nazwie i przeszukujemy tylko ją.
-            const azrControl = findAZRControlDirect(group);
-            if (!azrControl) {
-                log('Auto-wybór: nie znaleziono zakładki/kategorii AZR w interfejsie.');
-                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
+            // v0.37: AZR jest kategorią WŁASNĄ. Szukamy jej przez API kategorii,
+            // następnie wybieramy po API wyłącznie ZR należące do AZR.
+            // Dopiero znalezione ID klikamy bezpośrednio w DOM. Dzięki temu
+            // AZR nie musi być aktywna, widoczna ani rozpoznana jako zakładka.
+            let { categoryId, aao } = await findTargetAAOInCustomAZR(targetName);
+
+            if (categoryId == null) {
+                log('Auto-wybór: nie znaleziono własnej kategorii o dokładnej nazwie AZR.');
+                if (state.autoSelectAttempts < 12) {
+                    // Przy pierwszej próbie odśwież listę własnych kategorii.
+                    if (state.autoSelectAttempts >= 2) await loadAZRCategoryId(true);
+                    scheduleAutoSelectRetry(500);
+                }
                 return;
             }
 
-            if (!categoryControlIsActive(azrControl)) {
-                azrControl.click();
-                scheduleAutoSelectRetry(300);
-                return;
+            if (!aao) {
+                // Odśwież listę ZR, bo użytkownik może właśnie uzupełniać AZR.
+                if (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6) {
+                    await loadAAOsForAutoSelect(true);
+                    ({ categoryId, aao } = await findTargetAAOInCustomAZR(targetName));
+                }
             }
 
-            const target = findAAOInActiveAZR(group, azrControl, targetName);
-            if (!target) {
+            if (!aao) {
                 if (state.autoSelectAttempts < 12) {
                     scheduleAutoSelectRetry(400);
                     return;
                 }
                 group.dataset.orzrAutoCheckedMission = missionKey;
-                log(`Brak ZR „${targetName}” w aktywnej kategorii AZR.`);
+                log(`Brak ZR „${targetName}” w własnej kategorii AZR.`);
+                return;
+            }
+
+            const aaoId = aao?.id ?? aao?.aao_id;
+            if (aaoId == null) {
+                log(`ZR „${targetName}” znaleziono w AZR, ale API nie zwróciło ID.`);
+                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(400);
+                return;
+            }
+
+            // Wszystkie ZR są zwykle obecne w #mission-aao-group, również te z
+            // niewyświetlonych własnych kategorii. Klikamy więc bezpośrednio ID.
+            // Nie przełączamy kategorii - to szybsze i omija różnice w renderowaniu
+            // własnych kategorii przez Operatora.
+            let target = findAAOButtonById(group, aaoId);
+
+            if (!target) {
+                // W niektórych momentach grupa ZR jest jeszcze w trakcie renderowania.
+                if (state.autoSelectAttempts < 12) {
+                    scheduleAutoSelectRetry(350);
+                    return;
+                }
+                log(`ZR „${targetName}” ma ID ${aaoId} w AZR, ale jej przycisk nie został jeszcze wyrenderowany.`);
                 return;
             }
 
@@ -2408,7 +2465,8 @@
                 return;
             }
 
-            // Ostatnia kontrola przed kliknięciem.
+            // Ostatnia kontrola przed kliknięciem - przy trwającej misji
+            // auto-zaznaczanie ma być całkowicie wyłączone.
             if (isMissionAlreadyRunning()) {
                 removeAutoSelectStatus();
                 return;
@@ -2418,13 +2476,13 @@
 
             ensureAutoSelectStyle();
             target.classList.add('orzr-auto-selected-aao');
-            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
+            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z własnej kategorii AZR`;
             showAutoSelectStatus(targetName);
 
             target.click();
-            log(`Automatycznie wybrano ZR „${targetName}” z kategorii AZR.`);
+            log(`Automatycznie wybrano ZR „${targetName}” (ID ${aaoId}) z własnej kategorii AZR.`);
         } catch (error) {
-            console.warn(TAG, 'Automatyczny wybór ZR z kategorii AZR nie powiódł się:', error);
+            console.warn(TAG, 'Automatyczny wybór ZR z własnej kategorii AZR nie powiódł się:', error);
             if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
         } finally {
             state.autoSelectBusy = false;
