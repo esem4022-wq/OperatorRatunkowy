@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.37
+Wersja: 0.38
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -30,6 +30,16 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.38
+- naprawiono auto-zaznaczanie ZR w własnej kategorii `AZR`,
+- skrypt rozpoznaje własne kategorie tak jak Operator: po zakładkach `a[href*="aao_category_"]`,
+- przed wyszukaniem ZR skrypt rzeczywiście aktywuje zakładkę `AZR` mechanizmem Bootstrap/jQuery `tab('show')`; dopiero potem przeszukuje jej zawartość,
+- usunięto błędne założenie z v0.37, że przyciski ZR z niewyświetlanej własnej kategorii są zawsze dostępne w DOM,
+- API kategorii pozostaje jako pomocniczy fallback, ale o wyborze decyduje aktywna własna zakładka `AZR`,
+- wyszukiwanie nadal jest dokładne po nazwie, bez rozróżniania wielkości liter,
+- zachowano reguły `Ambulans` i `Straż`, 1-sekundowe opóźnienie, fioletową ramkę/status oraz blokadę auto-zaznaczania przy trwającej misji,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.37
 - poprawiono auto-zaznaczanie dla `AZR` będącej własną kategorią użytkownika,
 - skrypt znajduje ID własnej kategorii `AZR` przez API kategorii, zamiast próbować rozpoznawać ją jako systemową zakładkę w interfejsie misji,

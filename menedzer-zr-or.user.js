@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.37
+// @version      0.38
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.37';
-    const CAPTURE_KEY = 'or_zr_capture_v037';
+    const VERSION = '0.38';
+    const CAPTURE_KEY = 'or_zr_capture_v038';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1706,7 +1706,7 @@
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji v0.32:', data);
+        log('Odczyt misji v0.38:', data);
 
         return data;
     }
@@ -1839,53 +1839,144 @@
         return String(id ?? '') === String(categoryId);
     }
 
-    function findAZRCategoryControl(group, categoryId) {
-        const roots = [group, group?.parentElement, group?.parentElement?.parentElement, document].filter(Boolean);
-        const id = String(categoryId ?? '');
-        const selectors = id ? [
-            `[data-aao-category-id="${CSS.escape(id)}"]`,
-            `[aao_category_id="${CSS.escape(id)}"]`,
-            `[data-category-id="${CSS.escape(id)}"]`,
-            `#aao_category_${CSS.escape(id)}`,
-            `[href*="aao_category_id=${CSS.escape(id)}"]`
-        ] : [];
+    function findAZRCategoryControl(group, categoryId = null) {
+        const id = String(categoryId ?? '').trim();
 
-        for (const root of roots) {
+        // Własne kategorie AAO/ZR w Operatorze są zakładkami w postaci:
+        // <a href="#aao_category_<ID>">Nazwa kategorii</a>
+        // To jest najpewniejszy sposób znalezienia kategorii użytkownika.
+        const directSelectors = [
+            `a[href*="aao_category_"]`,
+            '.nav-tabs a',
+            '.nav-pills a',
+            '[role="tab"]',
+            'a[data-toggle="tab"]',
+            'button[data-toggle="tab"]',
+            'a[data-bs-toggle="tab"]',
+            'button[data-bs-toggle="tab"]'
+        ];
+
+        const seen = new Set();
+
+        for (const selector of directSelectors) {
+            for (const el of document.querySelectorAll(selector)) {
+                if (seen.has(el)) continue;
+                seen.add(el);
+
+                if (exactMissionNameKey(el.textContent || '') !== 'azr') continue;
+
+                if (id) {
+                    const href = String(el.getAttribute('href') || '');
+                    const target = String(
+                        el.getAttribute('data-target') ||
+                        el.getAttribute('data-bs-target') ||
+                        ''
+                    );
+                    const dataId = String(
+                        el.getAttribute('data-aao-category-id') ||
+                        el.getAttribute('aao_category_id') ||
+                        el.getAttribute('data-category-id') ||
+                        ''
+                    );
+
+                    const idMatches =
+                        dataId === id ||
+                        href.includes(`aao_category_${id}`) ||
+                        target.includes(`aao_category_${id}`);
+
+                    // Jeśli znaleźliśmy dokładne "AZR", ale ID z API ma inny format,
+                    // nie odrzucamy zakładki. Nazwa kategorii jest ważniejsza.
+                    if (!idMatches) {
+                        log(`AZR znalezione po nazwie; ID zakładki różni się od API (${id}). Używam zakładki po nazwie.`);
+                    }
+                }
+
+                return el;
+            }
+        }
+
+        // Fallback po ID z API – może pomóc, jeśli nazwa zakładki została
+        // wyrenderowana w nietypowym elemencie.
+        if (id) {
+            const escaped = CSS.escape(id);
+            const selectors = [
+                `a[href="#aao_category_${escaped}"]`,
+                `a[href*="aao_category_${escaped}"]`,
+                `[data-target="#aao_category_${escaped}"]`,
+                `[data-bs-target="#aao_category_${escaped}"]`,
+                `[data-aao-category-id="${escaped}"]`,
+                `[aao_category_id="${escaped}"]`,
+                `[data-category-id="${escaped}"]`
+            ];
+
             for (const selector of selectors) {
                 try {
-                    const el = root.querySelector?.(selector);
+                    const el = document.querySelector(selector);
                     if (el) return el;
                 } catch {}
             }
         }
 
-        // Fallback po dokładnym tekście kategorii. Ograniczamy się do elementów
-        // sterujących zakładkami/listą kategorii, a nie do przycisków samych ZR.
-        const candidates = document.querySelectorAll(
-            '.nav-tabs a, .nav-pills a, [role="tab"], button[data-toggle="tab"], button[data-bs-toggle="tab"], .aao-category, .aao_category'
+        return null;
+    }
+
+    function categoryControlIsActive(control) {
+        if (!control) return false;
+
+        const pane = paneForCategoryControl(control);
+
+        return (
+            control.classList.contains('active') ||
+            control.parentElement?.classList.contains('active') ||
+            control.getAttribute('aria-selected') === 'true' ||
+            pane?.classList.contains('active') ||
+            pane?.classList.contains('show') ||
+            pane?.classList.contains('in')
         );
-        for (const el of candidates) {
-            if (exactMissionNameKey(el.textContent || '') === 'azr') return el;
+    }
+
+    function showAZRCategory(control) {
+        if (!control) return false;
+        if (categoryControlIsActive(control)) return false;
+
+        // Operator/Leitstellenspiel używa zakładek Bootstrap. Dla własnych
+        // kategorii samo .click() nie zawsze aktywuje zawartość, natomiast
+        // jQuery .tab('show') jest mechanizmem używanym przez grę.
+        try {
+            const jq = window.jQuery || window.$;
+            if (jq && typeof jq(control).tab === 'function') {
+                jq(control).tab('show');
+                return true;
+            }
+        } catch (error) {
+            console.warn(TAG, 'Nie udało się przełączyć AZR przez jQuery.tab:', error);
         }
 
-        return null;
+        try {
+            control.dispatchEvent(new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            }));
+            return true;
+        } catch {}
+
+        try {
+            control.click();
+            return true;
+        } catch {}
+
+        return false;
     }
 
     function ensureAZRCategoryActive(group, categoryId) {
         const control = findAZRCategoryControl(group, categoryId);
         if (!control) return false;
+        return showAZRCategory(control);
+    }
 
-        const cls = control.classList;
-        const parentCls = control.parentElement?.classList;
-        const isActive =
-            cls?.contains('active') ||
-            parentCls?.contains('active') ||
-            control.getAttribute('aria-selected') === 'true';
-
-        if (isActive) return false;
-
-        control.click();
-        return true;
+    function waitMs(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     function isSingleFireVehicleRequirement(vehicle) {
@@ -2034,6 +2125,7 @@
     function findAZRControlDirect(group) {
         // Najpierw klasyczne zakładki Bootstrap/Operatora.
         const selectors = [
+            'a[href*="aao_category_"]',
             '.nav-tabs a', '.nav-pills a', '[role="tab"]',
             'a[data-toggle="tab"]', 'button[data-toggle="tab"]',
             'a[data-bs-toggle="tab"]', 'button[data-bs-toggle="tab"]',
@@ -2062,15 +2154,6 @@
         }
 
         return null;
-    }
-
-    function categoryControlIsActive(control) {
-        if (!control) return false;
-        return (
-            control.classList.contains('active') ||
-            control.parentElement?.classList.contains('active') ||
-            control.getAttribute('aria-selected') === 'true'
-        );
     }
 
     function paneForCategoryControl(control) {
@@ -2402,60 +2485,54 @@
             const targetKey = exactMissionNameKey(targetName);
             if (!targetKey) return;
 
-            // v0.37: AZR jest kategorią WŁASNĄ. Szukamy jej przez API kategorii,
-            // następnie wybieramy po API wyłącznie ZR należące do AZR.
-            // Dopiero znalezione ID klikamy bezpośrednio w DOM. Dzięki temu
-            // AZR nie musi być aktywna, widoczna ani rozpoznana jako zakładka.
-            let { categoryId, aao } = await findTargetAAOInCustomAZR(targetName);
+            // v0.38: własna kategoria AZR musi zostać naprawdę aktywowana.
+            // Operator renderuje własne kategorie jako zakładki a[href*="aao_category_"].
+            // Dopiero po pokazaniu AZR wyszukujemy ZR w jej aktywnej zawartości.
+            let categoryId = await loadAZRCategoryId(false);
+            let control = findAZRCategoryControl(group, categoryId);
 
-            if (categoryId == null) {
-                log('Auto-wybór: nie znaleziono własnej kategorii o dokładnej nazwie AZR.');
-                if (state.autoSelectAttempts < 12) {
-                    // Przy pierwszej próbie odśwież listę własnych kategorii.
-                    if (state.autoSelectAttempts >= 2) await loadAZRCategoryId(true);
-                    scheduleAutoSelectRetry(500);
-                }
-                return;
+            if (!control) {
+                control = findAZRCategoryControl(group, null) || findAZRControlDirect(group);
             }
 
-            if (!aao) {
-                // Odśwież listę ZR, bo użytkownik może właśnie uzupełniać AZR.
+            if (!control) {
+                log('Auto-wybór: nie znaleziono zakładki własnej kategorii AZR.');
                 if (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6) {
-                    await loadAAOsForAutoSelect(true);
-                    ({ categoryId, aao } = await findTargetAAOInCustomAZR(targetName));
+                    categoryId = await loadAZRCategoryId(true);
                 }
-            }
-
-            if (!aao) {
-                if (state.autoSelectAttempts < 12) {
-                    scheduleAutoSelectRetry(400);
-                    return;
-                }
-                group.dataset.orzrAutoCheckedMission = missionKey;
-                log(`Brak ZR „${targetName}” w własnej kategorii AZR.`);
-                return;
-            }
-
-            const aaoId = aao?.id ?? aao?.aao_id;
-            if (aaoId == null) {
-                log(`ZR „${targetName}” znaleziono w AZR, ale API nie zwróciło ID.`);
                 if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(400);
                 return;
             }
 
-            // Wszystkie ZR są zwykle obecne w #mission-aao-group, również te z
-            // niewyświetlonych własnych kategorii. Klikamy więc bezpośrednio ID.
-            // Nie przełączamy kategorii - to szybsze i omija różnice w renderowaniu
-            // własnych kategorii przez Operatora.
-            let target = findAAOButtonById(group, aaoId);
+            const switched = showAZRCategory(control);
+            if (switched) await waitMs(180);
+
+            let target = findAAOInActiveAZR(group, control, targetName);
+
+            // Fallback po API, ale dopiero po aktywowaniu AZR.
+            if (!target && categoryId != null) {
+                let { aao } = await findTargetAAOInCustomAZR(targetName);
+
+                if (!aao && (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6)) {
+                    await loadAAOsForAutoSelect(true);
+                    ({ aao } = await findTargetAAOInCustomAZR(targetName));
+                }
+
+                const aaoId = aao?.id ?? aao?.aao_id;
+                if (aaoId != null) {
+                    const byId = findAAOButtonById(group, aaoId);
+                    if (byId && isRenderedInActiveCategory(byId)) target = byId;
+                }
+            }
 
             if (!target) {
-                // W niektórych momentach grupa ZR jest jeszcze w trakcie renderowania.
                 if (state.autoSelectAttempts < 12) {
                     scheduleAutoSelectRetry(350);
                     return;
                 }
-                log(`ZR „${targetName}” ma ID ${aaoId} w AZR, ale jej przycisk nie został jeszcze wyrenderowany.`);
+
+                group.dataset.orzrAutoCheckedMission = missionKey;
+                log(`Brak widocznej ZR „${targetName}” w aktywnej kategorii AZR.`);
                 return;
             }
 
@@ -2465,8 +2542,6 @@
                 return;
             }
 
-            // Ostatnia kontrola przed kliknięciem - przy trwającej misji
-            // auto-zaznaczanie ma być całkowicie wyłączone.
             if (isMissionAlreadyRunning()) {
                 removeAutoSelectStatus();
                 return;
@@ -2480,7 +2555,7 @@
             showAutoSelectStatus(targetName);
 
             target.click();
-            log(`Automatycznie wybrano ZR „${targetName}” (ID ${aaoId}) z własnej kategorii AZR.`);
+            log(`Automatycznie wybrano ZR „${targetName}” z własnej kategorii AZR.`);
         } catch (error) {
             console.warn(TAG, 'Automatyczny wybór ZR z własnej kategorii AZR nie powiódł się:', error);
             if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
