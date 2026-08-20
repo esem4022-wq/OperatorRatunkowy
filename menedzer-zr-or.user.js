@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.28
+// @version      0.29
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.28';
-    const CAPTURE_KEY = 'or_zr_capture_v028';
+    const VERSION = '0.29';
+    const CAPTURE_KEY = 'or_zr_capture_v029';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -344,7 +344,112 @@
         return cards[0]?.el || null;
     }
 
+    function isPaleMissionCardBackground(el) {
+        if (!el) return false;
+        const bg = getComputedStyle(el).backgroundColor || '';
+        const m = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+        if (!m) return false;
+
+        const r = Number(m[1]);
+        const g = Number(m[2]);
+        const b = Number(m[3]);
+
+        // Żółta karta Operatora ma bardzo jasne tło. Nie wymagamy dokładnego
+        // koloru, bo motywy mogą go lekko zmieniać.
+        return r >= 220 && g >= 210 && b >= 170 && r >= b && g >= b;
+    }
+
+    function findVisibleVehiclesHeading() {
+        const selectors = 'h1,h2,h3,h4,h5,h6,p,span,strong,b,div,dt,dd';
+        const candidates = [];
+
+        for (const el of document.querySelectorAll(selectors)) {
+            if (!isVisible(el)) continue;
+
+            const ownText = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (normalize(ownText) !== 'pojazdy') continue;
+
+            const rect = el.getBoundingClientRect();
+            let score = 0;
+
+            // Karta wymagań znajduje się po prawej stronie okna misji.
+            if (rect.left > innerWidth * 0.35) score += 30;
+            if (rect.top > 50 && rect.top < innerHeight * 0.85) score += 8;
+
+            const fs = Number.parseFloat(getComputedStyle(el).fontSize) || 0;
+            score += Math.min(fs, 30);
+
+            candidates.push({ el, score });
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0]?.el || null;
+    }
+
+    function findMissionCardFromVehiclesHeading() {
+        const heading = findVisibleVehiclesHeading();
+        if (!heading) return null;
+
+        const missionName = getOpenedMissionName();
+        const wantedName = normalize(missionName);
+        const candidates = [];
+
+        let cur = heading;
+
+        for (let depth = 0; depth < 10 && cur; depth++, cur = cur.parentElement) {
+            if (!isVisible(cur)) continue;
+
+            const rect = cur.getBoundingClientRect();
+            if (rect.width < 280 || rect.height < 70) continue;
+
+            const raw = (cur.innerText || cur.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            const compact = raw.replace(/\s+/g, ' ').trim();
+
+            if (!/\bPojazdy\b/i.test(compact)) continue;
+
+            // Jeżeli wspięliśmy się aż do kontenera z listą dostępnych jednostek,
+            // wyszliśmy poza właściwą żółtą kartę.
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(compact)) {
+                continue;
+            }
+
+            const afterVehicles = compact.replace(/^.*?\bPojazdy\b/i, '').trim();
+            if (!/\b\d+\s+\S+/.test(afterVehicles)) continue;
+
+            let score = 100 - depth * 4;
+
+            if (wantedName && normalize(compact).includes(wantedName)) score += 45;
+            if (isPaleMissionCardBackground(cur)) score += 30;
+            if (/\bPacjenci\b/i.test(compact)) score += 5;
+            if (/\bMoże się rozwinąć\b|\bMoze sie rozwinac\b/i.test(compact)) score += 4;
+            if (rect.left > innerWidth * 0.30) score += 10;
+
+            // Karta ma być lokalnym, nie ogromnym kontenerem.
+            score -= Math.floor(compact.length / 1200);
+
+            candidates.push({ el: cur, score, len: compact.length });
+        }
+
+        candidates.sort((a, b) => b.score - a.score || a.len - b.len);
+        return candidates[0]?.el || null;
+    }
+
     function findMissionInfoBlock() {
+        // v0.29: najpewniejszym punktem zaczepienia jest widoczny nagłówek
+        // "Pojazdy" w żółtej karcie. Nie wymagamy już, aby przeglądarka
+        // umieściła nazwę misji i sekcję Pojazdy w tym samym podkontenerze.
+        const headingCard = findMissionCardFromVehiclesHeading();
+        if (headingCard) {
+            log('Karta misji znaleziona po nagłówku Pojazdy:', headingCard, headingCard.innerText);
+            return headingCard;
+        }
+
         const exactCard = findExactMissionCardByTitle();
         if (exactCard) {
             log('Dokładnie dopasowana karta aktualnej misji:', exactCard, exactCard.innerText);
@@ -447,25 +552,20 @@
     function missionInfoBlockMatchesCurrentMission(block) {
         if (!block) return false;
 
-        const missionName = getOpenedMissionName();
-        if (!missionName) return false;
-
-        const cardText = getMissionCardText(block, missionName);
+        const cardText = getMissionCardText(block);
         if (!cardText || !/\bPojazdy\b/i.test(cardText)) return false;
 
-        const wanted = normalize(missionName);
+        // v0.29: nie wymagamy już zgodności tytułu karty z ciemnym nagłówkiem.
+        // W części misji tytuł i lista pojazdów są w osobnych podkontenerach,
+        // mimo że wizualnie tworzą jedną żółtą kartę.
+        //
+        // Bezpieczeństwo zapewniają:
+        // - wybór widocznej sekcji "Pojazdy" po prawej stronie,
+        // - odcięcie "Dostępne jednostki",
+        // - brak pobierania danych z linków "Może się rozwinąć w...".
+        const segment = getVehiclesTextSegment(block);
 
-        // Najpewniejszy wariant: karta zawiera osobny element z dokładnie taką
-        // samą nazwą jak ciemny nagłówek misji.
-        for (const el of block.querySelectorAll(
-            'h1,h2,h3,h4,h5,strong,.panel-title,.modal-title,[class*="mission"][class*="title"],[class*="caption"]'
-        )) {
-            const title = sanitizeMissionName(el.textContent || '');
-            if (normalize(title) === wanted) return true;
-        }
-
-        // Fallback dla starszego układu HTML, gdzie tytuł i treść są jednym tekstem.
-        return normalize(cardText).includes(wanted);
+        return /\b\d+\s+\S+/.test(segment || '');
     }
 
     function sanitizeMissionName(value) {
@@ -730,10 +830,50 @@
         return cleanLines(raw);
     }
 
+    function getMissionCardLeafTexts(block) {
+        if (!block) return [];
+
+        const items = [];
+        const selectors = 'h1,h2,h3,h4,h5,h6,p,li,span,strong,b,dt,dd,td,th,div';
+
+        for (const el of block.querySelectorAll(selectors)) {
+            if (!isVisible(el)) continue;
+
+            const text = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!text || text.length > 180) continue;
+
+            // Pomijamy szerokich rodziców powtarzających dokładnie tekst dziecka.
+            const sameChild = [...el.children].some(child => {
+                const childText = (child.innerText || child.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                return childText === text;
+            });
+            if (sameChild) continue;
+
+            if (items[items.length - 1] !== text) items.push(text);
+        }
+
+        return items;
+    }
+
     function extractVehiclesFromCardLines(block) {
         const result = [];
         const map = new Map();
-        const lines = getMissionCardLines(block);
+
+        let lines = getMissionCardLines(block);
+
+        // Część widoków Operatora nie zachowuje nowych linii w innerText karty.
+        // Wtedy budujemy sekwencję z najmniejszych widocznych elementów DOM.
+        if (!lines.some(line => normalize(line) === 'pojazdy' || /^pojazdy\b/i.test(line))) {
+            lines = getMissionCardLeafTexts(block);
+        }
+
         if (!lines.length) return result;
 
         let start = lines.findIndex(line => normalize(line) === 'pojazdy');
@@ -1117,7 +1257,7 @@
                 maxPatients: 0,
                 sourceUrl: location.href,
                 capturedAt: Date.now(),
-                readError: 'Nie udało się powiązać widocznej karty wymagań z aktualną misją.'
+                readError: 'Nie znaleziono czytelnej sekcji Pojazdy w widocznej karcie aktualnej misji.'
             };
             state.capture = data;
             saveJSON(CAPTURE_KEY, data);
@@ -1321,8 +1461,92 @@
         return null;
     }
 
+    function containerHasDispatchedVehicles(container) {
+        if (!container || !isVisible(container)) return false;
+
+        // Typowe wiersze/elementy pojazdów w grze.
+        const vehicleLike = container.querySelector(
+            'tr[id*="vehicle"], [id^="vehicle_"], [data-vehicle-id], [vehicle_id], .vehicle, .mission_vehicle'
+        );
+        if (vehicleLike) return true;
+
+        const text = (container.innerText || container.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Sam nagłówek bez listy nie oznacza rozpoczętej misji.
+        if (!text || text.length < 3) return false;
+
+        return /\b(?:dojazd|na miejscu|przybył|przybyl|pojazd|jednostk)\b/i.test(text) &&
+               /\b\d+\b/.test(text);
+    }
+
+    function isMissionAlreadyRunning() {
+        // Po wysłaniu jednostek Operator pokazuje m.in. komunikat
+        // "... pomyślnie wysłano.". To bardzo pewny sygnał.
+        for (const el of document.querySelectorAll('.alert-success,.alert-info,.alert')) {
+            if (!isVisible(el)) continue;
+            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+
+            if (
+                /pomyślnie wysłano|pomyslnie wyslano/i.test(text) ||
+                /wysłano.*(?:pojazd|jednostk)|wyslano.*(?:pojazd|jednostk)/i.test(text)
+            ) {
+                return true;
+            }
+        }
+
+        // Typowe kontenery pojazdów jadących / będących już na miejscu.
+        const selectors = [
+            '#mission_vehicle_driving',
+            '#mission_vehicle_at_mission',
+            '#mission-vehicle-driving',
+            '#mission-vehicle-at-mission',
+            '.mission_vehicle_driving',
+            '.mission_vehicle_at_mission',
+            '[id*="mission_vehicle_driving"]',
+            '[id*="mission_vehicle_at_mission"]'
+        ];
+
+        for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+                if (containerHasDispatchedVehicles(el)) return true;
+            }
+        }
+
+        // Widoczne paski realizacji wymaganej wody/piany pojawiają się po rozpoczęciu
+        // obsługi misji. To dodatkowy fallback dla misji pożarowych.
+        for (const el of document.querySelectorAll('.progress, .progress-bar')) {
+            if (!isVisible(el)) continue;
+
+            const parentText = (el.parentElement?.parentElement?.innerText || el.parentElement?.innerText || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (/Potrzebna\s+(?:woda|piana)|Potrzeba:\s*[\d\s.]+\s*l/i.test(parentText)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
+
+        // v0.29: automatyczny wybór ZR ma pomagać wyłącznie PRZED pierwszym
+        // wysłaniem pojazdów. Dla trwającej misji nie klikamy ZR ponownie.
+        if (isMissionAlreadyRunning()) {
+            removeAutoSelectStatus();
+
+            const group = document.getElementById('mission-aao-group');
+            group?.querySelectorAll('.orzr-auto-selected-aao').forEach(el =>
+                el.classList.remove('orzr-auto-selected-aao')
+            );
+
+            return;
+        }
 
         const missionName = currentMissionNameForAutoSelect();
         if (!missionName) return;
