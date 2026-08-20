@@ -15,6 +15,13 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.12 — 20.08.2026
+------------------
+- W zakładce „Brakuje w AZR” każda kopia tworzona w kategorii „AZR” jest teraz zawsze ustawiana w numerze kolumny 1.
+- Zasada dotyczy zarówno pojedynczego przycisku „Kopiuj do AZR”, jak i zbiorczego „Kopiuj wszystkie do AZR”.
+- Numer kolumny źródłowego ZR nie wpływa już na numer kolumny kopii w AZR.
+- Zachowano wszystkie dotychczasowe funkcje, GitHub, stałą nazwę userscriptu i pełną historię wersji.
+
 v0.11 — 20.08.2026
 ------------------
 - Dodano nową zakładkę „Brakuje w AZR”.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.11
+// @version      0.12
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.11';
+    const VERSION = '0.12';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -627,10 +627,10 @@
 
         try {
             const target = {
-                column: Math.max(1, Number(source.column) || 1),
+                column: 1,
                 aao_category_id: azrCategoryId
             };
-            setStatus(`Kopiuję „${source.caption}” do kategorii AZR…`, 'info');
+            setStatus(`Kopiuję „${source.caption}” do kategorii AZR, kolumna 1…`, 'info');
             await copyViaNativeEditor(source.id, target);
             state.aaos = await fetchAAOListNormalized();
             renderMissingAZRTable();
@@ -657,7 +657,7 @@
         const rows = getMissingInAZRRows().map(item => ({
             id: item.aao.id,
             caption: item.aao.caption,
-            column: Math.max(1, Number(item.aao.column) || 1)
+            column: 1
         }));
 
         if (!rows.length) {
@@ -677,7 +677,7 @@
             for (let i = 0; i < rows.length; i++) {
                 const item = rows[i];
                 if (button) button.textContent = `Kopiuję ${i + 1}/${rows.length}…`;
-                setStatus(`Kopiuję ${i + 1}/${rows.length}: „${item.caption}” → AZR…`, 'info');
+                setStatus(`Kopiuję ${i + 1}/${rows.length}: „${item.caption}” → AZR, kolumna 1…`, 'info');
 
                 try {
                     // Przed każdym kopiowaniem sprawdzamy aktualną listę w pamięci,
@@ -1719,7 +1719,7 @@
     <div id="orzr-missing-azr-tools" hidden>
         <button id="orzr-missing-azr-copy-all" type="button" class="btn btn-success">⧉ Kopiuj wszystkie do AZR (0)</button>
         <button id="orzr-missing-azr-refresh" type="button" class="btn btn-default">↻ Sprawdź ponownie</button>
-        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. Kopia zachowuje numer kolumny źródłowego ZR.</span>
+        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. Każda kopia do AZR jest zawsze ustawiana w kolumnie 1.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">

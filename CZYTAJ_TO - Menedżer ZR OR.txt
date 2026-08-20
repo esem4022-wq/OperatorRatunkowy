@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.38
+Wersja: 0.40
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -30,6 +30,23 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.40
+- auto-zaznaczanie: własna kategoria `AZR` jest teraz zawsze uruchamiana natywnym kliknięciem; `tab('show')` jest tylko dodatkowym wsparciem,
+- po przełączeniu na `AZR` skrypt czeka na faktyczne aktywowanie/załadowanie kategorii i obsługuje przyciski `aao_btn`,
+- przy bardzo długiej jednej kolumnie AZR skrypt wykorzystuje także wbudowaną wyszukiwarkę ZR i następnie czyści filtr,
+- nazwa misji do auto-wyboru jest pobierana w pierwszej kolejności z `#mission_general_info[data-mission-title]`, czyli z dokładnego tytułu gry,
+- poprawiono wykrywanie trwającej misji: blokadę powodują tylko rzeczywiście wysłane/jadące/obecne pojazdy; paski wody/piany i stare alerty nie blokują już świeżej misji,
+- zachowano 1-sekundowe opóźnienie, kategorię tylko `AZR`, reguły `Ambulans`/`Straż`, fioletowe oznaczenie i GitHub bez `userscripts/`.
+
+v0.39
+- poprawiono właściwą klasę przycisków ZR: oprócz starszego `.aao` skrypt obsługuje teraz używane w Operatorze/LSS `.aao_btn`,
+- nazwa ZR jest porównywana przede wszystkim z widocznym tekstem przycisku, a nie z atrybutem `title`,
+- własna zakładka `AZR` jest aktywowana przez Bootstrap `tab('show')`, następnie skrypt czeka do 2,2 s na wyrenderowanie jej zawartości,
+- po aktywowaniu `AZR` ZR jest szukana równolegle po dokładnej nazwie i po ID `#aao_<ID>` pobranym z API,
+- usunięto wymóg klasy `.aao`, który powodował pomijanie prawidłowych przycisków ZR w kategorii własnej,
+- zachowano 1-sekundowe opóźnienie, reguły `Ambulans`/`Straż`, fioletowe oznaczenie oraz blokadę przy trwającej misji,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.38
 - naprawiono auto-zaznaczanie ZR w własnej kategorii `AZR`,
 - skrypt rozpoznaje własne kategorie tak jak Operator: po zakładkach `a[href*="aao_category_"]`,

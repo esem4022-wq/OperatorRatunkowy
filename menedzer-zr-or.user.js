@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.38
+// @version      0.40
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.38';
-    const CAPTURE_KEY = 'or_zr_capture_v038';
+    const VERSION = '0.40';
+    const CAPTURE_KEY = 'or_zr_capture_v040';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -621,6 +621,26 @@
         return /\b\d+\s+\S+/.test(segment || '');
     }
 
+    function exactMissionTitleFromGame() {
+        // Najpewniejsze źródło tytułu w LSS/Operatorze. Ten atrybut zawiera
+        // wyłącznie nazwę bieżącej misji, bez czasu, komunikatów i danych karty.
+        const selectors = [
+            '#mission_general_info[data-mission-title]',
+            '[id="mission_general_info"][data-mission-title]',
+            '[data-mission-title]'
+        ];
+
+        for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+                if (!el.isConnected) continue;
+                const raw = String(el.getAttribute('data-mission-title') || '').trim();
+                const name = sanitizeMissionName(raw);
+                if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
+            }
+        }
+        return '';
+    }
+
     function sanitizeMissionName(value) {
         let text = String(value || '')
             .replace(/\u00a0/g, ' ')
@@ -676,7 +696,10 @@
     }
 
     function getMissionName(infoBlock) {
-        // v0.33: najpierw tytuł z żółtej karty. Ciemny nagłówek zawiera też
+        const exactTitle = exactMissionTitleFromGame();
+        if (exactTitle) return exactTitle;
+
+        // Fallback: tytuł z żółtej karty. Ciemny nagłówek zawiera też
         // teksty typu „24 minuty temu”, które w części układów DOM są osobnym
         // elementem i wcześniej mogły wygrać jako nazwa misji.
         if (infoBlock) {
@@ -1937,36 +1960,30 @@
 
     function showAZRCategory(control) {
         if (!control) return false;
-        if (categoryControlIsActive(control)) return false;
+        if (categoryControlIsActive(control)) return true;
 
-        // Operator/Leitstellenspiel używa zakładek Bootstrap. Dla własnych
-        // kategorii samo .click() nie zawsze aktywuje zawartość, natomiast
-        // jQuery .tab('show') jest mechanizmem używanym przez grę.
-        try {
-            const jq = window.jQuery || window.$;
-            if (jq && typeof jq(control).tab === 'function') {
-                jq(control).tab('show');
-                return true;
-            }
-        } catch (error) {
-            console.warn(TAG, 'Nie udało się przełączyć AZR przez jQuery.tab:', error);
-        }
-
-        try {
-            control.dispatchEvent(new MouseEvent('click', {
-                bubbles: true,
-                cancelable: true,
-                view: window
-            }));
-            return true;
-        } catch {}
-
+        // Własne kategorie Operatora mają także własny handler click, który
+        // potrafi załadować / podmienić listę ZR. Samo jQuery.tab('show') zmienia
+        // tylko zakładkę Bootstrapa i w części układów NIE uruchamia tego handlera.
+        // Dlatego natywny click jest zawsze pierwszy.
         try {
             control.click();
-            return true;
-        } catch {}
+        } catch {
+            try {
+                control.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true, view: window
+                }));
+            } catch {}
+        }
 
-        return false;
+        // Dodatkowe wymuszenie stanu zakładki Bootstrap, jeśli gra go używa.
+        try {
+            const jq = window.jQuery || window.$;
+            if (jq && typeof jq(control).tab === 'function') jq(control).tab('show');
+        } catch (error) {
+            console.warn(TAG, 'Nie udało się dodatkowo aktywować AZR przez tab(show):', error);
+        }
+        return true;
     }
 
     function ensureAZRCategoryActive(group, categoryId) {
@@ -2045,7 +2062,7 @@
         const style = document.createElement('style');
         style.id = 'orzr-auto-select-style';
         style.textContent = `
-            .aao.orzr-auto-selected-aao, [id^="aao_"].orzr-auto-selected-aao {
+            .aao.orzr-auto-selected-aao, .aao_btn.orzr-auto-selected-aao, [id^="aao_"].orzr-auto-selected-aao {
                 outline: 3px solid #8e44ad !important;
                 outline-offset: 1px !important;
                 box-shadow: 0 0 8px rgba(142, 68, 173, .78) !important;
@@ -2097,19 +2114,20 @@
     }
 
     function currentMissionNameForAutoSelect() {
+        // Do auto-wyboru NIE zgadujemy nazwy z DOM. Operator przechowuje ją
+        // w data-mission-title na #mission_general_info.
+        const exactTitle = exactMissionTitleFromGame();
+        if (exactTitle) return exactTitle;
+
         const header = findOpenedMissionHeader();
         if (!header) return '';
 
-        // Używamy tego samego źródła nazwy co przy tworzeniu ZR. Dzięki temu
-        // auto-wybór nie szuka ZR o nazwie „24 minuty temu”.
         const block = findMissionInfoBlock();
         let name = getMissionName(block);
-
         if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name)) {
             const title = findMissionTitleElement(header);
             name = sanitizeMissionName(title?.textContent || '');
         }
-
         if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name) || name.length > 60) return '';
         return name;
     }
@@ -2193,13 +2211,24 @@
 
     function aaoCaptionFromElement(el) {
         if (!el) return '';
+
+        // W Operatorze/LSS przyciski ZR występują m.in. jako a.aao_btn.
+        // Tekst przycisku jest najpewniejszą nazwą; title może zawierać opis/tool-tip.
+        const visibleText = (el.textContent || '').replace(/\s+/g, ' ').trim();
         const explicit =
             el.getAttribute('data-caption') ||
             el.getAttribute('data-name') ||
             el.getAttribute('title') || '';
 
-        const text = explicit || el.textContent || '';
-        return sanitizeMissionName(text);
+        return sanitizeMissionName(visibleText || explicit);
+    }
+
+    function getAAOCandidates(root) {
+        if (!root?.querySelectorAll) return [];
+        return root.querySelectorAll(
+            'a.aao_btn,button.aao_btn,.aao_btn,a.aao,button.aao,.aao,' +
+            '[aao_id],[data-aao-id],a[id^="aao_"],button[id^="aao_"],[id^="aao_"]'
+        );
     }
 
     function findAAOInActiveAZR(group, control, caption) {
@@ -2207,80 +2236,46 @@
         if (!wanted) return null;
 
         const pane = paneForCategoryControl(control);
-        const roots = [];
-        if (pane) roots.push(pane);
-        if (group && !roots.includes(group)) roots.push(group);
 
-        for (const root of roots) {
-            const candidates = root.querySelectorAll(
-                'a.aao,button.aao,.aao,[id^="aao_"][aao_id],[id^="aao_"][data-aao-id],a[id^="aao_"],button[id^="aao_"]'
-            );
-            for (const el of candidates) {
-                if (!isRenderedInActiveCategory(el)) continue;
+        // Najpierw WYŁĄCZNIE panel własnej kategorii AZR.
+        if (pane) {
+            for (const el of getAAOCandidates(pane)) {
                 if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
             }
         }
 
-        // Niektóre wersje Operatora przeładowują zawartość kategorii bez osobnego pane.
-        // Wtedy po aktywowaniu AZR szukamy tylko elementów faktycznie renderowanych.
-        for (const el of document.querySelectorAll(
-            '#mission-aao-group .aao, a.aao, button.aao, [id^="aao_"]'
-        )) {
-            if (!isRenderedInActiveCategory(el)) continue;
-            if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+        // Niektóre wersje gry podmieniają zawartość #mission-aao-group zamiast
+        // utrzymywać osobne tab-pane. Po aktywowaniu AZR przeszukujemy grupę.
+        if (group?.querySelectorAll) {
+            for (const el of getAAOCandidates(group)) {
+                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+            }
         }
 
         return null;
     }
 
     function findAAOButtonById(group, id) {
-        if (!group || !id) return null;
+        if (id == null || id === '') return null;
 
         const escapedId = CSS.escape(String(id));
-
-        // Operator może renderować ZR na dwa sposoby. W szczególności w pierwszej
-        // wyświetlanej kategorii często występuje klasyczne id="aao_<ID>",
-        // podczas gdy w innych miejscach dostępny jest atrybut aao_id.
         const selectors = [
             `#aao_${escapedId}`,
+            `.aao_btn[aao_id="${escapedId}"]`,
+            `.aao_btn[data-aao-id="${escapedId}"]`,
             `.aao[aao_id="${escapedId}"]`,
             `.aao[data-aao-id="${escapedId}"]`,
             `[aao_id="${escapedId}"]`,
             `[data-aao-id="${escapedId}"]`
         ];
 
-        for (const selector of selectors) {
-            let target = null;
-            try {
-                target = group.querySelector(selector);
-            } catch {}
-            if (target) return target;
-        }
-
-        // Pierwsza kategoria Operatora bywa renderowana obok właściwego
-        // #mission-aao-group zamiast jako jego potomek. ID ZR jest unikalne,
-        // więc bezpiecznie sprawdzamy także cały dokument.
-        for (const selector of selectors) {
-            let target = null;
-            try {
-                target = document.querySelector(selector);
-            } catch {}
-            if (target) return target;
-        }
-
-        // Ostateczny fallback: sprawdzenie identyfikatora/atrybutu na wszystkich
-        // przyciskach ZR w aktualnej grupie. Nie wybieramy nic po podobnej nazwie.
-        const candidates = group.querySelectorAll('a.aao, button.aao, .aao');
-        for (const el of candidates) {
-            const elementId = String(el.id || '');
-            const aaoId = String(
-                el.getAttribute('aao_id') ||
-                el.getAttribute('data-aao-id') ||
-                ''
-            );
-
-            if (elementId === `aao_${id}` || aaoId === String(id)) {
-                return el;
+        const roots = [group, document].filter(Boolean);
+        for (const root of roots) {
+            for (const selector of selectors) {
+                try {
+                    const target = root.querySelector(selector);
+                    if (target) return target;
+                } catch {}
             }
         }
 
@@ -2288,23 +2283,19 @@
     }
 
     function findAAOButtonByExactCaption(group, caption) {
-        if (!group || !caption) return null;
+        if (!caption) return null;
         const wanted = exactMissionNameKey(caption);
         if (!wanted) return null;
 
-        for (const el of group.querySelectorAll('a.aao, button.aao, .aao')) {
-            const text = sanitizeMissionName(el.textContent || '');
-            if (exactMissionNameKey(text) === wanted) return el;
+        const roots = [group, document].filter(Boolean);
+        const seen = new Set();
+        for (const root of roots) {
+            for (const el of getAAOCandidates(root)) {
+                if (seen.has(el)) continue;
+                seen.add(el);
+                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+            }
         }
-
-        // Fallback dla pierwszej, już wyświetlanej kategorii.
-        for (const el of document.querySelectorAll(
-            '#mission-aao-group .aao, [id^="aao_"].aao, a[id^="aao_"], button[id^="aao_"]'
-        )) {
-            const text = sanitizeMissionName(el.textContent || '');
-            if (exactMissionNameKey(text) === wanted) return el;
-        }
-
         return null;
     }
 
@@ -2353,63 +2344,34 @@
     }
 
     function isMissionAlreadyRunning() {
-        // 1. Najpewniejszy sygnał: rzeczywiste wiersze pojazdów jadących
-        // lub znajdujących się na miejscu. Działa także poza viewportem.
-        const rowSelectors = [
+        // v0.40: misja jest „trwająca” wyłącznie wtedy, gdy faktycznie istnieje
+        // co najmniej jeden pojazd wysłany / jadący / na miejscu.
+        // Nie używamy pasków wody/piany ani globalnych alertów, bo te elementy
+        // mogą istnieć również przed pierwszym alarmowaniem albo pochodzić z
+        // poprzedniego widoku i blokowały auto-wybór także na świeżej misji.
+        const selectors = [
             '#mission_vehicle_driving tr[id^="vehicle_row"]',
             '#mission_vehicle_at_mission tr[id^="vehicle_row"]',
             '#mission-vehicle-driving tr[id^="vehicle_row"]',
-            '#mission-vehicle-at-mission tr[id^="vehicle_row"]'
+            '#mission-vehicle-at-mission tr[id^="vehicle_row"]',
+            '#mission_vehicle_driving .vehicle_select_table_tr',
+            '#mission_vehicle_at_mission .vehicle_select_table_tr',
+            '#mission-vehicle-driving .vehicle_select_table_tr',
+            '#mission-vehicle-at-mission .vehicle_select_table_tr',
+            '[id*="mission_vehicle_driving"] tr[data-vehicle-id]',
+            '[id*="mission_vehicle_at_mission"] tr[data-vehicle-id]'
         ];
 
-        for (const selector of rowSelectors) {
+        for (const selector of selectors) {
             try {
-                if (document.querySelector(selector)) return true;
+                const rows = [...document.querySelectorAll(selector)];
+                if (rows.some(row => {
+                    const id = String(row.id || '');
+                    const vehicleId = row.getAttribute('vehicle_id') || row.getAttribute('data-vehicle-id');
+                    return id.startsWith('vehicle_row') || vehicleId;
+                })) return true;
             } catch {}
         }
-
-        // 2. Całe kontenery statusu pojazdów - bez wymogu isVisible().
-        const containerSelectors = [
-            '#mission_vehicle_driving',
-            '#mission_vehicle_at_mission',
-            '#mission-vehicle-driving',
-            '#mission-vehicle-at-mission',
-            '.mission_vehicle_driving',
-            '.mission_vehicle_at_mission',
-            '[id*="mission_vehicle_driving"]',
-            '[id*="mission_vehicle_at_mission"]'
-        ];
-
-        for (const selector of containerSelectors) {
-            for (const el of document.querySelectorAll(selector)) {
-                if (containerHasDispatchedVehicles(el)) return true;
-            }
-        }
-
-        // 3. Komunikat wysłania. Nie musi być aktualnie widoczny w viewportcie.
-        for (const el of document.querySelectorAll('.alert-success,.alert-info,.alert')) {
-            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-
-            if (
-                /pomyślnie wysłano|pomyslnie wyslano/i.test(text) ||
-                /wysłano.*(?:pojazd|jednostk)|wyslano.*(?:pojazd|jednostk)/i.test(text)
-            ) {
-                return true;
-            }
-        }
-
-        // 4. Paski realizacji wymaganej wody/piany są sygnałem, że jednostki
-        // już pracują przy misji. Również bez wymogu bycia w viewportcie.
-        for (const el of document.querySelectorAll('.progress, .progress-bar')) {
-            const parentText = (el.parentElement?.parentElement?.innerText || el.parentElement?.innerText || '')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-            if (/Potrzebna\s+(?:woda|piana)|Potrzeba:\s*[\d\s.]+\s*l/i.test(parentText)) {
-                return true;
-            }
-        }
-
         return false;
     }
 
@@ -2439,6 +2401,90 @@
         return { categoryId, aao: match };
     }
 
+    function categoryIdFromControl(control) {
+        if (!control) return null;
+        const raw = String(
+            control.getAttribute('href') ||
+            control.getAttribute('data-target') ||
+            control.getAttribute('data-bs-target') ||
+            ''
+        );
+        const m = raw.match(/aao_category_([^#?&\s]+)/i);
+        return m ? m[1] : null;
+    }
+
+    async function apiAAOForAZR(targetName, categoryId) {
+        const wanted = exactMissionNameKey(targetName);
+        if (!wanted) return null;
+
+        const aaos = await loadAAOsForAutoSelect(false);
+        return (Array.isArray(aaos) ? aaos : []).find(aao => {
+            const caption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
+            if (exactMissionNameKey(caption) !== wanted) return false;
+            if (categoryId == null) return true;
+            const cat = aao?.aao_category_id ?? aao?.category_id ?? aao?.aaoCategoryId;
+            return String(cat ?? '') === String(categoryId);
+        }) || null;
+    }
+
+    function findAAOSearchInput(group) {
+        const roots = [group, document].filter(Boolean);
+        for (const root of roots) {
+            const selectors = [
+                'input.search_input',
+                'input.aao_search',
+                'input[id*="aao"][type="search"]',
+                'input[id*="aao"][type="text"]'
+            ];
+            for (const selector of selectors) {
+                try {
+                    const el = root.querySelector(selector);
+                    if (el) return el;
+                } catch {}
+            }
+        }
+        return null;
+    }
+
+    function setAAOSearch(group, value) {
+        const input = findAAOSearchInput(group);
+        if (!input) return false;
+        input.value = String(value || '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('keyup', { bubbles: true }));
+        return true;
+    }
+
+    async function waitUntilAZRIsActive(control, timeoutMs = 1800) {
+        const until = Date.now() + timeoutMs;
+        while (Date.now() < until) {
+            if (categoryControlIsActive(control)) return true;
+            await waitMs(60);
+        }
+        return categoryControlIsActive(control);
+    }
+
+    async function waitForAAOAfterAZRSwitch(group, control, targetName, aaoId = null) {
+        // Najpierw czekamy na aktywację/załadowanie własnej kategorii.
+        await waitUntilAZRIsActive(control, 1800);
+
+        // Wyczyść poprzedni filtr, bo mógł ukrywać docelową ZR po zmianie misji.
+        setAAOSearch(group, '');
+
+        for (let i = 0; i < 35; i++) {
+            let target = findAAOInActiveAZR(group, control, targetName);
+            if (!target && aaoId != null) target = findAAOButtonById(group, aaoId);
+            if (target) return target;
+
+            // Po chwili używamy wbudowanego filtra AAO. Filtr działa już na
+            // aktywnej kategorii AZR i pomaga przy bardzo długiej jednej kolumnie.
+            if (i === 8) setAAOSearch(group, targetName);
+            await waitMs(100);
+        }
+        return null;
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
@@ -2448,7 +2494,7 @@
         const missionKey = exactMissionNameKey(missionName);
         if (!missionKey) return;
 
-        // 1 sekunda po otwarciu/zmianie misji.
+        // Dokładnie 1 sekunda po wykryciu nowej misji.
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
@@ -2458,7 +2504,7 @@
             return;
         }
 
-        if (Date.now() - state.autoSelectFirstSeenAt < 900) return;
+        if (Date.now() - state.autoSelectFirstSeenAt < 950) return;
         state.autoSelectAttempts += 1;
 
         if (isMissionAlreadyRunning()) {
@@ -2469,96 +2515,79 @@
             return;
         }
 
-        const group = document.getElementById('mission-aao-group');
-        if (!group) {
-            scheduleAutoSelectRetry(250);
-            return;
-        }
-
-        if (group.dataset.orzrAutoSelectedMission === missionKey) return;
-        if (group.dataset.orzrAutoCheckedMission === missionKey) return;
+        const group = document.getElementById('mission-aao-group') || document.body;
+        if (!group) return;
+        if (group.dataset?.orzrAutoSelectedMission === missionKey) return;
 
         state.autoSelectBusy = true;
 
         try {
             const targetName = await autoSelectTargetName(missionName);
-            const targetKey = exactMissionNameKey(targetName);
-            if (!targetKey) return;
+            if (!exactMissionNameKey(targetName)) return;
 
-            // v0.38: własna kategoria AZR musi zostać naprawdę aktywowana.
-            // Operator renderuje własne kategorie jako zakładki a[href*="aao_category_"].
-            // Dopiero po pokazaniu AZR wyszukujemy ZR w jej aktywnej zawartości.
-            let categoryId = await loadAZRCategoryId(false);
-            let control = findAZRCategoryControl(group, categoryId);
-
-            if (!control) {
-                control = findAZRCategoryControl(group, null) || findAZRControlDirect(group);
-            }
+            // Własna kategoria jest identyfikowana przede wszystkim po zakładce
+            // a[href*="aao_category_"] o dokładnym tekście AZR.
+            let apiCategoryId = await loadAZRCategoryId(false);
+            let control = findAZRCategoryControl(group, apiCategoryId) ||
+                          findAZRCategoryControl(group, null) ||
+                          findAZRControlDirect(group);
 
             if (!control) {
-                log('Auto-wybór: nie znaleziono zakładki własnej kategorii AZR.');
-                if (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6) {
-                    categoryId = await loadAZRCategoryId(true);
-                }
-                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(400);
+                log('Auto-wybór: nie znaleziono własnej zakładki AZR.');
+                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(350);
                 return;
             }
 
-            const switched = showAZRCategory(control);
-            if (switched) await waitMs(180);
+            const domCategoryId = categoryIdFromControl(control);
+            const categoryId = domCategoryId ?? apiCategoryId;
 
-            let target = findAAOInActiveAZR(group, control, targetName);
-
-            // Fallback po API, ale dopiero po aktywowaniu AZR.
-            if (!target && categoryId != null) {
-                let { aao } = await findTargetAAOInCustomAZR(targetName);
-
-                if (!aao && (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6)) {
-                    await loadAAOsForAutoSelect(true);
-                    ({ aao } = await findTargetAAOInCustomAZR(targetName));
-                }
-
-                const aaoId = aao?.id ?? aao?.aao_id;
-                if (aaoId != null) {
-                    const byId = findAAOButtonById(group, aaoId);
-                    if (byId && isRenderedInActiveCategory(byId)) target = byId;
-                }
+            // Najpierw ustalamy ID docelowej ZR przez API. Dzięki temu nawet gdy
+            // tekst przycisku jest opakowany ikonami, możemy znaleźć #aao_<ID>.
+            let apiAAO = await apiAAOForAZR(targetName, categoryId);
+            if (!apiAAO && (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6)) {
+                await loadAAOsForAutoSelect(true);
+                apiAAO = await apiAAOForAZR(targetName, categoryId);
             }
+            const aaoId = apiAAO?.id ?? apiAAO?.aao_id ?? null;
+
+            // Mechanizm identyczny z klasycznym LSS: aktywacja własnej kategorii
+            // przez Bootstrap tab('show'), a potem wyszukanie aao_btn / #aao_ID.
+            showAZRCategory(control);
+            await waitMs(120);
+
+            const target = await waitForAAOAfterAZRSwitch(group, control, targetName, aaoId);
 
             if (!target) {
-                if (state.autoSelectAttempts < 12) {
-                    scheduleAutoSelectRetry(350);
-                    return;
-                }
-
-                group.dataset.orzrAutoCheckedMission = missionKey;
-                log(`Brak widocznej ZR „${targetName}” w aktywnej kategorii AZR.`);
+                log(`Auto-wybór: AZR jest znaleziona, ale nie znaleziono ZR „${targetName}”.`);
+                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(350);
                 return;
             }
 
             if (!isAAOAvailable(target)) {
-                log(`ZR „${targetName}” w AZR istnieje, ale jest oznaczona jako niedostępna.`);
-                group.dataset.orzrAutoCheckedMission = missionKey;
+                log(`ZR „${targetName}” w AZR jest niedostępna.`);
                 return;
             }
 
+            // Ostatnia kontrola tuż przed kliknięciem.
             if (isMissionAlreadyRunning()) {
                 removeAutoSelectStatus();
                 return;
             }
 
-            group.dataset.orzrAutoSelectedMission = missionKey;
+            if (group.dataset) group.dataset.orzrAutoSelectedMission = missionKey;
 
             ensureAutoSelectStyle();
             target.classList.add('orzr-auto-selected-aao');
-            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z własnej kategorii AZR`;
-            showAutoSelectStatus(targetName);
+            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
 
+            // Native click obsługuje zarówno a.aao_btn jak i starsze .aao.
             target.click();
-            log(`Automatycznie wybrano ZR „${targetName}” z własnej kategorii AZR.`);
+            setTimeout(() => setAAOSearch(group, ''), 250);
+            showAutoSelectStatus(targetName);
+            log(`Automatycznie wybrano ZR „${targetName}” z AZR.`);
         } catch (error) {
-            console.warn(TAG, 'Automatyczny wybór ZR z własnej kategorii AZR nie powiódł się:', error);
-            if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
+            console.warn(TAG, 'Automatyczny wybór ZR z AZR nie powiódł się:', error);
+            if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(450);
         } finally {
             state.autoSelectBusy = false;
         }
