@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.6
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie oraz masowe ustawianie docelowej kolumny i kategorii.
+// @version      0.7
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, ustawienia zbiorcze oraz kopiowanie wszystkich widocznych ZR.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.6';
+    const VERSION = '0.7';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -278,6 +278,79 @@
         for (const aao of rows) setCopyTarget(aao.id, 'aao_category_id', categoryId);
         renderCopyTable();
         setStatus(`Ustawiono docelową kategorię „${getCategoryName(categoryId)}” dla ${rows.length} widocznych ZR.`, 'success');
+    }
+
+    async function copyAllVisible() {
+        if (state.copying) return;
+
+        // Robimy migawkę listy przed startem, aby nowo utworzone kopie
+        // nie zostały ponownie skopiowane w tym samym przebiegu.
+        const rows = getVisibleCopyRows().map(aao => ({
+            id: aao.id,
+            caption: aao.caption,
+            target: { ...getCopyTarget(aao.id) }
+        }));
+
+        if (!rows.length) {
+            setStatus('Brak widocznych ZR do skopiowania.', 'warning');
+            return;
+        }
+
+        if (!confirm(`Skopiować wszystkie aktualnie widoczne ZR (${rows.length})?`)) return;
+
+        const button = document.getElementById('orzr-copy-all-visible');
+        const oldText = button?.textContent;
+        state.copying = true;
+        if (button) button.textContent = `Kopiuję 0/${rows.length}…`;
+        updateCopyButtons();
+
+        let ok = 0;
+        let failed = 0;
+
+        try {
+            for (let i = 0; i < rows.length; i++) {
+                const item = rows[i];
+                const target = {
+                    column: Math.max(1, Number.parseInt(item.target.column, 10) || 1),
+                    aao_category_id: item.target.aao_category_id == null
+                        ? null : Number(item.target.aao_category_id)
+                };
+
+                if (button) button.textContent = `Kopiuję ${i + 1}/${rows.length}…`;
+                setStatus(
+                    `Kopiuję ${i + 1}/${rows.length}: „${item.caption}” → kolumna ${target.column}, ${getCategoryName(target.aao_category_id)}…`,
+                    'info'
+                );
+
+                try {
+                    await copyViaNativeEditor(item.id, target);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd kopiowania ZR ${item.id}`, e);
+                    failed++;
+                }
+            }
+
+            // Po całej operacji odświeżamy listę z API, żeby nowe kopie
+            // od razu pojawiły się w Menedżerze.
+            try {
+                state.aaos = await fetchAAOListNormalized();
+            } catch (e) {
+                console.warn(TAG, 'Nie udało się odświeżyć listy ZR po kopiowaniu zbiorczym:', e);
+            }
+
+            renderCopyTable();
+            setStatus(
+                failed
+                    ? `Kopiowanie zakończone. Skopiowano: ${ok}. Błędy: ${failed}.`
+                    : `Skopiowano wszystkie widoczne ZR: ${ok}.`,
+                failed ? 'warning' : 'success'
+            );
+        } finally {
+            state.copying = false;
+            if (button && document.contains(button)) button.textContent = oldText || '⧉ Kopiuj wszystkie';
+            updateCopyButtons();
+        }
     }
 
     function renderCopyTable() {
@@ -688,10 +761,11 @@
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
-.orzr-copy-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.orzr-copy-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
 .orzr-copy-bulk-group strong{white-space:nowrap}
 #orzr-copy-all-column{width:95px}
-#orzr-copy-all-category{min-width:220px;max-width:300px}
+#orzr-copy-all-category{width:300px;min-width:220px;max-width:300px}
+#orzr-copy-all-visible{white-space:nowrap}
 .orzr-copy-bulk-note{font-size:12px;color:#666;flex-basis:100%}
 .orzr-status{margin:8px 12px 0;padding:8px 10px;border-radius:4px;font-size:13px}
 .orzr-status-info{background:#d9edf7;border:1px solid #bce8f1}
@@ -821,7 +895,10 @@
             </select>
             <button id="orzr-copy-all-category-apply" type="button" class="btn btn-primary btn-sm orzr-copy-bulk-apply">Ustaw dla wszystkich</button>
         </div>
-        <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów.</div>
+        <div class="orzr-copy-bulk-group">
+            <button id="orzr-copy-all-visible" type="button" class="btn btn-success btn-sm orzr-copy-bulk-apply">⧉ Kopiuj wszystkie</button>
+        </div>
+        <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów. „Kopiuj wszystkie” kopiuje dokładnie tę widoczną listę.</div>
     </div>
     <div id="orzr-stats">
         Wszystkich ZR: <strong id="orzr-stat-total">0</strong>
@@ -877,6 +954,7 @@
         document.getElementById('orzr-save-all').addEventListener('click', saveAllChanged);
         document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
+        document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();
         });

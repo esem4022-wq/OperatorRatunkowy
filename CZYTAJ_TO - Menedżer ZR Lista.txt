@@ -15,6 +15,16 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.7 — 20.08.2026
+-----------------
+- W zakładce „Kopiuj” przycisk „Ustaw dla wszystkich” dla kategorii został ustawiony bezpośrednio za listą kategorii, tak samo jak przy docelowym numerze kolumny.
+- Dodano przycisk „Kopiuj wszystkie”.
+- „Kopiuj wszystkie” kopiuje wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów.
+- Każdy widoczny ZR jest kopiowany do indywidualnie ustawionego docelowego numeru kolumny i kategorii.
+- Przed masowym kopiowaniem wyświetlane jest potwierdzenie z liczbą ZR do skopiowania.
+- Podczas kopiowania wyświetlany jest postęp, a po zakończeniu lista ZR jest odświeżana.
+- Zachowano obsługę GitHuba, stałą nazwę pliku userscriptu i pełną historię wersji.
+
 v0.6 — 20.08.2026
 -----------------
 - W filtrze kategorii dodano pozycję „Wszystkie z kategorią”, która pokazuje tylko ZR mające przypisaną dowolną kategorię.
