@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.9
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie nazw, duplikaty i eksport CSV.
+// @version      0.10
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.9';
+    const VERSION = '0.10';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -37,7 +37,9 @@
         copyTargets: new Map(),
         copying: false,
         cleanupResults: [],
-        cleanupMode: null
+        cleanupMode: null,
+        cleanupSelected: new Set(),
+        deleting: false
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -104,6 +106,7 @@
         state.copyTargets.clear();
         state.cleanupResults = [];
         state.cleanupMode = null;
+        state.cleanupSelected.clear();
         populateCategoryFilter();
         renderActiveTable();
         updateStats();
@@ -533,6 +536,7 @@
         );
         state.cleanupResults = results;
         state.cleanupMode = `duplicates:${scope}`;
+        state.cleanupSelected.clear();
         renderCleanupTable();
         const scopeLabel = duplicateScopeLabel(scope);
         setStatus(
@@ -573,6 +577,7 @@
 
         state.cleanupResults = results;
         state.cleanupMode = 'trailing';
+        state.cleanupSelected.clear();
         renderCleanupTable();
         setStatus(
             results.length
@@ -596,6 +601,7 @@
         if (!targets.length) {
             state.cleanupResults = [];
             state.cleanupMode = 'trailing';
+            state.cleanupSelected.clear();
             renderCleanupTable();
             setStatus('Nie znaleziono białych znaków ani spacji na końcu nazw ZR.', 'success');
             return;
@@ -648,6 +654,7 @@
                 .sort((a, b) => a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) || a.aao.id - b.aao.id);
             state.cleanupResults = remaining;
             state.cleanupMode = 'trailing';
+            state.cleanupSelected.clear();
             renderCleanupTable();
             setStatus(
                 failed
@@ -704,6 +711,67 @@
         setStatus(`Wyeksportowano ${rows.length} ZR do CSV.`, 'success');
     }
 
+    function cleanupVisibleIds() {
+        return state.cleanupResults.map(item => Number(item.aao.id)).filter(Number.isFinite);
+    }
+
+    function updateCleanupSelectionUI() {
+        const ids = cleanupVisibleIds();
+        for (const id of [...state.cleanupSelected]) {
+            if (!ids.includes(id)) state.cleanupSelected.delete(id);
+        }
+
+        const selectedCount = ids.filter(id => state.cleanupSelected.has(id)).length;
+        const deleteSelected = document.getElementById('orzr-delete-selected');
+        if (deleteSelected) {
+            deleteSelected.disabled = state.deleting || selectedCount === 0;
+            deleteSelected.textContent = state.deleting
+                ? 'Usuwanie…'
+                : `🗑 Usuń zaznaczone (${selectedCount})`;
+        }
+
+        document.querySelectorAll('.orzr-delete-row').forEach(btn => {
+            btn.disabled = state.deleting;
+        });
+        document.querySelectorAll('.orzr-cleanup-select').forEach(cb => {
+            cb.disabled = state.deleting;
+        });
+
+        const all = document.getElementById('orzr-cleanup-select-all');
+        if (all) {
+            all.disabled = state.deleting || ids.length === 0;
+            all.checked = ids.length > 0 && selectedCount === ids.length;
+            all.indeterminate = selectedCount > 0 && selectedCount < ids.length;
+        }
+    }
+
+    function bindCleanupEvents() {
+        document.querySelectorAll('.orzr-cleanup-select').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const id = Number(cb.dataset.id);
+                if (cb.checked) state.cleanupSelected.add(id);
+                else state.cleanupSelected.delete(id);
+                updateCleanupSelectionUI();
+            });
+        });
+
+        document.querySelectorAll('.orzr-delete-row').forEach(btn => {
+            btn.addEventListener('click', () => deleteOneCleanup(Number(btn.dataset.id), btn));
+        });
+
+        const all = document.getElementById('orzr-cleanup-select-all');
+        if (all) {
+            all.onchange = () => {
+                const ids = cleanupVisibleIds();
+                for (const id of ids) {
+                    if (all.checked) state.cleanupSelected.add(id);
+                    else state.cleanupSelected.delete(id);
+                }
+                renderCleanupTable();
+            };
+        }
+    }
+
     function renderCleanupTable() {
         const tbody = document.getElementById('orzr-cleanup-body');
         if (!tbody) return;
@@ -716,6 +784,11 @@
             else empty.textContent = 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.';
         }
 
+        const resultIds = new Set(cleanupVisibleIds());
+        for (const id of [...state.cleanupSelected]) {
+            if (!resultIds.has(id)) state.cleanupSelected.delete(id);
+        }
+
         for (const item of state.cleanupResults) {
             const aao = item.aao;
             const tr = document.createElement('tr');
@@ -724,15 +797,191 @@
                 ? visibleNameWithTrailingMarks(aao.caption)
                 : escapeHTML(aao.caption);
             tr.innerHTML = `
+                <td class="orzr-cleanup-check"><input type="checkbox" class="orzr-cleanup-select" data-id="${aao.id}" ${state.cleanupSelected.has(aao.id) ? 'checked' : ''}></td>
                 <td class="orzr-id">${aao.id}</td>
                 <td class="orzr-cleanup-name">${name}</td>
                 <td>${Number(aao.column) || 1}</td>
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
                 <td>${escapeHTML(item.issue)}</td>
-                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a></td>`;
+                <td class="orzr-actions">
+                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
+                    <button type="button" class="btn btn-danger btn-sm orzr-delete-row" data-id="${aao.id}">🗑 Usuń</button>
+                </td>`;
             tbody.appendChild(tr);
         }
+        bindCleanupEvents();
+        updateCleanupSelectionUI();
         updateStats();
+    }
+
+    async function submitDeleteRequestFromDocument(id, doc) {
+        const expectedPath = `/aaos/${id}`;
+        const forms = [...doc.querySelectorAll('form')];
+        const deleteForm = forms.find(form => {
+            let path = '';
+            try { path = new URL(form.getAttribute('action') || form.action || '', location.origin).pathname; } catch (_) {}
+            const override = form.querySelector('input[name="_method"]')?.value || '';
+            const text = `${form.textContent || ''} ${form.querySelector('input[type="submit"]')?.value || ''}`;
+            return path === expectedPath && (/delete/i.test(override) || /usuń|delete/i.test(text));
+        });
+
+        if (deleteForm) {
+            const action = deleteForm.getAttribute('action') || deleteForm.action || expectedPath;
+            const method = (deleteForm.getAttribute('method') || 'post').toUpperCase();
+            const body = new FormData(deleteForm);
+            if (!body.get('_method') && method === 'POST') body.set('_method', 'delete');
+            const response = await fetch(action, {
+                method,
+                body,
+                credentials: 'same-origin',
+                redirect: 'follow',
+                headers: { Accept: 'text/html,application/xhtml+xml' }
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status} podczas usuwania ZR.`);
+            return;
+        }
+
+        const deleteLink = [...doc.querySelectorAll('a[href]')].find(link => {
+            let path = '';
+            try { path = new URL(link.href, location.origin).pathname; } catch (_) {}
+            const method = link.getAttribute('data-method') || link.getAttribute('data-turbo-method') || '';
+            return path === expectedPath && (/delete/i.test(method) || /usuń|delete/i.test(link.textContent || ''));
+        });
+
+        const href = deleteLink?.href || expectedPath;
+        const token = doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+            || document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+            || '';
+        const params = new URLSearchParams();
+        params.set('_method', 'delete');
+        if (token) params.set('authenticity_token', token);
+        const headers = {
+            Accept: 'text/html,application/xhtml+xml',
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+        };
+        if (token) headers['X-CSRF-Token'] = token;
+        const response = await fetch(href, {
+            method: 'POST',
+            body: params.toString(),
+            credentials: 'same-origin',
+            redirect: 'follow',
+            headers
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status} podczas usuwania ZR.`);
+    }
+
+    async function deleteViaNativeEditor(id) {
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:10px;height:10px;border:0;opacity:0;pointer-events:none';
+        frame.src = `/aaos/${id}/edit`;
+        document.body.appendChild(frame);
+        try {
+            await waitForFrameLoad(frame);
+            const doc = frame.contentDocument;
+            if (!doc) throw new Error('Nie można otworzyć formularza edycji ZR.');
+            await submitDeleteRequestFromDocument(id, doc);
+
+            // Sprawdzamy na liście API, czy ZR rzeczywiście zniknął.
+            for (let attempt = 0; attempt < 6; attempt++) {
+                if (attempt) await new Promise(r => setTimeout(r, 180));
+                const list = await fetchAAOListNormalized();
+                if (!list.some(aao => aao.id === id)) return list;
+            }
+            throw new Error('ZR nadal znajduje się na liście po próbie usunięcia.');
+        } finally {
+            setTimeout(() => frame.remove(), 50);
+        }
+    }
+
+    function refreshCleanupResultsAfterDelete() {
+        const mode = state.cleanupMode;
+        if (String(mode).startsWith('duplicates:')) {
+            const scope = String(mode).split(':')[1] || 'all';
+            findDuplicateNames(scope);
+            return;
+        }
+        if (mode === 'trailing') {
+            findTrailingSpaces();
+            return;
+        }
+        state.cleanupResults = state.cleanupResults.filter(item => state.aaos.some(aao => aao.id === item.aao.id));
+        state.cleanupSelected.clear();
+        renderCleanupTable();
+    }
+
+    async function deleteOneCleanup(id, button = null) {
+        if (state.deleting) return;
+        const aao = state.aaos.find(x => x.id === id);
+        if (!aao) return;
+        if (!confirm(`Usunąć ZR „${aao.caption}” (ID ${aao.id})?\n\nTej operacji nie można cofnąć.`)) return;
+
+        state.deleting = true;
+        const oldText = button?.textContent;
+        if (button) button.textContent = 'Usuwam…';
+        updateCleanupSelectionUI();
+        try {
+            setStatus(`Usuwam ZR „${aao.caption}”…`, 'info');
+            state.aaos = await deleteViaNativeEditor(id);
+            state.dirty.delete(id);
+            state.copyTargets.delete(id);
+            state.cleanupSelected.delete(id);
+            refreshCleanupResultsAfterDelete();
+            setStatus(`Usunięto ZR „${aao.caption}” (ID ${id}).`, 'success');
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd usuwania ZR ${id}: ${e.message || e}`, 'danger');
+        } finally {
+            state.deleting = false;
+            if (button && document.contains(button)) button.textContent = oldText || '🗑 Usuń';
+            updateCleanupSelectionUI();
+            updateStats();
+        }
+    }
+
+    async function deleteSelectedCleanup() {
+        if (state.deleting) return;
+        const ids = cleanupVisibleIds().filter(id => state.cleanupSelected.has(id));
+        if (!ids.length) {
+            setStatus('Nie zaznaczono żadnych ZR do usunięcia.', 'warning');
+            return;
+        }
+        if (!confirm(`Usunąć zaznaczone ZR (${ids.length})?\n\nTej operacji nie można cofnąć.`)) return;
+
+        state.deleting = true;
+        updateCleanupSelectionUI();
+        let ok = 0;
+        let failed = 0;
+        const failedIds = [];
+        try {
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i];
+                const aao = state.aaos.find(x => x.id === id);
+                setStatus(`Usuwam ${i + 1}/${ids.length}: „${aao?.caption ?? `ID ${id}`}”…`, 'info');
+                try {
+                    state.aaos = await deleteViaNativeEditor(id);
+                    state.dirty.delete(id);
+                    state.copyTargets.delete(id);
+                    state.cleanupSelected.delete(id);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd usuwania ZR ${id}`, e);
+                    failed++;
+                    failedIds.push(id);
+                }
+            }
+
+            refreshCleanupResultsAfterDelete();
+            setStatus(
+                failed
+                    ? `Usunięto ${ok} ZR. Błędy: ${failed}${failedIds.length ? ` (ID: ${failedIds.join(', ')})` : ''}.`
+                    : `Usunięto wszystkie zaznaczone ZR: ${ok}.`,
+                failed ? 'warning' : 'success'
+            );
+        } finally {
+            state.deleting = false;
+            updateCleanupSelectionUI();
+            updateStats();
+        }
     }
 
     async function copyOne(id, button = null) {
@@ -1075,11 +1324,13 @@
 #orzr-copy-table th:nth-child(6),#orzr-copy-table td:nth-child(6){width:155px}
 #orzr-copy-table th:nth-child(7),#orzr-copy-table td:nth-child(7){width:250px}
 #orzr-copy-table select:disabled,#orzr-copy-table input:read-only{background:#f7f7f7;color:#555;opacity:1}
-#orzr-cleanup-table th:nth-child(1),#orzr-cleanup-table td:nth-child(1){width:85px}
-#orzr-cleanup-table th:nth-child(3),#orzr-cleanup-table td:nth-child(3){width:120px}
-#orzr-cleanup-table th:nth-child(4),#orzr-cleanup-table td:nth-child(4){width:260px}
-#orzr-cleanup-table th:nth-child(5),#orzr-cleanup-table td:nth-child(5){width:260px}
-#orzr-cleanup-table th:nth-child(6),#orzr-cleanup-table td:nth-child(6){width:100px}
+#orzr-cleanup-table th:nth-child(1),#orzr-cleanup-table td:nth-child(1){width:62px;text-align:center}
+#orzr-cleanup-table th:nth-child(2),#orzr-cleanup-table td:nth-child(2){width:85px}
+#orzr-cleanup-table th:nth-child(4),#orzr-cleanup-table td:nth-child(4){width:120px}
+#orzr-cleanup-table th:nth-child(5),#orzr-cleanup-table td:nth-child(5){width:240px}
+#orzr-cleanup-table th:nth-child(6),#orzr-cleanup-table td:nth-child(6){width:240px}
+#orzr-cleanup-table th:nth-child(7),#orzr-cleanup-table td:nth-child(7){width:190px}
+.orzr-cleanup-check input{width:18px;height:18px;cursor:pointer}
 .orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
 .orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
 #orzr-cleanup-empty{padding:30px;text-align:center;color:#777}
@@ -1208,6 +1459,9 @@
             <button id="orzr-remove-trailing-spaces" type="button" class="btn btn-danger">Usuń białe znaki i spacje</button>
         </div>
         <div class="orzr-cleanup-group">
+            <button id="orzr-delete-selected" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
+        </div>
+        <div class="orzr-cleanup-group">
             <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
         </div>
     </div>
@@ -1231,6 +1485,7 @@
         </table>
         <table id="orzr-cleanup-table" hidden>
             <thead><tr>
+                <th><input id="orzr-cleanup-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie wyniki"></th>
                 <th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Wynik</th><th>Akcje</th>
             </tr></thead>
             <tbody id="orzr-cleanup-body"></tbody>
@@ -1278,6 +1533,7 @@
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));
         document.getElementById('orzr-find-trailing-spaces').addEventListener('click', findTrailingSpaces);
         document.getElementById('orzr-remove-trailing-spaces').addEventListener('click', removeTrailingWhitespaceFromAll);
+        document.getElementById('orzr-delete-selected').addEventListener('click', deleteSelectedCleanup);
         document.getElementById('orzr-export-csv').addEventListener('click', exportAllAAOsToCSV);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();

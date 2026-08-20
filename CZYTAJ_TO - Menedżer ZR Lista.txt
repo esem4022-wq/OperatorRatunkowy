@@ -15,6 +15,17 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.10 — 20.08.2026
+------------------
+- W zakładce „Porządkowanie” dodano przy każdym wyniku czerwony przycisk „Usuń” bezpośrednio obok przycisku „Edycja”.
+- Przed pojedynczym usunięciem wyświetlane jest potwierdzenie z nazwą i ID ZR.
+- Dodano kolumnę zaznaczania z checkboxem przy każdym wyniku porządkowania.
+- Checkbox w nagłówku tabeli zaznacza lub odznacza wszystkie aktualnie pokazane wyniki.
+- U góry zakładki dodano przycisk „Usuń zaznaczone (N)”.
+- Usuwanie zaznaczonych wymaga jednego potwierdzenia i pokazuje postęp oraz podsumowanie powodzeń/błędów.
+- Po usunięciu wyniki porządkowania są przeliczane ponownie, dzięki czemu np. pojedynczy pozostały wpis nie jest już pokazywany jako duplikat.
+- Zachowano trzy tryby wyszukiwania duplikatów, czyszczenie białych znaków, eksport CSV, GitHub i stałą nazwę userscriptu.
+
 v0.9 — 20.08.2026
 -----------------
 - W zakładce „Porządkowanie” wyszukiwanie duplikatów rozdzielono na trzy tryby.
