@@ -28,6 +28,16 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.30
+- przebudowano odczyt wymagań: skrypt nie zależy już od struktury HTML żółtej karty,
+- bieżąca karta jest odnajdywana w widocznym tekście strony po nazwie aktualnej misji i najbliższym nagłówku „Pojazdy”,
+- sekcja Pojazdy jest wycinana jako tekst i parsowana niezależnie od div/span oraz obecności nowych linii,
+- poprawiono misje takie jak „Pożar hali z transformatorem” i „Samopodpalenie”, gdzie poprzednie wersje nie znajdowały sekcji Pojazdy lub odczytywały tylko ambulans,
+- woda i piana zapisane jako „8000 Woda” / „6200 Piana gaśnicza” są pobierane z tej samej karty,
+- zachowano zakaz pobierania danych z „Może się rozwinąć w…”,
+- automatyczny wybór ZR nadal nie działa dla misji już rozpoczętej,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.29
 - przebudowano wyszukiwanie żółtej karty: punktem zaczepienia jest widoczny nagłówek „Pojazdy”, więc tytuł i lista pojazdów nie muszą być w tym samym podkontenerze HTML,
 - usunięto zbyt rygorystyczne odrzucanie poprawnych kart, które powodowało komunikat o braku bezpiecznego odczytu,
