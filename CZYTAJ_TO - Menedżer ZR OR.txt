@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.40
+Wersja: 0.41
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -23,13 +23,23 @@ NAJWAŻNIEJSZE FUNKCJE
 - maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P podczas tworzenia ZR,
 - auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`,
 - dokładnie 1 pacjent bez innych wymaganych pojazdów: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
-- tylko 1 wymagany pojazd strażacki: auto-zaznacz ZR o nazwie `Straż` z kategorii `AZR`,
+- ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
+- misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
+- misja `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
+- jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`,
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
 - automatyczne zaznaczenie istniejącej ZR, gdy jej nazwa jest identyczna z nazwą misji,
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.41
+- doprecyzowano regułę `Straż`: działa wyłącznie wtedy, gdy jedynym wymaganiem misji jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, inne pojazdy, woda lub piana wyłączają skrót i skrypt szuka normalnej ZR po nazwie misji,
+- dodano regułę: `Transport pacjenta` -> ZR `Ambulans T` w kategorii `AZR`,
+- dodano regułę: `Transport krytyczny` -> ZR `A TK` w kategorii `AZR`,
+- jeśli skrypt nie znajdzie docelowej ZR w `AZR`, czyści filtr i wraca do pierwszej kategorii `Pożary`,
+- zachowano dokładne porównywanie nazw bez rozróżniania wielkości liter, 1-sekundowe opóźnienie, blokadę przy trwającej misji, fioletowe oznaczenie i GitHub bez `userscripts/`.
+
 v0.40
 - auto-zaznaczanie: własna kategoria `AZR` jest teraz zawsze uruchamiana natywnym kliknięciem; `tab('show')` jest tylko dodatkowym wsparciem,
 - po przełączeniu na `AZR` skrypt czeka na faktyczne aktywowanie/załadowanie kategorii i obsługuje przyciski `aao_btn`,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.40
+// @version      0.41
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.40';
-    const CAPTURE_KEY = 'or_zr_capture_v040';
+    const VERSION = '0.41';
+    const CAPTURE_KEY = 'or_zr_capture_v041';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1729,7 +1729,7 @@
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji v0.38:', data);
+        log('Odczyt misji v0.41:', data);
 
         return data;
     }
@@ -2009,8 +2009,18 @@
     }
 
     async function autoSelectTargetName(missionName) {
+        const missionKey = exactMissionNameKey(missionName);
+
+        // Reguły specjalne po DOKŁADNEJ nazwie misji.
+        // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
+        if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
+        if (missionKey === exactMissionNameKey('Transport krytyczny')) return 'A TK';
+
         let vehicles = [];
         let maxPatients = 0;
+        let water = 0;
+        let foam = 0;
+        let cardText = '';
 
         // Najpewniejsze źródło: dokładny mission_help bieżącej misji.
         const helpUrl = getExactCurrentMissionHelpUrl();
@@ -2020,18 +2030,21 @@
                 const parsed = parseExactMissionHelpHtml(html);
                 vehicles = parsed?.vehicles || [];
                 maxPatients = Number.parseInt(parsed?.maxPatients, 10) || 0;
+                water = Number.parseInt(parsed?.water, 10) || 0;
+                foam = Number.parseInt(parsed?.foam, 10) || 0;
             } catch (error) {
                 console.warn(TAG, 'Nie udało się sprawdzić reguł skrótowych auto-wyboru:', error);
             }
         }
 
-        // Fallback na tekst aktualnej karty, jeżeli help nie podał danych.
-        if (!maxPatients && !vehicles.length) {
-            const cardText = findCurrentMissionCardText(missionName);
-            if (cardText) {
-                vehicles = extractVehiclesFromCardText(cardText);
-                maxPatients = extractMaxPatientsFromText(cardText) || 0;
-            }
+        // Tekst aktualnej karty służy jako fallback i dodatkowe zabezpieczenie
+        // dla reguły „Straż”, żeby nie pominąć pacjentów/wody/piany.
+        cardText = findCurrentMissionCardText(missionName) || '';
+        if (cardText) {
+            if (!vehicles.length) vehicles = extractVehiclesFromCardText(cardText);
+            if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
+            if (!water) water = extractResourceFromText(cardText, 'water') || 0;
+            if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
         }
 
         const requiredVehicles = Array.isArray(vehicles)
@@ -2041,11 +2054,22 @@
         // Dokładnie 1 pacjent i brak wymaganych pojazdów -> gotowa ZR „Ambulans”.
         if (maxPatients === 1 && requiredVehicles.length === 0) return 'Ambulans';
 
-        // Tylko jeden wymagany pojazd i jest nim 1 samochód/pojazd strażacki
-        // -> gotowa ZR „Straż”. Reguła dotyczy wyłącznie auto-zaznaczania.
-        if (requiredVehicles.length === 1 && isSingleFireVehicleRequirement(requiredVehicles[0])) {
-            return 'Straż';
-        }
+        // ZR „Straż” TYLKO gdy jedynym wymaganiem misji jest dokładnie 1
+        // samochód/wóz pożarniczy. Jeśli są pacjenci, woda, piana lub jakikolwiek
+        // inny wymagany pojazd, wracamy do normalnego wyszukiwania po nazwie misji.
+        const onlyOneFireVehicle =
+            requiredVehicles.length === 1 &&
+            isSingleFireVehicleRequirement(requiredVehicles[0]);
+
+        const patientSectionPresent = /\bPacjenci\b/i.test(cardText) && maxPatients > 0;
+        const hasAnythingElse =
+            maxPatients > 0 ||
+            water > 0 ||
+            foam > 0 ||
+            patientSectionPresent ||
+            requiredVehicles.length !== 1;
+
+        if (onlyOneFireVehicle && !hasAnythingElse) return 'Straż';
 
         return missionName;
     }
@@ -2485,6 +2509,51 @@
         return null;
     }
 
+    function findPozaryCategoryControl(group) {
+        const wanted = exactMissionNameKey('Pożary');
+        const roots = [group, document].filter(Boolean);
+        const selectors = [
+            '.nav-tabs a', '.nav-tabs button',
+            '.nav-pills a', '.nav-pills button',
+            '[role="tab"]',
+            'a[data-toggle="tab"]', 'button[data-toggle="tab"]',
+            'a[data-bs-toggle="tab"]', 'button[data-bs-toggle="tab"]'
+        ];
+
+        for (const root of roots) {
+            for (const selector of selectors) {
+                let elements = [];
+                try { elements = [...root.querySelectorAll(selector)]; } catch {}
+                for (const el of elements) {
+                    if (exactMissionNameKey(el.textContent || '') === wanted) return el;
+                }
+            }
+        }
+        return null;
+    }
+
+    function returnToPozaryCategory(group) {
+        // Jeśli ZR nie istnieje w AZR, interfejs ma zostać na pierwszej
+        // kategorii „Pożary”, a nie na technicznej kategorii AZR.
+        setAAOSearch(group, '');
+        const control = findPozaryCategoryControl(group);
+        if (!control) {
+            log('Nie znaleziono zakładki Pożary do przywrócenia po braku ZR w AZR.');
+            return false;
+        }
+
+        try {
+            control.click();
+        } catch {}
+
+        try {
+            const jq = window.jQuery || window.$;
+            if (jq && typeof jq(control).tab === 'function') jq(control).tab('show');
+        } catch {}
+
+        return true;
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
@@ -2534,6 +2603,7 @@
 
             if (!control) {
                 log('Auto-wybór: nie znaleziono własnej zakładki AZR.');
+                returnToPozaryCategory(group);
                 if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(350);
                 return;
             }
@@ -2558,8 +2628,12 @@
             const target = await waitForAAOAfterAZRSwitch(group, control, targetName, aaoId);
 
             if (!target) {
-                log(`Auto-wybór: AZR jest znaleziona, ale nie znaleziono ZR „${targetName}”.`);
-                if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(350);
+                log(`Auto-wybór: AZR jest znaleziona, ale nie znaleziono ZR „${targetName}”. Wracam do Pożary.`);
+                returnToPozaryCategory(group);
+                // Brak pasującej ZR w AZR traktujemy jako wynik końcowy dla tej misji.
+                // Nie przełączamy ponownie AZR przy kolejnych mutacjach DOM.
+                if (group.dataset) group.dataset.orzrAutoSelectedMission = missionKey;
+                removeAutoSelectStatus();
                 return;
             }
 
