@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.7
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, ustawienia zbiorcze oraz kopiowanie wszystkich widocznych ZR.
+// @version      0.8
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie nazw i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.7';
+    const VERSION = '0.8';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -35,7 +35,9 @@
         sort: 'caption-asc',
         activeTab: 'list',
         copyTargets: new Map(),
-        copying: false
+        copying: false,
+        cleanupResults: [],
+        cleanupMode: null
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -100,6 +102,8 @@
 
         state.dirty.clear();
         state.copyTargets.clear();
+        state.cleanupResults = [];
+        state.cleanupMode = null;
         populateCategoryFilter();
         renderActiveTable();
         updateStats();
@@ -472,6 +476,158 @@
         return null;
     }
 
+
+    function duplicateNameKey(caption) {
+        // Przy duplikatach nie usuwamy spacji z końca nazwy — do tego służy
+        // osobne wyszukiwanie. Ignorujemy jedynie wielkość liter.
+        return String(caption ?? '').toLocaleLowerCase('pl-PL');
+    }
+
+    function findDuplicateNames() {
+        const groups = new Map();
+        for (const aao of state.aaos) {
+            if (!String(aao.caption ?? '').length) continue;
+            const key = duplicateNameKey(aao.caption);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(aao);
+        }
+
+        const results = [];
+        for (const group of groups.values()) {
+            if (group.length < 2) continue;
+            const sorted = [...group].sort((a, b) => a.id - b.id);
+            for (const aao of sorted) {
+                results.push({
+                    aao,
+                    issue: `Duplikat nazwy — ${group.length} ZR`,
+                    groupSize: group.length
+                });
+            }
+        }
+
+        results.sort((a, b) =>
+            a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
+            a.aao.id - b.aao.id
+        );
+        state.cleanupResults = results;
+        state.cleanupMode = 'duplicates';
+        renderCleanupTable();
+        setStatus(
+            results.length
+                ? `Znaleziono ${results.length} ZR należących do grup duplikatów nazw.`
+                : 'Nie znaleziono duplikatów nazw ZR.',
+            results.length ? 'warning' : 'success'
+        );
+    }
+
+    function trailingWhitespaceCount(text) {
+        const match = String(text ?? '').match(/[\s\u00a0]+$/u);
+        return match ? [...match[0]].length : 0;
+    }
+
+    function visibleNameWithTrailingMarks(text) {
+        const raw = String(text ?? '');
+        const match = raw.match(/[\s\u00a0]+$/u);
+        if (!match) return escapeHTML(raw);
+        const body = raw.slice(0, raw.length - match[0].length);
+        const marks = [...match[0]].map(ch => ch === '\u00a0' ? '⍽' : ch === '\t' ? '⇥' : '␠').join('');
+        return `${escapeHTML(body)}<span class="orzr-whitespace-mark">${escapeHTML(marks)}</span>`;
+    }
+
+    function findTrailingSpaces() {
+        const results = state.aaos
+            .map(aao => ({ aao, count: trailingWhitespaceCount(aao.caption) }))
+            .filter(x => x.count > 0)
+            .map(x => ({
+                aao: x.aao,
+                issue: `Białe znaki na końcu nazwy: ${x.count}`,
+                trailingCount: x.count
+            }))
+            .sort((a, b) =>
+                a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
+                a.aao.id - b.aao.id
+            );
+
+        state.cleanupResults = results;
+        state.cleanupMode = 'trailing';
+        renderCleanupTable();
+        setStatus(
+            results.length
+                ? `Znaleziono ${results.length} ZR ze spacją lub innym białym znakiem na końcu nazwy.`
+                : 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.',
+            results.length ? 'warning' : 'success'
+        );
+    }
+
+    function csvCell(value) {
+        const text = String(value ?? '').replace(/\r?\n/g, ' ');
+        return `"${text.replaceAll('"', '""')}"`;
+    }
+
+    function exportAllAAOsToCSV() {
+        if (!state.aaos.length) {
+            setStatus('Brak ZR do eksportu.', 'warning');
+            return;
+        }
+
+        const rows = [...state.aaos].sort((a, b) =>
+            a.caption.localeCompare(b.caption, 'pl', { numeric: true, sensitivity: 'base' }) || a.id - b.id
+        );
+        const lines = [
+            ['ID', 'Nazwa ZR', 'Nr kolumny', 'Kategoria', 'ID kategorii'].map(csvCell).join(';'),
+            ...rows.map(aao => [
+                aao.id,
+                aao.caption,
+                aao.column,
+                getCategoryName(aao.aao_category_id),
+                aao.aao_category_id == null ? '' : aao.aao_category_id
+            ].map(csvCell).join(';'))
+        ];
+        const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const d = new Date();
+        const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        link.href = url;
+        link.download = `menedzer-zr-lista-${date}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setStatus(`Wyeksportowano ${rows.length} ZR do CSV.`, 'success');
+    }
+
+    function renderCleanupTable() {
+        const tbody = document.getElementById('orzr-cleanup-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        const empty = document.getElementById('orzr-cleanup-empty');
+        if (empty) {
+            empty.hidden = state.cleanupResults.length > 0;
+            if (!state.cleanupMode) empty.textContent = 'Wybierz jedną z operacji porządkowania powyżej.';
+            else if (state.cleanupMode === 'duplicates') empty.textContent = 'Nie znaleziono duplikatów nazw ZR.';
+            else empty.textContent = 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.';
+        }
+
+        for (const item of state.cleanupResults) {
+            const aao = item.aao;
+            const tr = document.createElement('tr');
+            tr.dataset.zrId = aao.id;
+            const name = state.cleanupMode === 'trailing'
+                ? visibleNameWithTrailingMarks(aao.caption)
+                : escapeHTML(aao.caption);
+            tr.innerHTML = `
+                <td class="orzr-id">${aao.id}</td>
+                <td class="orzr-cleanup-name">${name}</td>
+                <td>${Number(aao.column) || 1}</td>
+                <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
+                <td>${escapeHTML(item.issue)}</td>
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a></td>`;
+            tbody.appendChild(tr);
+        }
+        updateStats();
+    }
+
     async function copyOne(id, button = null) {
         if (state.copying) return;
         const source = state.aaos.find(x => x.id === id);
@@ -517,18 +673,34 @@
     function renderActiveTable() {
         const listTable = document.getElementById('orzr-table');
         const copyTable = document.getElementById('orzr-copy-table');
+        const cleanupTable = document.getElementById('orzr-cleanup-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
+        const cleanupTools = document.getElementById('orzr-cleanup-tools');
+        const toolbar = document.getElementById('orzr-toolbar');
+        const normalEmpty = document.getElementById('orzr-empty');
+        const cleanupEmpty = document.getElementById('orzr-cleanup-empty');
+        const shownLabel = document.getElementById('orzr-shown-label');
 
         const copying = state.activeTab === 'copy';
-        if (listTable) listTable.hidden = copying;
+        const cleaning = state.activeTab === 'cleanup';
+        const listing = state.activeTab === 'list';
+
+        if (listTable) listTable.hidden = !listing;
         if (copyTable) copyTable.hidden = !copying;
+        if (cleanupTable) cleanupTable.hidden = !cleaning;
         if (copyBulk) copyBulk.hidden = !copying;
-        if (saveAll) saveAll.hidden = copying;
-        if (changedStat) changedStat.hidden = copying;
+        if (cleanupTools) cleanupTools.hidden = !cleaning;
+        if (toolbar) toolbar.hidden = cleaning;
+        if (saveAll) saveAll.hidden = !listing;
+        if (changedStat) changedStat.hidden = !listing;
+        if (normalEmpty && cleaning) normalEmpty.hidden = true;
+        if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
+        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : 'Widocznych';
 
         if (copying) renderCopyTable();
+        else if (cleaning) renderCleanupTable();
         else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
@@ -537,7 +709,7 @@
     }
 
     function setActiveTab(tab) {
-        if (!['list', 'copy'].includes(tab)) return;
+        if (!['list', 'copy', 'cleanup'].includes(tab)) return;
         state.activeTab = tab;
         setStatus('', 'info');
         renderActiveTable();
@@ -556,7 +728,9 @@
         const shown = document.getElementById('orzr-stat-shown');
         const changed = document.getElementById('orzr-stat-changed');
         if (total) total.textContent = state.aaos.length;
-        if (shown) shown.textContent = sortedFilteredAAOs().length;
+        if (shown) shown.textContent = state.activeTab === 'cleanup'
+            ? state.cleanupResults.length
+            : sortedFilteredAAOs(state.activeTab).length;
         if (changed) changed.textContent = state.dirty.size;
     }
 
@@ -758,9 +932,13 @@
 #orzr-close{border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer}
 #orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 240px 230px auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
 #orzr-toolbar input,#orzr-toolbar select{width:100%}
+#orzr-toolbar[hidden]{display:none}
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
+#orzr-cleanup-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-cleanup-tools[hidden]{display:none}
+#orzr-cleanup-tools .btn{white-space:nowrap}
 .orzr-copy-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
 .orzr-copy-bulk-group strong{white-space:nowrap}
 #orzr-copy-all-column{width:95px}
@@ -773,9 +951,9 @@
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -788,6 +966,14 @@
 #orzr-copy-table th:nth-child(6),#orzr-copy-table td:nth-child(6){width:155px}
 #orzr-copy-table th:nth-child(7),#orzr-copy-table td:nth-child(7){width:250px}
 #orzr-copy-table select:disabled,#orzr-copy-table input:read-only{background:#f7f7f7;color:#555;opacity:1}
+#orzr-cleanup-table th:nth-child(1),#orzr-cleanup-table td:nth-child(1){width:85px}
+#orzr-cleanup-table th:nth-child(3),#orzr-cleanup-table td:nth-child(3){width:120px}
+#orzr-cleanup-table th:nth-child(4),#orzr-cleanup-table td:nth-child(4){width:260px}
+#orzr-cleanup-table th:nth-child(5),#orzr-cleanup-table td:nth-child(5){width:260px}
+#orzr-cleanup-table th:nth-child(6),#orzr-cleanup-table td:nth-child(6){width:100px}
+.orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
+.orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
+#orzr-cleanup-empty{padding:30px;text-align:center;color:#777}
 .orzr-copy-action{white-space:nowrap}
 .orzr-actions{white-space:nowrap}
 .orzr-actions .btn+.btn{margin-left:4px}
@@ -863,6 +1049,7 @@
     <div id="orzr-tabs">
         <button type="button" class="orzr-tab orzr-tab-active" data-tab="list">✎ Lista / edycja</button>
         <button type="button" class="orzr-tab" data-tab="copy">⧉ Kopiuj</button>
+        <button type="button" class="orzr-tab" data-tab="cleanup">🧹 Porządkowanie</button>
     </div>
     <div id="orzr-toolbar">
         <input id="orzr-search" type="search" class="form-control" placeholder="Szukaj po nazwie, kategorii, kolumnie lub ID…">
@@ -900,9 +1087,14 @@
         </div>
         <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów. „Kopiuj wszystkie” kopiuje dokładnie tę widoczną listę.</div>
     </div>
+    <div id="orzr-cleanup-tools" hidden>
+        <button id="orzr-find-duplicates" type="button" class="btn btn-warning">Wyszukaj duplikaty</button>
+        <button id="orzr-find-trailing-spaces" type="button" class="btn btn-warning">Poszukaj spacji na końcu nazwy</button>
+        <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
+    </div>
     <div id="orzr-stats">
         Wszystkich ZR: <strong id="orzr-stat-total">0</strong>
-        &nbsp;|&nbsp; Widocznych: <strong id="orzr-stat-shown">0</strong>
+        &nbsp;|&nbsp; <span id="orzr-shown-label">Widocznych</span>: <strong id="orzr-stat-shown">0</strong>
         <span id="orzr-changed-stat">&nbsp;|&nbsp; Zmienionych: <strong id="orzr-stat-changed">0</strong></span>
     </div>
     <div id="orzr-status" class="orzr-status orzr-status-info" hidden></div>
@@ -918,6 +1110,13 @@
             </tr></thead>
             <tbody id="orzr-copy-body"></tbody>
         </table>
+        <table id="orzr-cleanup-table" hidden>
+            <thead><tr>
+                <th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Wynik</th><th>Akcje</th>
+            </tr></thead>
+            <tbody id="orzr-cleanup-body"></tbody>
+        </table>
+        <div id="orzr-cleanup-empty" hidden>Wybierz jedną z operacji porządkowania powyżej.</div>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
 </div>`;
@@ -955,6 +1154,9 @@
         document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);
+        document.getElementById('orzr-find-duplicates').addEventListener('click', findDuplicateNames);
+        document.getElementById('orzr-find-trailing-spaces').addEventListener('click', findTrailingSpaces);
+        document.getElementById('orzr-export-csv').addEventListener('click', exportAllAAOsToCSV);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();
         });

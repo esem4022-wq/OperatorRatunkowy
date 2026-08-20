@@ -15,6 +15,16 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.8 — 20.08.2026
+-----------------
+- Dodano nową zakładkę „Porządkowanie”.
+- Dodano przycisk „Wyszukaj duplikaty”. Wyszukiwanie porównuje pełne nazwy ZR bez rozróżniania wielkości liter; spacje na końcu pozostają częścią nazwy i są sprawdzane osobno.
+- Wyniki duplikatów pokazują wszystkie ZR należące do grup o powtarzającej się nazwie wraz z ID, numerem kolumny, kategorią i przyciskiem przejścia do edycji.
+- Dodano przycisk „Poszukaj spacji na końcu nazwy”. Wykrywane są spacje i inne białe znaki na końcu nazwy ZR, a w wyniku są one dodatkowo oznaczone widocznymi symbolami.
+- Dodano przycisk „Eksportuj wszystkie ZR do CSV”. Eksport obejmuje wszystkie wczytane ZR niezależnie od filtrów i zawiera: ID, nazwę ZR, numer kolumny, nazwę kategorii i ID kategorii.
+- CSV jest zapisywany w UTF-8 z separatorem średnikowym, aby poprawnie otwierał się m.in. w polskim Excelu.
+- Zachowano obsługę GitHuba, stałą nazwę pliku userscriptu oraz pełną historię wersji w CZYTAJ_TO.
+
 v0.7 — 20.08.2026
 -----------------
 - W zakładce „Kopiuj” przycisk „Ustaw dla wszystkich” dla kategorii został ustawiony bezpośrednio za listą kategorii, tak samo jak przy docelowym numerze kolumny.
