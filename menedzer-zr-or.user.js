@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.25
+// @version      0.26
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.25';
-    const CAPTURE_KEY = 'or_zr_capture_v025';
+    const VERSION = '0.26';
+    const CAPTURE_KEY = 'or_zr_capture_v026';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -313,6 +313,29 @@
         if (chosen) log('Pole informacji o misji:', chosen, chosen.innerText);
 
         return chosen;
+    }
+
+    function missionInfoBlockMatchesCurrentMission(block) {
+        if (!block) return false;
+
+        const header = findOpenedMissionHeader();
+        const title = findMissionTitleElement(header);
+        const missionName = sanitizeMissionName(title?.textContent || '');
+        if (!missionName) return false;
+
+        const text = (block.innerText || block.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Nie wolno używać kontenera obejmującego listę dostępnych jednostek.
+        if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(text)) {
+            return false;
+        }
+
+        // Żółta karta bieżącej misji zawiera jej nazwę. To zabezpiecza przed
+        // przypadkowym odczytem innego panelu lub misji rozwojowej.
+        return normalize(text).includes(normalize(missionName));
     }
 
     function sanitizeMissionName(value) {
@@ -626,16 +649,13 @@
     }
 
     function extractResource(block, type) {
-        let value = extractResourceFromText(
+        // v0.26: wyłącznie żółta karta AKTUALNEJ misji.
+        // Nie przeszukujemy całej strony, bo znajdują się tam przyciski/teksty
+        // dotyczące innych pojazdów i reguł.
+        return extractResourceFromText(
             block?.innerText || block?.textContent || '',
             type
-        );
-
-        if (!value) {
-            value = extractResourceFromText(document.body?.innerText || '', type);
-        }
-
-        return value || 0;
+        ) || 0;
     }
 
     function extractMaxPatientsFromText(text) {
@@ -655,7 +675,9 @@
             /\bMaks\.?\s*Pacjenci\s*:?\s*(\d+)\b/i,
             /\bMaksymalna\s+liczba\s+pacjent(?:ów|ow)\s*:?\s*(\d+)\b/i,
             /\bMaksymalnie\s+pacjent(?:ów|ow)\s*:?\s*(\d+)\b/i,
-            /\bPacjenci\s*\(maks\.?\)\s*:?\s*(\d+)\b/i
+            /\bPacjenci\s*\(maks\.?\)\s*:?\s*(\d+)\b/i,
+            /\bDokładnie\s+(\d+)\s+pacjent(?:ów|ow|a)?\b/i,
+            /\bDokladnie\s+(\d+)\s+pacjent(?:ów|ow|a)?\b/i
         ];
 
         for (const re of patterns) {
@@ -694,7 +716,8 @@
             if (
                 !n.includes('maksimum pacjent') &&
                 !n.includes('maks pacjent') &&
-                !n.includes('maksymalna liczba pacjent')
+                !n.includes('maksymalna liczba pacjent') &&
+                !n.includes('dokladnie')
             ) {
                 continue;
             }
@@ -726,11 +749,9 @@
 
         if (value > 0) return value;
 
-        // 3. Ostateczny fallback: cały ekran, ale nadal WYŁĄCZNIE regex przy
-        //    frazie "Maksimum pacjentów", więc np. 80% i 10% nie mogą wejść.
-        value = extractMaxPatientsFromText(document.body?.innerText || '');
-
-        return value > 0 ? value : 0;
+        // v0.26: nie szukamy pacjentów w całym ekranie. Wartość musi pochodzić
+        // z żółtej karty bieżącej misji, aby nie przechwycić danych z innej sekcji.
+        return 0;
     }
 
     function findMissionDetailsLink(block) {
@@ -879,50 +900,44 @@
 
     async function captureMission() {
         const block = findMissionInfoBlock();
+        const name = getMissionName(block);
 
-        // v0.20: odczytujemy WYŁĄCZNIE tekst sekcji "Pojazdy".
-        // Nie skanujemy już wszystkich elementów DOM wewnątrz dużego kontenera,
-        // bo mogła się tam znaleźć lista "Dostępne jednostki".
+        // Krytyczne zabezpieczenie v0.26: karta musi być kartą AKTUALNEJ misji.
+        // Nie wolno pobierać wymagań z linków "Może się rozwinąć w...".
+        if (!missionInfoBlockMatchesCurrentMission(block)) {
+            const data = {
+                name,
+                vehicles: [],
+                water: 0,
+                foam: 0,
+                maxPatients: 0,
+                sourceUrl: location.href,
+                capturedAt: Date.now(),
+                readError: 'Nie znaleziono jednoznacznej karty aktualnej misji.'
+            };
+            state.capture = data;
+            saveJSON(CAPTURE_KEY, data);
+            return data;
+        }
+
+        // Odczyt wyłącznie z sekcji "Pojazdy" aktualnej żółtej karty.
         let vehicles = extractVehiclesFromFlatText(block);
 
-        // Jeżeli cokolwiek wygląda jak nazwa własnego pojazdu/jednostki albo czas
-        // dojazdu, odrzucamy całą listę zamiast tworzyć błędny ZR.
         if (hasContaminatedVehicleList(vehicles)) {
             console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
             vehicles = [];
         }
 
-        let water = extractResource(block, 'water');
-        let foam = extractResource(block, 'foam');
-        let maxPatients = extractMaxPatients(block);
+        const water = extractResource(block, 'water');
+        const foam = extractResource(block, 'foam');
+        const maxPatients = extractMaxPatients(block);
 
-        // Publiczne szczegóły wykorzystujemy nie tylko jako fallback dla pojazdów.
-        // Mogą też zawierać Maks. Pacjenci, nawet jeśli lista pojazdów z okna
-        // została odczytana poprawnie.
-        const detailsLink = findMissionDetailsLink(block);
-
-        if (detailsLink && (!vehicles.length || !water || !foam || !maxPatients)) {
-            try {
-                log('Uzupełniam dane z publicznych szczegółów:', detailsLink);
-                const html = await xhrText(detailsLink);
-                const pub = parsePublicMissionDetails(html);
-
-                if (!vehicles.length) vehicles = pub.vehicles;
-                if (!water) water = pub.water;
-                if (!foam) foam = pub.foam;
-                if (!maxPatients) maxPatients = pub.maxPatients;
-
-                if (hasContaminatedVehicleList(vehicles)) {
-                    console.warn(TAG, 'Fallback również zwrócił podejrzaną listę - odrzucam ją.');
-                    vehicles = [];
-                }
-            } catch (err) {
-                console.warn(TAG, 'Uzupełnienie z publicznych szczegółów nie powiodło się:', err);
-            }
-        }
+        // v0.26: NIE używamy findMissionDetailsLink()/xhr fallbacku.
+        // Link w sekcji "Może się rozwinąć w..." prowadzi do INNEJ misji i był
+        // przyczyną pobrania cudzych wymagań (np. 2 samochody + piana 800 l).
 
         const data = {
-            name: getMissionName(block),
+            name,
             vehicles,
             water,
             foam,
@@ -1238,7 +1253,8 @@
             if (!data.vehicles.length && !data.water && !data.foam && !data.maxPatients) {
                 alert(
                     'Menedżer ZR: nie udało się bezpiecznie odczytać wymagań tej misji.\n\n' +
-                    'Skrypt odrzucił wynik, aby nie pobrać listy dostępnych jednostek.\n\n' +
+                    (data.readError ? data.readError + '\n\n' : '') +
+                    'Skrypt NIE pobierze wymagań z misji z sekcji „Może się rozwinąć w…”.\n\n' +
                     'Nazwa: ' + data.name
                 );
                 return;
@@ -1330,6 +1346,7 @@
         const aliases = [
             [/samochody? pozarnicze/g, ' straz pozarna samochod pozarniczy '],
             [/samochody? ratownictwa technicznego/g, ' technik ratownictwo techniczne '],
+            [/pojazdy? ratownictwa technicznego(?: sh lub sd)?/g, ' technik ratownictwo techniczne drabina sh sd '],
             [/samochody? wezowe/g, ' weze wezowy '],
             [/samochody? dowodzenia i lacznosci/g, ' dil dowodzenie lacznosc '],
             [/sp rchem/g, ' rchem '],
