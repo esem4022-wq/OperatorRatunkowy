@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.33
+Wersja: 0.34
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -20,13 +20,21 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk tworzenia ZR tylko na ekranie otwartej misji,
 - odczyt nazwy misji i wymaganych pojazdów,
 - odczyt wody i piany,
-- maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P,
+- maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P; wyjątek: dokładnie 1 pacjent i brak innych wymaganych pojazdów = Ambulans P,
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
 - automatyczne zaznaczenie istniejącej ZR, gdy jej nazwa jest identyczna z nazwą misji,
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.34
+- komunikat „Misja zaktualizowana! Odśwież!” jest odrzucany jako nazwa misji i usuwany także wtedy, gdy występuje w tym samym kontenerze co właściwy tytuł,
+- poprawiono automatyczne zaznaczanie ZR w pierwszej, już wyświetlanej kategorii: wyszukiwanie dokładnego ID/nazwy obejmuje również elementy renderowane obok #mission-aao-group,
+- jeśli grupa ZR nie zdążyła się jeszcze załadować, skrypt ponawia próbę zamiast kończyć auto-wybór,
+- opóźnienie automatycznego zaznaczania ZR zmniejszono do 1 sekundy,
+- nowa reguła pacjentów: dokładnie 1 pacjent i brak innych wymaganych pojazdów = 1 Ambulans P; w pozostałych przypadkach pozostaje Ambulans S lub P,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.33
 - poprawiono pobieranie nazwy misji: teksty czasu typu „24 minuty temu”, „godzinę temu”, „Dziś o…” nie mogą być nazwą ZR,
 - nazwa jest teraz pobierana w pierwszej kolejności z tytułu żółtej karty aktualnej misji, a dopiero później z ciemnego nagłówka,

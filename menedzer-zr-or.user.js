@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.33
+// @version      0.34
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.33';
-    const CAPTURE_KEY = 'or_zr_capture_v033';
+    const VERSION = '0.34';
+    const CAPTURE_KEY = 'or_zr_capture_v034';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -229,6 +229,10 @@
             .trim();
 
         if (!text) return true;
+
+        // Komunikat gry o zmianie misji nie jest nazwą misji.
+        if (/^Misja\s+zaktualizowana!?\s*Odśwież!?$/i.test(text)) return true;
+        if (/^Misja\s+zaktualizowana!?\s*Odswiez!?$/i.test(text)) return true;
 
         // Metadane czasu z nagłówka misji nigdy nie są nazwą ZR.
         if (/^\d+\s+(?:sekund(?:a|y|ę)?|minut(?:a|y|ę)?|godzin(?:a|y|ę)?)\s+temu(?:\s*\([^)]*\))?$/i.test(text)) return true;
@@ -621,6 +625,14 @@
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Powiadomienie „Misja zaktualizowana! Odśwież!” bywa w tym samym
+        // kontenerze co właściwy tytuł. Usuwamy je zanim zaczniemy ocenę nazwy.
+        text = text
+            .replace(/\bMisja\s+zaktualizowana!?\s*Odśwież!?\b/gi, ' ')
+            .replace(/\bMisja\s+zaktualizowana!?\s*Odswiez!?\b/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
         if (!text || isMissionNameNoise(text)) return '';
 
         // Dane, które czasami znajdują się w tym samym kontenerze co nazwa,
@@ -637,7 +649,9 @@
             /\s+Wymagana woda\b/i,
             /\s+Wymagana piana\b/i,
             /\s+Dostępne jednostki\b/i,
-            /\s+Dostepne jednostki\b/i
+            /\s+Dostepne jednostki\b/i,
+            /\s+Misja\s+zaktualizowana!?\s*Odśwież!?/i,
+            /\s+Misja\s+zaktualizowana!?\s*Odswiez!?/i
         ];
 
         let cut = text.length;
@@ -1860,6 +1874,17 @@
             if (target) return target;
         }
 
+        // Pierwsza kategoria Operatora bywa renderowana obok właściwego
+        // #mission-aao-group zamiast jako jego potomek. ID ZR jest unikalne,
+        // więc bezpiecznie sprawdzamy także cały dokument.
+        for (const selector of selectors) {
+            let target = null;
+            try {
+                target = document.querySelector(selector);
+            } catch {}
+            if (target) return target;
+        }
+
         // Ostateczny fallback: sprawdzenie identyfikatora/atrybutu na wszystkich
         // przyciskach ZR w aktualnej grupie. Nie wybieramy nic po podobnej nazwie.
         const candidates = group.querySelectorAll('a.aao, button.aao, .aao');
@@ -1888,6 +1913,15 @@
             const text = sanitizeMissionName(el.textContent || '');
             if (exactMissionNameKey(text) === wanted) return el;
         }
+
+        // Fallback dla pierwszej, już wyświetlanej kategorii.
+        for (const el of document.querySelectorAll(
+            '#mission-aao-group .aao, [id^="aao_"].aao, a[id^="aao_"], button[id^="aao_"]'
+        )) {
+            const text = sanitizeMissionName(el.textContent || '');
+            if (exactMissionNameKey(text) === wanted) return el;
+        }
+
         return null;
     }
 
@@ -2005,9 +2039,8 @@
         const missionKey = exactMissionNameKey(missionName);
         if (!missionKey) return;
 
-        // v0.31: po otwarciu misji dajemy Operatorowi 1,5 s na doładowanie
-        // tabel pojazdów jadących/na miejscu. Wcześniej auto-wybór mógł kliknąć
-        // ZR zanim DOM trwającej misji zdążył się uzupełnić.
+        // v0.34: po otwarciu misji czekamy 1 s. To wystarcza na doładowanie
+        // list ZR i informacji o stanie misji, a jednocześnie szybciej zaznacza ZR.
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
@@ -2019,12 +2052,12 @@
             clearTimeout(state.autoSelectRetryTimer);
             state.autoSelectRetryTimer = setTimeout(() => {
                 autoSelectMatchingAAO();
-            }, 1600);
+            }, 1000);
 
             return;
         }
 
-        if (Date.now() - state.autoSelectFirstSeenAt < 1400) return;
+        if (Date.now() - state.autoSelectFirstSeenAt < 900) return;
 
         state.autoSelectAttempts += 1;
 
@@ -2040,7 +2073,10 @@
         }
 
         const group = document.getElementById('mission-aao-group');
-        if (!group) return;
+        if (!group) {
+            scheduleAutoSelectRetry(250);
+            return;
+        }
 
         // Klikamy najwyżej raz na danym ekranie misji. To krytyczne, ponieważ
         // drugie kliknięcie tej samej ZR mogłoby ponownie dodać pojazdy.
@@ -2394,6 +2430,37 @@
             if (f) return f;
         }
 
+        // Specjalna ZR: dokładnie 1 pacjent i brak innych wymaganych pojazdów
+        // => Ambulans P.
+        if (
+            req.kind === 'vehicle' &&
+            normalize(req.label) === 'ambulans p'
+        ) {
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+
+            const exactLabels = [
+                'ambulans p',
+                'ambulans typu p',
+                'ambulans podstawowy'
+            ];
+
+            for (const wanted of exactLabels) {
+                const f = vehicleFields.find(x => normalize(x.label) === wanted);
+                if (f) return f;
+            }
+
+            const fallback = vehicleFields.find(x => {
+                const n = normalize(x.label);
+                return n.includes('ambulans') &&
+                    (/(^|\s)p($|\s)/.test(n) || n.includes('podstaw')) &&
+                    !n.includes('ambulans s') &&
+                    !n.includes('ambulans t') &&
+                    !n.includes('transport');
+            });
+
+            if (fallback) return fallback;
+        }
+
         // Pacjenci: nie używamy tu fuzzy-matchingu. Szukamy konkretnego pola
         // odpowiadającego ambulansowi S/P. W interfejsie Operatora najczęściej
         // jest ono opisane po prostu jako "Ambulans".
@@ -2514,9 +2581,18 @@
         const maxPatients = Number.parseInt(state.capture.maxPatients, 10);
 
         if (Number.isFinite(maxPatients) && maxPatients > 0) {
+            const hasOtherRequiredVehicles =
+                Array.isArray(state.capture.vehicles) &&
+                state.capture.vehicles.some(v => Number(v?.count) > 0);
+
+            const patientVehicleLabel =
+                maxPatients === 1 && !hasOtherRequiredVehicles
+                    ? 'Ambulans P'
+                    : 'Ambulans S lub P';
+
             list.push({
                 kind: 'vehicle',
-                label: 'Ambulans S lub P',
+                label: patientVehicleLabel,
                 value: maxPatients,
                 chance: null
             });
@@ -2602,7 +2678,7 @@
             const current = Number.parseInt(f.input.value || '0', 10) || 0;
             const isPatientAmbulance =
                 req.kind === 'vehicle' &&
-                normalize(req.label) === 'ambulans s lub p';
+                ['ambulans s lub p', 'ambulans p'].includes(normalize(req.label));
 
             // Dla pacjentów obowiązuje dokładna zasada:
             // Maksimum pacjentów = dokładnie tyle ambulansów S/P.
