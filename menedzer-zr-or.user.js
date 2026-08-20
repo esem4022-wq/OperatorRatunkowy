@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.29
+// @version      0.30
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.29';
-    const CAPTURE_KEY = 'or_zr_capture_v029';
+    const VERSION = '0.30';
+    const CAPTURE_KEY = 'or_zr_capture_v030';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1228,6 +1228,135 @@
         return { vehicles, water, foam, maxPatients };
     }
 
+    function visiblePageText() {
+        return String(document.body?.innerText || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\r/g, '')
+            .trim();
+    }
+
+    function findCurrentMissionCardText(missionName) {
+        const pageText = visiblePageText();
+        if (!pageText) return '';
+
+        const cleanName = sanitizeMissionName(missionName || getOpenedMissionName());
+        if (!cleanName) return '';
+
+        const lower = pageText.toLocaleLowerCase('pl-PL');
+        const nameLower = cleanName.toLocaleLowerCase('pl-PL');
+
+        // Zbieramy wszystkie wystąpienia nazwy. Zwykle pierwsze jest w ciemnym
+        // nagłówku, a drugie bezpośrednio na żółtej karcie.
+        const namePositions = [];
+        let from = 0;
+        while (from < lower.length) {
+            const p = lower.indexOf(nameLower, from);
+            if (p < 0) break;
+            namePositions.push(p);
+            from = p + Math.max(1, nameLower.length);
+        }
+
+        // Szukamy wszystkich "Pojazdy" i wybieramy to, przed którym najbliżej
+        // występuje nazwa aktualnej misji. To nie zależy od struktury DOM.
+        const vehiclePositions = [];
+        const re = /\bPojazdy\b/gi;
+        let m;
+        while ((m = re.exec(pageText)) !== null) vehiclePositions.push(m.index);
+
+        let best = null;
+
+        for (const vp of vehiclePositions) {
+            let np = -1;
+            for (const p of namePositions) {
+                if (p <= vp && p > np) np = p;
+            }
+            if (np < 0) continue;
+
+            const distance = vp - np;
+            // Na karcie tytuł jest bezpośrednio przed sekcją Pojazdy.
+            // Duży dystans oznacza najpewniej nazwę z górnego nagłówka.
+            if (distance > 5000) continue;
+
+            const score = 10000 - distance;
+            if (!best || score > best.score) best = { start: np, vehicles: vp, score };
+        }
+
+        if (!best) return '';
+
+        let end = pageText.length;
+        const tail = pageText.slice(best.vehicles);
+        const stopPatterns = [
+            /(?:^|\n)\s*Dostępne jednostki\b/i,
+            /(?:^|\n)\s*Dostepne jednostki\b/i,
+            /(?:^|\n)\s*Alarmowo\b/i
+        ];
+
+        for (const stop of stopPatterns) {
+            const sm = stop.exec(tail);
+            if (sm) end = Math.min(end, best.vehicles + sm.index);
+        }
+
+        // Ograniczenie ochronne przed pobraniem połowy strony, jeśli Operator
+        // zmieni układ. Typowa karta jest wielokrotnie krótsza.
+        end = Math.min(end, best.start + 12000);
+
+        const slice = pageText.slice(best.start, end).trim();
+        if (!/\bPojazdy\b/i.test(slice)) return '';
+
+        log('Tekst bieżącej karty znaleziony niezależnie od DOM:', slice);
+        return slice;
+    }
+
+    function getVehiclesTextSegmentFromCardText(cardText) {
+        const compact = String(cardText || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const start = compact.search(/\bPojazdy\b/i);
+        if (start < 0) return '';
+
+        let segment = compact.slice(start).replace(/^.*?\bPojazdy\b\s*/i, '');
+
+        const stops = [
+            /\s+Pacjenci\b/i,
+            /\s+Personel\b/i,
+            /\s+Może się rozwinąć\b/i,
+            /\s+Moze sie rozwinac\b/i,
+            /\s+Dostępne jednostki\b/i,
+            /\s+Dostepne jednostki\b/i,
+            /\s+Alarmowo\b/i
+        ];
+
+        let cut = segment.length;
+        for (const stop of stops) {
+            const sm = stop.exec(segment);
+            if (sm && sm.index < cut) cut = sm.index;
+        }
+
+        return segment.slice(0, cut).trim();
+    }
+
+    function extractVehiclesFromCardText(cardText) {
+        const result = [];
+        const map = new Map();
+        const segment = getVehiclesTextSegmentFromCardText(cardText);
+        if (!segment) return result;
+
+        // Działa zarówno dla tekstu z nowymi liniami, jak i dla jednego ciągu:
+        // "2 OPI 1 Samochód pożarniczy" / "6200 Piana gaśnicza 1 SD/SH ...".
+        const re = /(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+        let m;
+        while ((m = re.exec(segment)) !== null) {
+            const count = Number.parseInt(m[1], 10);
+            const rawLabel = m[2].trim();
+            const chance = parseChanceFromLabel(rawLabel);
+            addVehicle(result, map, rawLabel, count, chance);
+        }
+
+        return result;
+    }
+
     function hasContaminatedVehicleList(vehicles) {
         if (!Array.isArray(vehicles) || !vehicles.length) return false;
 
@@ -1243,12 +1372,15 @@
     }
 
     async function captureMission() {
+        // v0.30: źródłem danych jest tekst WIDOCZNEJ żółtej karty, a nie jej
+        // struktura HTML. Dzięki temu działamy także wtedy, gdy Operator rozbije
+        // nagłówki i wartości na nietypowe div/span albo nie zachowa linii.
+        const openedName = sanitizeMissionName(getOpenedMissionName());
         const block = findMissionInfoBlock();
-        const name = getMissionName(block);
+        const name = openedName || getMissionName(block);
+        const cardText = findCurrentMissionCardText(name);
 
-        // Krytyczne zabezpieczenie v0.26: karta musi być kartą AKTUALNEJ misji.
-        // Nie wolno pobierać wymagań z linków "Może się rozwinąć w...".
-        if (!missionInfoBlockMatchesCurrentMission(block)) {
+        if (!cardText || !/\bPojazdy\b/i.test(cardText)) {
             const data = {
                 name,
                 vehicles: [],
@@ -1257,33 +1389,26 @@
                 maxPatients: 0,
                 sourceUrl: location.href,
                 capturedAt: Date.now(),
-                readError: 'Nie znaleziono czytelnej sekcji Pojazdy w widocznej karcie aktualnej misji.'
+                readError: 'Nie znaleziono tekstu żółtej karty aktualnej misji.'
             };
             state.capture = data;
             saveJSON(CAPTURE_KEY, data);
             return data;
         }
 
-        // v0.28: najpierw czytamy zachowane linie sekcji "Pojazdy".
-        // Dzięki temu misje z sekcją Pacjenci nie gubią wcześniejszych wymagań.
-        // Parser płaskiego tekstu zostaje tylko jako bezpieczny fallback.
-        const lineVehicles = extractVehiclesFromCardLines(block);
-        const flatVehicles = extractVehiclesFromFlatText(block);
-        let vehicles = mergeVehicles(lineVehicles, flatVehicles);
+        let vehicles = extractVehiclesFromCardText(cardText);
 
         if (hasContaminatedVehicleList(vehicles)) {
             console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
             vehicles = [];
         }
 
-        const water = extractResource(block, 'water');
-        const foam = extractResource(block, 'foam');
-        const maxPatients = extractMaxPatients(block);
+        // Woda i piana mogą być w sekcji Pojazdy, np. "8000 Woda" / "6200 Piana gaśnicza".
+        const water = extractResourceFromText(cardText, 'water') || 0;
+        const foam = extractResourceFromText(cardText, 'foam') || 0;
+        const maxPatients = extractMaxPatientsFromText(cardText) || 0;
 
-        // v0.26: NIE używamy findMissionDetailsLink()/xhr fallbacku.
-        // Link w sekcji "Może się rozwinąć w..." prowadzi do INNEJ misji i był
-        // przyczyną pobrania cudzych wymagań (np. 2 samochody + piana 800 l).
-
+        // Nie korzystamy z żadnego linku z "Może się rozwinąć w...".
         const data = {
             name,
             vehicles,
@@ -1296,7 +1421,7 @@
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji:', data);
+        log('Odczyt misji v0.30:', data);
 
         return data;
     }
