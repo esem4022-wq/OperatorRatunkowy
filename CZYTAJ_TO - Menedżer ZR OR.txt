@@ -1,6 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.32
-
+Wersja: 0.33
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -28,6 +27,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.33
+- poprawiono pobieranie nazwy misji: teksty czasu typu „24 minuty temu”, „godzinę temu”, „Dziś o…” nie mogą być nazwą ZR,
+- nazwa jest teraz pobierana w pierwszej kolejności z tytułu żółtej karty aktualnej misji, a dopiero później z ciemnego nagłówka,
+- tworzenie ZR i automatyczne zaznaczanie istniejącej ZR korzystają z tego samego, oczyszczonego źródła nazwy,
+- poprawka eliminuje tworzenie ZR o nazwie będącej czasem od otwarcia/utworzenia misji,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.32
 - usunięto fałszywe wymagania pochodzące z tabel informacyjnych mission_help, np. „Inne informacje Wartość Maks.”,
 - tekstowy parser sekcji Pojazdy kończy odczyt przed sekcjami „Inne informacje” i „Wartość Maks.”,

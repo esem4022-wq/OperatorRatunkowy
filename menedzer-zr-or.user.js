@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.32
+// @version      0.33
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.32';
-    const CAPTURE_KEY = 'or_zr_capture_v032';
+    const VERSION = '0.33';
+    const CAPTURE_KEY = 'or_zr_capture_v033';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -222,6 +222,29 @@
         return best.el;
     }
 
+    function isMissionNameNoise(value) {
+        const text = String(value || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text) return true;
+
+        // Metadane czasu z nagłówka misji nigdy nie są nazwą ZR.
+        if (/^\d+\s+(?:sekund(?:a|y|ę)?|minut(?:a|y|ę)?|godzin(?:a|y|ę)?)\s+temu(?:\s*\([^)]*\))?$/i.test(text)) return true;
+        if (/^(?:godzinę|godzine|chwilę|chwile)\s+temu(?:\s*\([^)]*\))?$/i.test(text)) return true;
+        if (/^(?:Dziś|Dzis|Wczoraj)\s+o\s+\d{1,2}:\d{2}$/i.test(text)) return true;
+        if (/\b(?:Dziś|Dzis|Wczoraj)\s+o\s+\d{1,2}:\d{2}\b/i.test(text) && /\btemu\b/i.test(text)) return true;
+
+        const n = normalize(text);
+        if ([
+            'pojazdy', 'pacjenci', 'woda', 'piana',
+            'utworz zr', 'zaznaczono zr'
+        ].includes(n)) return true;
+
+        return false;
+    }
+
     function findMissionTitleElement(header) {
         if (!header) return null;
 
@@ -246,6 +269,7 @@
             const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
             if (!text || text.length < 4 || text.length > 100) continue;
             if (/UTWÓRZ\s+ZR|UTWORZ\s+ZR|Zaznaczono\s+ZR/i.test(text)) continue;
+            if (isMissionNameNoise(text)) continue;
 
             const r = el.getBoundingClientRect();
             if (r.height > 50 || r.width < 80) continue;
@@ -597,7 +621,7 @@
             .replace(/\s+/g, ' ')
             .trim();
 
-        if (!text) return '';
+        if (!text || isMissionNameNoise(text)) return '';
 
         // Dane, które czasami znajdują się w tym samym kontenerze co nazwa,
         // ale NIE są częścią nazwy misji.
@@ -630,28 +654,24 @@
             .replace(/\s*\(?(?:Dziś|Dzis|Wczoraj)\s+o\s+\d{1,2}:\d{2}\)?\s*$/i, '')
             .trim();
 
+        if (!text || isMissionNameNoise(text)) return '';
         return text;
     }
 
     function getMissionName(infoBlock) {
-        // Najpewniejsze źródło to tytuł w ciemnym nagłówku otwartej misji.
-        // Jest oddzielony od POI, pojazdów i innych danych żółtej karty.
-        const openedHeader = findOpenedMissionHeader();
-        const openedTitle = findMissionTitleElement(openedHeader);
-
-        if (openedTitle) {
-            const name = sanitizeMissionName(openedTitle.textContent);
-            if (name && name.length <= 60) return name;
-        }
-
-        // Drugie źródło: nagłówek wewnątrz żółtej karty.
+        // v0.33: najpierw tytuł z żółtej karty. Ciemny nagłówek zawiera też
+        // teksty typu „24 minuty temu”, które w części układów DOM są osobnym
+        // elementem i wcześniej mogły wygrać jako nazwa misji.
         if (infoBlock) {
             const headings = infoBlock.querySelectorAll(
                 'h1,h2,h3,h4,h5,.panel-title,.modal-title,[class*="mission"][class*="title"],strong'
             );
 
             for (const h of headings) {
-                const name = sanitizeMissionName(h.textContent);
+                const raw = (h.textContent || '').replace(/\s+/g, ' ').trim();
+                if (isMissionNameNoise(raw)) continue;
+
+                const name = sanitizeMissionName(raw);
                 const n = normalize(name);
 
                 if (!name || name.length > 60) continue;
@@ -661,8 +681,8 @@
                 return name;
             }
 
-            // Awaryjnie można użyć tekstu przed sekcją Pojazdy,
-            // ale zawsze przechodzi on przez sanitizer usuwający POI itp.
+            // Najstabilniejszy fallback dla żółtej karty: wszystko przed
+            // nagłówkiem „Pojazdy”. Na karcie jest tam nazwa misji.
             const compact = (infoBlock.innerText || infoBlock.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .replace(/\s+/g, ' ')
@@ -671,16 +691,24 @@
             const m = compact.match(/^(.+?)\s+Pojazdy\b/i);
             if (m) {
                 const name = sanitizeMissionName(m[1]);
-                if (name && name.length <= 60) return name;
+                if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
             }
         }
 
-        // Ostatni fallback - zwykły nagłówek znaleziony starszą metodą.
+        // Dopiero potem próbujemy ciemnego nagłówka.
+        const openedHeader = findOpenedMissionHeader();
+        const openedTitle = findMissionTitleElement(openedHeader);
+        if (openedTitle) {
+            const name = sanitizeMissionName(openedTitle.textContent);
+            if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
+        }
+
+        // Ostatni fallback - starsza metoda wyszukania nagłówka.
         const header = findMissionHeader();
         const title = findMissionTitleElement(header);
         if (title) {
             const name = sanitizeMissionName(title.textContent);
-            if (name && name.length <= 60) return name;
+            if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
         }
 
         return 'Misja bez nazwy';
@@ -1590,9 +1618,10 @@
     }
 
     async function captureMission() {
-        const openedName = sanitizeMissionName(getOpenedMissionName());
         const block = findMissionInfoBlock();
-        const name = openedName || getMissionName(block);
+        const cardName = getMissionName(block);
+        const openedName = sanitizeMissionName(getOpenedMissionName());
+        const name = (cardName && cardName !== 'Misja bez nazwy' ? cardName : openedName) || 'Misja bez nazwy';
 
         let vehicles = [];
         let water = 0;
@@ -1785,10 +1814,17 @@
         const header = findOpenedMissionHeader();
         if (!header) return '';
 
-        const title = findMissionTitleElement(header);
-        const name = sanitizeMissionName(title?.textContent || '');
+        // Używamy tego samego źródła nazwy co przy tworzeniu ZR. Dzięki temu
+        // auto-wybór nie szuka ZR o nazwie „24 minuty temu”.
+        const block = findMissionInfoBlock();
+        let name = getMissionName(block);
 
-        if (!name || name === 'Misja bez nazwy' || name.length > 60) return '';
+        if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name)) {
+            const title = findMissionTitleElement(header);
+            name = sanitizeMissionName(title?.textContent || '');
+        }
+
+        if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name) || name.length > 60) return '';
         return name;
     }
 
