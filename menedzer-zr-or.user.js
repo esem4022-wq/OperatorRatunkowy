@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.31
+// @version      0.32
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.31';
-    const CAPTURE_KEY = 'or_zr_capture_v031';
+    const VERSION = '0.32';
+    const CAPTURE_KEY = 'or_zr_capture_v032';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -33,10 +33,12 @@
         map: loadJSON(MAP_KEY, {}),
         fields: [],
         aaosPromise: null,
+        aaosLoadedAt: 0,
         autoSelectBusy: false,
         autoSelectMissionKey: '',
         autoSelectFirstSeenAt: 0,
-        autoSelectRetryTimer: null
+        autoSelectRetryTimer: null,
+        autoSelectAttempts: 0
     };
 
     function log(...args) {
@@ -224,6 +226,7 @@
         if (!header) return null;
 
         const candidates = [...header.querySelectorAll('h1,h2,h3,h4,strong,span,div')];
+        const hr = header.getBoundingClientRect();
 
         let best = null;
         let bestScore = -999;
@@ -231,8 +234,18 @@
         for (const el of candidates) {
             if (!isVisible(el)) continue;
 
+            // v0.32: nasze własne przyciski/status nie mogą być nigdy uznane
+            // za nazwę misji. To powodowało m.in. nazwę "+ UTWÓRZ ZR💾"
+            // i losowe problemy z automatycznym wyborem istniejącej ZR.
+            if (
+                el.closest('#orzr-header-actions') ||
+                el.closest('#orzr-auto-select-status') ||
+                String(el.id || '').startsWith('orzr-')
+            ) continue;
+
             const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
             if (!text || text.length < 4 || text.length > 100) continue;
+            if (/UTWÓRZ\s+ZR|UTWORZ\s+ZR|Zaznaczono\s+ZR/i.test(text)) continue;
 
             const r = el.getBoundingClientRect();
             if (r.height > 50 || r.width < 80) continue;
@@ -243,7 +256,13 @@
             score += fs;
 
             if (/[A-ZĄĆĘŁŃÓŚŹŻ]{4,}/.test(text)) score += 10;
-            if (/minut|dzis|wczoraj/i.test(text)) score -= 15;
+            if (/minut|dzis|wczoraj|godzinę|godzine/i.test(text)) score -= 20;
+
+            // Tytuł misji jest po lewej stronie ciemnego nagłówka. Przyciski
+            // Menedżera i pasek postępu są znacznie dalej na prawo.
+            const centerX = r.left + r.width / 2;
+            if (centerX < hr.left + hr.width * 0.45) score += 16;
+            if (centerX > hr.left + hr.width * 0.65) score -= 18;
 
             if (score > bestScore) {
                 best = el;
@@ -694,7 +713,12 @@
             'alarmowo',
             'moze sie rozwinac',
             'woda',
-            'piana'
+            'piana',
+            'inne informacje',
+            'wartosc maks',
+            'wartosc',
+            'srednie kredyty',
+            'rodzaj misji'
         ];
 
         if (bad.some(x => n.includes(x))) return false;
@@ -1300,6 +1324,17 @@
             return;
         }
 
+        // v0.32: help misji ma też tabele informacyjne, np.
+        // "Inne informacje | Wartość Maks.". To nie są wymagania ZR.
+        if (
+            nl.includes('inne informacje') ||
+            nl.includes('wartosc') ||
+            nl.includes('srednie kredyty') ||
+            nl.includes('rodzaj misji')
+        ) {
+            return;
+        }
+
         // Pomiń warunki generowania misji i personel.
         if (
             nl.includes('posterunk') ||
@@ -1503,7 +1538,12 @@
             /\s+Moze sie rozwinac\b/i,
             /\s+Dostępne jednostki\b/i,
             /\s+Dostepne jednostki\b/i,
-            /\s+Alarmowo\b/i
+            /\s+Alarmowo\b/i,
+            /\s+Inne informacje\b/i,
+            /\s+Wartość(?:\s+Maks\.?)?\b/i,
+            /\s+Wartosc(?:\s+Maks\.?)?\b/i,
+            /\s+Średnie kredyty\b/i,
+            /\s+Srednie kredyty\b/i
         ];
 
         let cut = segment.length;
@@ -1620,7 +1660,7 @@
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji v0.31:', data);
+        log('Odczyt misji v0.32:', data);
 
         return data;
     }
@@ -1645,12 +1685,23 @@
         return [];
     }
 
-    function loadAAOsForAutoSelect() {
-        if (state.aaosPromise) return state.aaosPromise;
+    function loadAAOsForAutoSelect(force = false) {
+        const maxAge = 10000;
 
+        if (
+            !force &&
+            state.aaosPromise &&
+            state.aaosLoadedAt &&
+            Date.now() - state.aaosLoadedAt < maxAge
+        ) {
+            return state.aaosPromise;
+        }
+
+        state.aaosLoadedAt = Date.now();
         state.aaosPromise = fetch('/api/v1/aaos', {
             credentials: 'same-origin',
-            headers: { 'Accept': 'application/json' }
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
         })
             .then(response => {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1659,11 +1710,18 @@
             .then(unwrapAAOList)
             .catch(error => {
                 state.aaosPromise = null;
+                state.aaosLoadedAt = 0;
                 console.warn(TAG, 'Nie udało się pobrać listy ZR do auto-wyboru:', error);
                 return [];
             });
 
         return state.aaosPromise;
+    }
+
+    function scheduleAutoSelectRetry(delay = 500) {
+        if (state.autoSelectAttempts >= 12) return;
+        clearTimeout(state.autoSelectRetryTimer);
+        state.autoSelectRetryTimer = setTimeout(() => autoSelectMatchingAAO(), delay);
     }
 
     function ensureAutoSelectStyle() {
@@ -1785,6 +1843,40 @@
         return null;
     }
 
+    function findAAOButtonByExactCaption(group, caption) {
+        if (!group || !caption) return null;
+        const wanted = exactMissionNameKey(caption);
+        if (!wanted) return null;
+
+        for (const el of group.querySelectorAll('a.aao, button.aao, .aao')) {
+            const text = sanitizeMissionName(el.textContent || '');
+            if (exactMissionNameKey(text) === wanted) return el;
+        }
+        return null;
+    }
+
+    function activateAAOTabForTarget(target) {
+        if (!target) return false;
+        const pane = target.closest('.tab-pane');
+        if (!pane || pane.classList.contains('active') || !pane.id) return false;
+
+        const id = CSS.escape(pane.id);
+        const selectors = [
+            `[href="#${id}"]`,
+            `[data-target="#${id}"]`,
+            `[data-bs-target="#${id}"]`
+        ];
+
+        for (const selector of selectors) {
+            const tab = document.querySelector(selector);
+            if (tab) {
+                tab.click();
+                return true;
+            }
+        }
+        return false;
+    }
+
     function containerHasDispatchedVehicles(container) {
         if (!container) return false;
 
@@ -1883,6 +1975,10 @@
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
+            state.autoSelectAttempts = 0;
+            // Nowa lub właśnie utworzona ZR mogła nie istnieć w poprzednim cache API.
+            state.aaosPromise = null;
+            state.aaosLoadedAt = 0;
 
             clearTimeout(state.autoSelectRetryTimer);
             state.autoSelectRetryTimer = setTimeout(() => {
@@ -1893,6 +1989,8 @@
         }
 
         if (Date.now() - state.autoSelectFirstSeenAt < 1400) return;
+
+        state.autoSelectAttempts += 1;
 
         if (isMissionAlreadyRunning()) {
             removeAutoSelectStatus();
@@ -1916,7 +2014,7 @@
         state.autoSelectBusy = true;
 
         try {
-            const aaos = await loadAAOsForAutoSelect();
+            const aaos = await loadAAOsForAutoSelect(state.autoSelectAttempts > 1);
             if (!aaos.length) return;
 
             const matches = aaos.filter(aao =>
@@ -1924,6 +2022,12 @@
             );
 
             if (!matches.length) {
+                // Po utworzeniu nowej ZR API bywa przez chwilę opóźnione.
+                // Próbujemy kilka razy zamiast od razu zapamiętywać brak.
+                if (state.autoSelectAttempts < 6) {
+                    scheduleAutoSelectRetry(650);
+                    return;
+                }
                 group.dataset.orzrAutoCheckedMission = missionKey;
                 return;
             }
@@ -1934,11 +2038,22 @@
 
                 // Obsługa obu wariantów DOM Operatora, w tym pierwszej
                 // wyświetlanej kategorii z elementami id="aao_<ID>".
-                const target = findAAOButtonById(group, id);
+                const target =
+                    findAAOButtonById(group, id) ||
+                    findAAOButtonByExactCaption(group, aao?.caption || missionName);
 
-                // ZR może być jeszcze w trakcie doładowywania – MutationObserver
-                // wywoła tę funkcję ponownie, gdy pojawi się w DOM.
-                if (!target) continue;
+                // Jeśli ZR jest w ukrytej zakładce kategorii, przełącz ją najpierw.
+                if (target && activateAAOTabForTarget(target)) {
+                    scheduleAutoSelectRetry(250);
+                    return;
+                }
+
+                // ZR może być jeszcze w trakcie doładowywania. Nie polegamy już
+                // tylko na MutationObserverze — aktywnie ponawiamy próbę.
+                if (!target) {
+                    scheduleAutoSelectRetry(450);
+                    continue;
+                }
 
                 // Czerwona etykieta oznacza niedostępne ZR – takiego nie klikamy.
                 if (!isAAOAvailable(target)) {
@@ -1967,6 +2082,10 @@
                 target.click();
                 log(`Automatycznie wybrano ZR „${missionName}” (ID ${id}).`);
                 return;
+            }
+
+            if (state.autoSelectAttempts < 12) {
+                scheduleAutoSelectRetry(500);
             }
         } catch (error) {
             console.warn(TAG, 'Automatyczny wybór ZR nie powiódł się:', error);
@@ -2180,7 +2299,7 @@
         const aliases = [
             [/samochody? pozarnicze/g, ' straz pozarna samochod pozarniczy '],
             [/samochody? ratownictwa technicznego/g, ' technik ratownictwo techniczne '],
-            [/pojazdy? ratownictwa technicznego(?: sh lub sd)?/g, ' technik ratownictwo techniczne drabina sh sd '],
+            [/pojazdy? ratownictwa technicznego/g, ' technik ratownictwo techniczne '],
             [/samochody? wezowe/g, ' weze wezowy '],
             [/samochody? dowodzenia i lacznosci/g, ' dil dowodzenie lacznosc '],
             [/sp rchem/g, ' rchem '],
@@ -2270,6 +2389,41 @@
             });
 
             if (fallback) return fallback;
+        }
+
+        // Wymagania alternatywne / łączone nie mogą być dopasowywane
+        // do przypadkowego pojedynczego typu (np. do "SH lub SD").
+        if (req.kind === 'vehicle') {
+            const rn = normalize(req.label);
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+
+            // "wozy strażackie lub pojazdy ratownictwa technicznego"
+            if (
+                rn.includes('ratownictwa technicznego') &&
+                (rn.includes('wozy strazackie') || rn.includes('samochody pozarnicze') || rn.includes('samochod pozarniczy'))
+            ) {
+                const exactCombo = vehicleFields.find(f => {
+                    const fn = normalize(f.label);
+                    return fn.includes('ratownictwa technicznego') &&
+                        (fn.includes('wozy strazackie') || fn.includes('samochody pozarnicze') || fn.includes('samochod pozarniczy'));
+                });
+                return exactCombo || null;
+            }
+
+            // "pojazdy ratownictwa technicznego, SH lub SD" – wymagamy pola,
+            // które rzeczywiście zawiera oba człony. W przeciwnym razie zostawiamy
+            // do ręcznego przypisania zamiast wybierać błędne SH/SD.
+            if (
+                rn.includes('ratownictwa technicznego') &&
+                (rn.includes('sh') || rn.includes('sd'))
+            ) {
+                const exactCombo = vehicleFields.find(f => {
+                    const fn = normalize(f.label);
+                    return fn.includes('ratownictwa technicznego') &&
+                        (fn.includes('sh') || fn.includes('sd'));
+                });
+                return exactCombo || null;
+            }
         }
 
         if (req.kind === 'water') {
