@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.31
+Wersja: 0.32
 
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
@@ -28,6 +28,17 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.32
+- usunięto fałszywe wymagania pochodzące z tabel informacyjnych mission_help, np. „Inne informacje Wartość Maks.”,
+- tekstowy parser sekcji Pojazdy kończy odczyt przed sekcjami „Inne informacje” i „Wartość Maks.”,
+- poprawiono mapowanie wymagań łączonych: „wozy strażackie lub pojazdy ratownictwa technicznego” nie jest już błędnie przypisywane do „SH lub SD”,
+- genericzne „pojazdy ratownictwa technicznego” nie dostają już sztucznie aliasów SH/SD,
+- poprawiono wykrywanie nazwy misji: własny przycisk „UTWÓRZ ZR” i status Menedżera nie mogą zostać uznane za tytuł misji,
+- poprawiono automatyczne zaznaczanie ZR: lista ZR z API jest odświeżana przy zmianie misji i nie pozostaje stale w cache,
+- dodano ponawianie auto-wyboru przez kilka sekund, wyszukiwanie ZR również po dokładnej nazwie oraz przełączanie ukrytej zakładki kategorii,
+- zachowano blokadę automatycznego wyboru dla misji już trwających, fioletową ramkę i komunikat „Zaznaczono ZR”,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.31
 - przebudowano źródło wymagań: skrypt w pierwszej kolejności korzysta z ukrytego `#mission_help` aktualnej misji,
 - `#mission_help` wskazuje dokładny typ bieżącej misji i jej `mission_id`, więc nie jest mylony z linkiem z sekcji „Może się rozwinąć w…”,
