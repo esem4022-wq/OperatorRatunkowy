@@ -1,0 +1,50 @@
+MENEDŻER ZR OR
+Wersja: 0.24
+
+Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
+
+ZAWARTOŚĆ ZIP
+- menedzer-zr-or.user.js  – skrypt Tampermonkey
+- CZYTAJ_TO - Menedżer ZR OR.txt – informacje o wersji
+
+INSTALACJA
+1. Otwórz Tampermonkey.
+2. Zainstaluj plik menedzer-zr-or.user.js.
+3. Odśwież stronę OperatorRatunkowy.pl.
+
+GITHUB / AKTUALIZACJE
+Repozytorium: esem4022-wq/OperatorRatunkowy
+Stała nazwa pliku w repozytorium: userscripts/menedzer-zr-or.user.js
+Skrypt zawiera @homepageURL, @updateURL i @downloadURL do automatycznych aktualizacji przez Tampermonkey.
+
+NAJWAŻNIEJSZE FUNKCJE
+- przycisk tworzenia ZR tylko na ekranie otwartej misji,
+- odczyt nazwy misji i wymaganych pojazdów,
+- odczyt wody i piany,
+- maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P,
+- zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
+- czyszczenie nazwy ZR z dodatkowych informacji typu POI,
+- automatyczne zaznaczenie istniejącej ZR, gdy jej nazwa jest identyczna z nazwą misji,
+- przycisk przejścia do tworzenia/edycji ZR.
+
+HISTORIA WERSJI
+v0.24
+- automatycznie wybrana ZR jest oznaczana FIOLETOWĄ ramką zamiast zielonej,
+- dodano plik CZYTAJ_TO do paczki ZIP.
+
+v0.23
+- dodano automatyczne wyszukiwanie i zaznaczanie istniejącej ZR o dokładnie takiej samej nazwie jak misja,
+- automatycznie wybrana ZR była wyróżniana ramką.
+
+v0.22
+- poprawiono pobieranie nazwy misji,
+- odcinane są dodatkowe fragmenty typu POI, Pojazdy, Pacjenci, Woda i Piana.
+
+v0.21
+- dodano obsługę aktualizacji skryptu przez GitHub.
+
+v0.20
+- zabezpieczono parser przed pobieraniem listy „Dostępne jednostki” jako wymagań ZR.
+
+v0.19
+- poprawiono odczyt maksymalnej liczby pacjentów i ustawianie Ambulansów S/P.

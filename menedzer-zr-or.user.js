@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.23
+// @version      0.24
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.23';
-    const CAPTURE_KEY = 'or_zr_capture_v023';
+    const VERSION = '0.24';
+    const CAPTURE_KEY = 'or_zr_capture_v024';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -986,9 +986,9 @@
         style.id = 'orzr-auto-select-style';
         style.textContent = `
             #mission-aao-group .aao.orzr-auto-selected-aao {
-                outline: 3px solid #28a745 !important;
+                outline: 3px solid #8e44ad !important;
                 outline-offset: 1px !important;
-                box-shadow: 0 0 8px rgba(40, 167, 69, .75) !important;
+                box-shadow: 0 0 8px rgba(142, 68, 173, .78) !important;
             }
         `;
         document.head.appendChild(style);
