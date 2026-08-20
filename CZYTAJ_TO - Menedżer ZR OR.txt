@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.24
+Wersja: 0.25
 
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
@@ -14,7 +14,7 @@ INSTALACJA
 
 GITHUB / AKTUALIZACJE
 Repozytorium: esem4022-wq/OperatorRatunkowy
-Stała nazwa pliku w repozytorium: userscripts/menedzer-zr-or.user.js
+Stała nazwa pliku w repozytorium: menedzer-zr-or.user.js
 Skrypt zawiera @homepageURL, @updateURL i @downloadURL do automatycznych aktualizacji przez Tampermonkey.
 
 NAJWAŻNIEJSZE FUNKCJE
@@ -28,6 +28,11 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.25
+- poprawiono automatyczne zaznaczanie ZR w pierwszej wyświetlanej kategorii,
+- dodano obsługę przycisków ZR zapisanych jako id="aao_<ID>" oraz aao_id/data-aao-id,
+- poprawiono @updateURL i @downloadURL: plik GitHub jest bezpośrednio w głównym katalogu repozytorium, bez userscripts/.
+
 v0.24
 - automatycznie wybrana ZR jest oznaczana FIOLETOWĄ ramką zamiast zielonej,
 - dodano plik CZYTAJ_TO do paczki ZIP.
