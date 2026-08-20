@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.8
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie nazw i eksport CSV.
+// @version      0.9
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, porządkowanie nazw, duplikaty i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.8';
+    const VERSION = '0.9';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -483,9 +483,31 @@
         return String(caption ?? '').toLocaleLowerCase('pl-PL');
     }
 
-    function findDuplicateNames() {
+    function isAZRCategory(aao) {
+        // AZR rozpoznajemy wyłącznie po dokładnej nazwie kategorii.
+        return aao.aao_category_id != null && getCategoryName(aao.aao_category_id) === 'AZR';
+    }
+
+    function duplicateScopeRows(scope) {
+        if (scope === 'exclude-azr-none') {
+            return state.aaos.filter(aao => aao.aao_category_id != null && !isAZRCategory(aao));
+        }
+        if (scope === 'only-azr') {
+            return state.aaos.filter(isAZRCategory);
+        }
+        return [...state.aaos];
+    }
+
+    function duplicateScopeLabel(scope) {
+        if (scope === 'exclude-azr-none') return 'z pominięciem AZR i Bez kategorii';
+        if (scope === 'only-azr') return 'tylko w kategorii AZR';
+        return 'we wszystkich kategoriach';
+    }
+
+    function findDuplicateNames(scope = 'all') {
+        const sourceRows = duplicateScopeRows(scope);
         const groups = new Map();
-        for (const aao of state.aaos) {
+        for (const aao of sourceRows) {
             if (!String(aao.caption ?? '').length) continue;
             const key = duplicateNameKey(aao.caption);
             if (!groups.has(key)) groups.set(key, []);
@@ -510,12 +532,13 @@
             a.aao.id - b.aao.id
         );
         state.cleanupResults = results;
-        state.cleanupMode = 'duplicates';
+        state.cleanupMode = `duplicates:${scope}`;
         renderCleanupTable();
+        const scopeLabel = duplicateScopeLabel(scope);
         setStatus(
             results.length
-                ? `Znaleziono ${results.length} ZR należących do grup duplikatów nazw.`
-                : 'Nie znaleziono duplikatów nazw ZR.',
+                ? `Znaleziono ${results.length} ZR należących do grup duplikatów nazw — ${scopeLabel}.`
+                : `Nie znaleziono duplikatów nazw ZR — ${scopeLabel}.`,
             results.length ? 'warning' : 'success'
         );
     }
@@ -557,6 +580,90 @@
                 : 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.',
             results.length ? 'warning' : 'success'
         );
+    }
+
+
+    function removeTrailingWhitespaceFromName(text) {
+        return String(text ?? '').replace(/[\s\u00a0]+$/u, '');
+    }
+
+    async function removeTrailingWhitespaceFromAll() {
+        if (state.saving) return;
+        const targets = state.aaos
+            .map(aao => ({ aao, cleaned: removeTrailingWhitespaceFromName(aao.caption) }))
+            .filter(x => x.cleaned !== x.aao.caption);
+
+        if (!targets.length) {
+            state.cleanupResults = [];
+            state.cleanupMode = 'trailing';
+            renderCleanupTable();
+            setStatus('Nie znaleziono białych znaków ani spacji na końcu nazw ZR.', 'success');
+            return;
+        }
+
+        if (!confirm(`Usunąć białe znaki i spacje z końca nazw ${targets.length} ZR?\n\nNormalne spacje wewnątrz nazw pozostaną bez zmian.`)) return;
+
+        const button = document.getElementById('orzr-remove-trailing-spaces');
+        const oldText = button?.textContent;
+        state.saving = true;
+        updateSaveAllButton();
+        if (button) {
+            button.disabled = true;
+            button.textContent = `Czyszczę 0/${targets.length}…`;
+        }
+
+        let ok = 0;
+        let failed = 0;
+        try {
+            for (let i = 0; i < targets.length; i++) {
+                const { aao, cleaned } = targets[i];
+                if (button) button.textContent = `Czyszczę ${i + 1}/${targets.length}…`;
+                setStatus(`Czyszczę ${i + 1}/${targets.length}: „${aao.caption}”…`, 'info');
+                const values = {
+                    caption: cleaned,
+                    column: Number(aao.column) || 1,
+                    aao_category_id: aao.aao_category_id
+                };
+                try {
+                    await saveViaNativeEditor(aao.id, values);
+                    await new Promise(r => setTimeout(r, 120));
+                    if (!await verifySaved(aao.id, values)) throw new Error('Weryfikacja zapisu nie powiodła się.');
+                    aao.caption = cleaned;
+                    state.dirty.delete(aao.id);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd czyszczenia nazwy ZR ${aao.id}`, e);
+                    failed++;
+                }
+            }
+
+            const remaining = state.aaos
+                .map(aao => ({ aao, count: trailingWhitespaceCount(aao.caption) }))
+                .filter(x => x.count > 0)
+                .map(x => ({
+                    aao: x.aao,
+                    issue: `Białe znaki na końcu nazwy: ${x.count}`,
+                    trailingCount: x.count
+                }))
+                .sort((a, b) => a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) || a.aao.id - b.aao.id);
+            state.cleanupResults = remaining;
+            state.cleanupMode = 'trailing';
+            renderCleanupTable();
+            setStatus(
+                failed
+                    ? `Usunięto białe znaki i spacje z ${ok} nazw. Błędy: ${failed}.`
+                    : `Usunięto białe znaki i spacje z końca ${ok} nazw ZR.`,
+                failed ? 'warning' : 'success'
+            );
+        } finally {
+            state.saving = false;
+            updateSaveAllButton();
+            if (button && document.contains(button)) {
+                button.disabled = false;
+                button.textContent = oldText || 'Usuń białe znaki i spacje';
+            }
+            updateStats();
+        }
     }
 
     function csvCell(value) {
@@ -605,7 +712,7 @@
         if (empty) {
             empty.hidden = state.cleanupResults.length > 0;
             if (!state.cleanupMode) empty.textContent = 'Wybierz jedną z operacji porządkowania powyżej.';
-            else if (state.cleanupMode === 'duplicates') empty.textContent = 'Nie znaleziono duplikatów nazw ZR.';
+            else if (String(state.cleanupMode).startsWith('duplicates:')) empty.textContent = 'Nie znaleziono duplikatów nazw ZR.';
             else empty.textContent = 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.';
         }
 
@@ -939,6 +1046,8 @@
 #orzr-cleanup-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-cleanup-tools[hidden]{display:none}
 #orzr-cleanup-tools .btn{white-space:nowrap}
+.orzr-cleanup-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-right:10px;border-right:1px solid #ddd}
+.orzr-cleanup-group:last-child{border-right:0}
 .orzr-copy-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
 .orzr-copy-bulk-group strong{white-space:nowrap}
 #orzr-copy-all-column{width:95px}
@@ -1088,9 +1197,19 @@
         <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów. „Kopiuj wszystkie” kopiuje dokładnie tę widoczną listę.</div>
     </div>
     <div id="orzr-cleanup-tools" hidden>
-        <button id="orzr-find-duplicates" type="button" class="btn btn-warning">Wyszukaj duplikaty</button>
-        <button id="orzr-find-trailing-spaces" type="button" class="btn btn-warning">Poszukaj spacji na końcu nazwy</button>
-        <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
+        <div class="orzr-cleanup-group">
+            <strong>Wyszukaj duplikaty:</strong>
+            <button id="orzr-find-duplicates-exclude" type="button" class="btn btn-warning">Pomiń AZR i Bez kategorii</button>
+            <button id="orzr-find-duplicates-azr" type="button" class="btn btn-warning">Tylko AZR</button>
+            <button id="orzr-find-duplicates-all" type="button" class="btn btn-warning">Szukaj wszędzie</button>
+        </div>
+        <div class="orzr-cleanup-group">
+            <button id="orzr-find-trailing-spaces" type="button" class="btn btn-warning">Poszukaj spacji na końcu nazwy</button>
+            <button id="orzr-remove-trailing-spaces" type="button" class="btn btn-danger">Usuń białe znaki i spacje</button>
+        </div>
+        <div class="orzr-cleanup-group">
+            <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
+        </div>
     </div>
     <div id="orzr-stats">
         Wszystkich ZR: <strong id="orzr-stat-total">0</strong>
@@ -1154,8 +1273,11 @@
         document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);
-        document.getElementById('orzr-find-duplicates').addEventListener('click', findDuplicateNames);
+        document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
+        document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
+        document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));
         document.getElementById('orzr-find-trailing-spaces').addEventListener('click', findTrailingSpaces);
+        document.getElementById('orzr-remove-trailing-spaces').addEventListener('click', removeTrailingWhitespaceFromAll);
         document.getElementById('orzr-export-csv').addEventListener('click', exportAllAAOsToCSV);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();

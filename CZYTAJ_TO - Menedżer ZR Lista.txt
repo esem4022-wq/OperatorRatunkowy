@@ -15,6 +15,17 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.9 — 20.08.2026
+-----------------
+- W zakładce „Porządkowanie” wyszukiwanie duplikatów rozdzielono na trzy tryby.
+- „Pomiń AZR i Bez kategorii” — sprawdza duplikaty tylko w pozostałych kategoriach.
+- „Tylko AZR” — sprawdza duplikaty wyłącznie wewnątrz kategorii o dokładnej nazwie „AZR”.
+- „Szukaj wszędzie” — sprawdza duplikaty w całej liście ZR, również w AZR i Bez kategorii.
+- Dodano przycisk „Usuń białe znaki i spacje”. Czyści on zbiorczo spacje i inne białe znaki wyłącznie z końca nazw ZR; nie usuwa normalnych spacji wewnątrz nazw.
+- Przed zbiorczym czyszczeniem wyświetlane jest potwierdzenie z liczbą nazw do poprawienia.
+- Po czyszczeniu tabela Porządkowania pokazuje ewentualne pozostałe problemy i podsumowanie błędów.
+- Zachowano GitHub, stałą nazwę pliku userscriptu oraz pełną historię wersji w CZYTAJ_TO.
+
 v0.8 — 20.08.2026
 -----------------
 - Dodano nową zakładkę „Porządkowanie”.
