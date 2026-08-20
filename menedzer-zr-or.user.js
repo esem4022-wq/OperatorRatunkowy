@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.24.1
+// @version      0.25
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.24';
-    const CAPTURE_KEY = 'or_zr_capture_v024';
+    const VERSION = '0.25';
+    const CAPTURE_KEY = 'or_zr_capture_v025';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1013,6 +1013,49 @@
         return true;
     }
 
+    function findAAOButtonById(group, id) {
+        if (!group || !id) return null;
+
+        const escapedId = CSS.escape(String(id));
+
+        // Operator może renderować ZR na dwa sposoby. W szczególności w pierwszej
+        // wyświetlanej kategorii często występuje klasyczne id="aao_<ID>",
+        // podczas gdy w innych miejscach dostępny jest atrybut aao_id.
+        const selectors = [
+            `#aao_${escapedId}`,
+            `.aao[aao_id="${escapedId}"]`,
+            `.aao[data-aao-id="${escapedId}"]`,
+            `[aao_id="${escapedId}"]`,
+            `[data-aao-id="${escapedId}"]`
+        ];
+
+        for (const selector of selectors) {
+            let target = null;
+            try {
+                target = group.querySelector(selector);
+            } catch {}
+            if (target) return target;
+        }
+
+        // Ostateczny fallback: sprawdzenie identyfikatora/atrybutu na wszystkich
+        // przyciskach ZR w aktualnej grupie. Nie wybieramy nic po podobnej nazwie.
+        const candidates = group.querySelectorAll('a.aao, button.aao, .aao');
+        for (const el of candidates) {
+            const elementId = String(el.id || '');
+            const aaoId = String(
+                el.getAttribute('aao_id') ||
+                el.getAttribute('data-aao-id') ||
+                ''
+            );
+
+            if (elementId === `aao_${id}` || aaoId === String(id)) {
+                return el;
+            }
+        }
+
+        return null;
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
@@ -1049,9 +1092,9 @@
                 const id = String(aao?.id ?? '').trim();
                 if (!id) continue;
 
-                // W grze ZR są elementami .aao z atrybutem aao_id.
-                const target = group.querySelector(`.aao[aao_id="${CSS.escape(id)}"]`) ||
-                    document.querySelector(`#mission-aao-group .aao[aao_id="${CSS.escape(id)}"]`);
+                // Obsługa obu wariantów DOM Operatora, w tym pierwszej
+                // wyświetlanej kategorii z elementami id="aao_<ID>".
+                const target = findAAOButtonById(group, id);
 
                 // ZR może być jeszcze w trakcie doładowywania – MutationObserver
                 // wywoła tę funkcję ponownie, gdy pojawi się w DOM.
