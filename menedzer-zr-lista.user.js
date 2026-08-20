@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.12
-// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
+// @version      0.13
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.12';
+    const VERSION = '0.13';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -39,7 +39,8 @@
         cleanupResults: [],
         cleanupMode: null,
         cleanupSelected: new Set(),
-        deleting: false
+        deleting: false,
+        azrVehicleSyncing: false
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -540,14 +541,20 @@
         const azrCategoryId = getAZRCategoryId();
         const all = document.getElementById('orzr-missing-azr-copy-all');
         if (all) {
-            all.disabled = state.copying || azrCategoryId == null || rows.length === 0;
+            all.disabled = state.copying || state.azrVehicleSyncing || azrCategoryId == null || rows.length === 0;
             all.textContent = state.copying
                 ? 'Kopiowanie…'
                 : `⧉ Kopiuj wszystkie do AZR (${rows.length})`;
         }
         document.querySelectorAll('.orzr-missing-azr-copy').forEach(btn => {
-            btn.disabled = state.copying || azrCategoryId == null;
+            btn.disabled = state.copying || state.azrVehicleSyncing || azrCategoryId == null;
         });
+
+        const sync = document.getElementById('orzr-missing-azr-sync-vehicles');
+        if (sync) {
+            sync.disabled = state.copying || state.azrVehicleSyncing || azrCategoryId == null;
+            if (!state.azrVehicleSyncing) sync.textContent = '🔄 Sprawdź i aktualizuj pojazdy AZR';
+        }
     }
 
     function renderMissingAZRTable() {
@@ -729,6 +736,332 @@
         }
     }
 
+
+
+    function labelForAAOField(doc, field) {
+        if (field.id) {
+            try {
+                const label = doc.querySelector(`label[for="${CSS.escape(field.id)}"]`);
+                if (label) return label.textContent.replace(/\s+/g, ' ').trim();
+            } catch {}
+        }
+
+        const group = field.closest('.form-group,.control-group,.row,[class*="form"]');
+        const label = group?.querySelector('label');
+        return label ? label.textContent.replace(/\s+/g, ' ').trim() : '';
+    }
+
+    function isVehicleRequirementField(doc, field) {
+        if (!field || field.disabled || !field.name) return false;
+        if (field.tagName === 'INPUT' && ['hidden', 'submit', 'button', 'checkbox', 'radio'].includes(field.type)) return false;
+
+        const name = String(field.name || '').trim();
+        const nn = normalize(name);
+        const label = labelForAAOField(doc, field);
+        const nl = normalize(label);
+
+        // Pola techniczne i organizacyjne ZR nie są wymaganiami pojazdów.
+        if (
+            name === 'authenticity_token' || name === 'utf8' || name === '_method' || name === 'commit' ||
+            nn.includes('caption') || nn.includes('aao category') || nn.includes('category id') ||
+            nn.includes('column') || nn.includes('column number') ||
+            nl === 'nazwa' || nl.includes('nazwa zr') || nl.includes('nazwa reguly') ||
+            nl.includes('kategoria') || nl.includes('kolumna')
+        ) return false;
+
+        // Użytkownik chce synchronizować wyłącznie pojazdy, bez zasobów i personelu.
+        if (
+            nl.includes('wod') || nl.includes('pian') || nn.includes('water') || nn.includes('foam') ||
+            nl.includes('personel') || nl.includes('strazak') || nl.includes('policjant') ||
+            nl.includes('ratownik') || nl.includes('pacjent') || nl.includes('odleglosc') || nl.includes('dystans')
+        ) return false;
+
+        if (/^vehicle_type_ids\[/.test(name) || /^vehicle_type_caption\[/.test(name)) return true;
+        if (/^aao\[/.test(name) && field.tagName === 'INPUT') {
+            const raw = String(field.value ?? '').trim();
+            if (field.type === 'number' || raw === '' || /^-?\d+(?:[.,]\d+)?$/.test(raw)) return true;
+        }
+        if (field.tagName === 'INPUT' && field.type === 'number') return true;
+
+        return false;
+    }
+
+    function normalizeVehicleRequirementValue(value) {
+        const raw = String(value ?? '').replace(/\u00a0/g, ' ').trim();
+        if (!raw) return '0';
+        const numeric = Number(raw.replace(',', '.'));
+        return Number.isFinite(numeric) ? String(numeric) : raw;
+    }
+
+    function collectVehicleRequirementSnapshot(doc) {
+        const controls = [...doc.querySelectorAll('input[name],select[name],textarea[name]')]
+            .filter(field => isVehicleRequirementField(doc, field));
+
+        const occurrences = new Map();
+        const fields = [];
+
+        for (const field of controls) {
+            const name = String(field.name || '').trim();
+            const index = occurrences.get(name) || 0;
+            occurrences.set(name, index + 1);
+            const key = `${name}@@${index}`;
+            const rawValue = field.value == null ? '' : String(field.value);
+            fields.push({
+                key,
+                name,
+                index,
+                label: labelForAAOField(doc, field) || name,
+                rawValue,
+                value: normalizeVehicleRequirementValue(rawValue)
+            });
+        }
+
+        fields.sort((a, b) => a.key.localeCompare(b.key));
+        const signature = fields.map(f => `${f.key}=${f.value}`).join('\n');
+        return { fields, signature };
+    }
+
+    async function fetchAAOEditorDocument(id) {
+        const response = await fetch(`/aaos/${id}/edit`, {
+            credentials: 'same-origin',
+            headers: { Accept: 'text/html' }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status} podczas pobierania ZR ${id}.`);
+        const html = await response.text();
+        return new DOMParser().parseFromString(html, 'text/html');
+    }
+
+    async function readVehicleRequirementSnapshot(id) {
+        const doc = await fetchAAOEditorDocument(id);
+        const snapshot = collectVehicleRequirementSnapshot(doc);
+        if (!snapshot.fields.length) {
+            throw new Error(`Nie znaleziono pól pojazdów w ZR ${id}.`);
+        }
+        return snapshot;
+    }
+
+    function vehicleSnapshotsEqual(a, b) {
+        return String(a?.signature ?? '') === String(b?.signature ?? '');
+    }
+
+    function getAZRVehicleComparisonGroups() {
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) return [];
+
+        const byName = new Map();
+        for (const aao of state.aaos) {
+            if (aao.aao_category_id == null) continue; // Bez kategorii pomijamy.
+            const name = String(aao.caption ?? '');
+            if (!name) continue;
+            if (!byName.has(name)) byName.set(name, { name, sources: [], targets: [] });
+            const group = byName.get(name);
+            if (aao.aao_category_id === azrCategoryId) group.targets.push(aao);
+            else group.sources.push(aao);
+        }
+
+        return [...byName.values()]
+            .filter(group => group.sources.length && group.targets.length)
+            .map(group => ({
+                ...group,
+                sources: [...group.sources].sort((a, b) =>
+                    getCategoryName(a.aao_category_id).localeCompare(getCategoryName(b.aao_category_id), 'pl', { numeric: true, sensitivity: 'base' }) ||
+                    a.id - b.id
+                ),
+                targets: [...group.targets].sort((a, b) => a.id - b.id)
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name, 'pl', { numeric: true, sensitivity: 'base' }));
+    }
+
+    async function applyVehicleSnapshotToAZR(targetId, sourceSnapshot) {
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:10px;height:10px;border:0;opacity:0;pointer-events:none';
+        frame.src = `/aaos/${targetId}/edit`;
+        document.body.appendChild(frame);
+
+        try {
+            await waitForFrameLoad(frame);
+            const doc = frame.contentDocument;
+            if (!doc) throw new Error('Nie można otworzyć formularza edycji AZR.');
+            const form = doc.querySelector('form[action*="/aaos/"]') || doc.querySelector('form');
+            if (!form) throw new Error('Nie znaleziono formularza edycji AZR.');
+
+            const targetControls = [...doc.querySelectorAll('input[name],select[name],textarea[name]')]
+                .filter(field => isVehicleRequirementField(doc, field));
+            const occurrences = new Map();
+            const targetByKey = new Map();
+
+            for (const field of targetControls) {
+                const name = String(field.name || '').trim();
+                const index = occurrences.get(name) || 0;
+                occurrences.set(name, index + 1);
+                targetByKey.set(`${name}@@${index}`, field);
+            }
+
+            const sourceByKey = new Map(sourceSnapshot.fields.map(field => [field.key, field]));
+            let changed = 0;
+
+            for (const [key, targetField] of targetByKey.entries()) {
+                const sourceField = sourceByKey.get(key);
+                const newValue = sourceField ? sourceField.rawValue : '';
+                if (normalizeVehicleRequirementValue(targetField.value) !== normalizeVehicleRequirementValue(newValue)) {
+                    setNativeValue(targetField, newValue);
+                    changed++;
+                }
+            }
+
+            if (!changed) return 0;
+
+            const secondLoad = waitForFrameLoad(frame);
+            const submit = doc.querySelector('#save-button') || form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submit) submit.click();
+            else if (form.requestSubmit) form.requestSubmit();
+            else form.submit();
+            await secondLoad;
+
+            const resultDoc = frame.contentDocument;
+            const errorBox = resultDoc?.querySelector('.alert-danger,.alert-error,.has-error .help-block,.field_with_errors');
+            if (errorBox && normalize(errorBox.textContent)) {
+                throw new Error(errorBox.textContent.replace(/\s+/g, ' ').trim());
+            }
+            return changed;
+        } finally {
+            setTimeout(() => frame.remove(), 50);
+        }
+    }
+
+    async function syncAZRVehicleRequirements() {
+        if (state.copying || state.azrVehicleSyncing) return;
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) {
+            setStatus('Nie znaleziono kategorii o dokładnej nazwie „AZR”.', 'danger');
+            return;
+        }
+
+        // Najpierw pobieramy świeżą listę, aby porównywać aktualny stan.
+        try {
+            state.aaos = await fetchAAOListNormalized();
+            renderMissingAZRTable();
+        } catch (e) {
+            setStatus(`Błąd odświeżania listy przed kontrolą AZR: ${e.message || e}`, 'danger');
+            return;
+        }
+
+        const groups = getAZRVehicleComparisonGroups();
+        if (!groups.length) {
+            setStatus('Brak ZR o tych samych dokładnych nazwach w AZR i w innych kategoriach.', 'warning');
+            return;
+        }
+
+        const button = document.getElementById('orzr-missing-azr-sync-vehicles');
+        state.azrVehicleSyncing = true;
+        updateMissingAZRButtons();
+
+        const snapshotCache = new Map();
+        const getSnapshot = async id => {
+            if (!snapshotCache.has(id)) snapshotCache.set(id, readVehicleRequirementSnapshot(id));
+            return snapshotCache.get(id);
+        };
+
+        const mismatches = [];
+        const conflicts = [];
+        let checkedTargets = 0;
+        let sameTargets = 0;
+        let scanErrors = 0;
+
+        try {
+            for (let i = 0; i < groups.length; i++) {
+                const group = groups[i];
+                if (button) button.textContent = `Sprawdzam ${i + 1}/${groups.length}…`;
+                setStatus(`Sprawdzam pojazdy AZR ${i + 1}/${groups.length}: „${group.name}”…`, 'info');
+
+                try {
+                    const sourceSnapshots = [];
+                    for (const source of group.sources) {
+                        sourceSnapshots.push({ source, snapshot: await getSnapshot(source.id) });
+                    }
+
+                    const canonical = sourceSnapshots[0];
+                    const differingSources = sourceSnapshots.filter(item => !vehicleSnapshotsEqual(item.snapshot, canonical.snapshot));
+                    if (differingSources.length) {
+                        conflicts.push(group);
+                        continue;
+                    }
+
+                    for (const target of group.targets) {
+                        const targetSnapshot = await getSnapshot(target.id);
+                        checkedTargets++;
+                        if (vehicleSnapshotsEqual(canonical.snapshot, targetSnapshot)) {
+                            sameTargets++;
+                        } else {
+                            mismatches.push({
+                                name: group.name,
+                                source: canonical.source,
+                                target,
+                                sourceSnapshot: canonical.snapshot
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error(TAG, `Błąd sprawdzania pojazdów dla „${group.name}”`, e);
+                    scanErrors++;
+                }
+            }
+
+            if (!mismatches.length) {
+                const extra = [
+                    conflicts.length ? `Konflikty źródeł: ${conflicts.length}.` : '',
+                    scanErrors ? `Błędy odczytu: ${scanErrors}.` : ''
+                ].filter(Boolean).join(' ');
+                setStatus(`Sprawdzono ${checkedTargets} ZR w AZR. Wszystkie mają takie same pojazdy jak ZR źródłowe. ${extra}`.trim(), conflicts.length || scanErrors ? 'warning' : 'success');
+                return;
+            }
+
+            const conflictNote = conflicts.length
+                ? `\n\nUwaga: ${conflicts.length} nazw ma różne zestawy pojazdów w kilku kategoriach źródłowych. Te pozycje zostaną pominięte.`
+                : '';
+            if (!confirm(`Znaleziono ${mismatches.length} ZR w AZR z innym zestawem lub liczbą pojazdów.\n\nZaktualizować je tak, aby pojazdy były dokładnie takie jak w ZR o tej samej nazwie w innych kategoriach?${conflictNote}`)) {
+                setStatus(`Sprawdzono ${checkedTargets} ZR w AZR. Do aktualizacji: ${mismatches.length}. Aktualizacja anulowana.`, 'warning');
+                return;
+            }
+
+            let updated = 0;
+            let updateErrors = 0;
+            for (let i = 0; i < mismatches.length; i++) {
+                const item = mismatches[i];
+                if (button) button.textContent = `Aktualizuję ${i + 1}/${mismatches.length}…`;
+                setStatus(`Aktualizuję AZR ${i + 1}/${mismatches.length}: „${item.name}”…`, 'info');
+                try {
+                    await applyVehicleSnapshotToAZR(item.target.id, item.sourceSnapshot);
+                    await new Promise(r => setTimeout(r, 120));
+                    const verify = await readVehicleRequirementSnapshot(item.target.id);
+                    if (!vehicleSnapshotsEqual(item.sourceSnapshot, verify)) {
+                        throw new Error('Weryfikacja pojazdów po zapisie nie powiodła się.');
+                    }
+                    updated++;
+                } catch (e) {
+                    console.error(TAG, `Błąd aktualizacji pojazdów AZR ${item.target.id}`, e);
+                    updateErrors++;
+                }
+            }
+
+            state.aaos = await fetchAAOListNormalized();
+            renderMissingAZRTable();
+            const parts = [
+                `Sprawdzono: ${checkedTargets}`,
+                `bez zmian: ${sameTargets}`,
+                `zaktualizowano: ${updated}`,
+                conflicts.length ? `konflikty źródeł: ${conflicts.length}` : '',
+                scanErrors ? `błędy odczytu: ${scanErrors}` : '',
+                updateErrors ? `błędy aktualizacji: ${updateErrors}` : ''
+            ].filter(Boolean);
+            setStatus(`Synchronizacja pojazdów AZR zakończona. ${parts.join(' • ')}.`, conflicts.length || scanErrors || updateErrors ? 'warning' : 'success');
+        } finally {
+            state.azrVehicleSyncing = false;
+            if (button && document.contains(button)) button.textContent = '🔄 Sprawdź i aktualizuj pojazdy AZR';
+            updateMissingAZRButtons();
+            updateStats();
+        }
+    }
 
     function duplicateNameKey(caption) {
         // Przy duplikatach nie usuwamy spacji z końca nazwy — do tego służy
@@ -1718,8 +2051,9 @@
     </div>
     <div id="orzr-missing-azr-tools" hidden>
         <button id="orzr-missing-azr-copy-all" type="button" class="btn btn-success">⧉ Kopiuj wszystkie do AZR (0)</button>
+        <button id="orzr-missing-azr-sync-vehicles" type="button" class="btn btn-primary">🔄 Sprawdź i aktualizuj pojazdy AZR</button>
         <button id="orzr-missing-azr-refresh" type="button" class="btn btn-default">↻ Sprawdź ponownie</button>
-        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. Każda kopia do AZR jest zawsze ustawiana w kolumnie 1.</span>
+        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. Każda nowa kopia do AZR jest zawsze ustawiana w kolumnie 1. Synchronizacja porównuje wyłącznie pojazdy i ich liczby.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -1810,8 +2144,9 @@
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);
         document.getElementById('orzr-missing-azr-copy-all').addEventListener('click', copyAllMissingToAZR);
+        document.getElementById('orzr-missing-azr-sync-vehicles').addEventListener('click', syncAZRVehicleRequirements);
         document.getElementById('orzr-missing-azr-refresh').addEventListener('click', async () => {
-            if (state.copying) return;
+            if (state.copying || state.azrVehicleSyncing) return;
             try {
                 state.aaos = await fetchAAOListNormalized();
                 renderMissingAZRTable();

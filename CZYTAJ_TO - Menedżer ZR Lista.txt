@@ -15,6 +15,17 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.13 — 20.08.2026
+------------------
+- W zakładce „Brakuje w AZR” dodano przycisk „Sprawdź i aktualizuj pojazdy AZR”.
+- Kontrola porównuje ZR po dokładnie tej samej nazwie: ZR z kategorii „AZR” z odpowiednikiem w innych kategoriach.
+- Kategoria „Bez kategorii” jest pomijana.
+- Porównywane są wyłącznie pola pojazdów i ich liczby; nazwa, kategoria, numer kolumny, woda, piana i personel nie są synchronizowane.
+- Jeżeli zestaw lub liczba pojazdów w AZR różni się od ZR źródłowego, skrypt proponuje aktualizację i po potwierdzeniu przepisuje wymagania pojazdów do istniejącego ZR w AZR.
+- Po aktualizacji wykonywana jest ponowna weryfikacja pojazdów.
+- Jeżeli dokładnie ta sama nazwa występuje w kilku zwykłych kategoriach, a ich zestawy pojazdów różnią się między sobą, skrypt traktuje to jako konflikt i nie aktualizuje takiej pozycji automatycznie.
+- Zachowano kopiowanie brakujących ZR do AZR zawsze do kolumny 1, obsługę GitHuba, stałą nazwę userscriptu i pełną historię wersji.
+
 v0.12 — 20.08.2026
 ------------------
 - W zakładce „Brakuje w AZR” każda kopia tworzona w kategorii „AZR” jest teraz zawsze ustawiana w numerze kolumny 1.
