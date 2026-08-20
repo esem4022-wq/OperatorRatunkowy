@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.24
+// @version      0.24.1
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
-// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-zr-or.user.js
-// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/userscripts/menedzer-zr-or.user.js
+// @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-or.user.js
+// @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-or.user.js
 // @match        https://www.operatorratunkowy.pl/*
 // @match        https://operatorratunkowy.pl/*
 // @match        https://policja.operatorratunkowy.pl/*
