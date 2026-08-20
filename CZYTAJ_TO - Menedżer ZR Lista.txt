@@ -1,0 +1,59 @@
+MENEDŻER ZR LISTA
+=================
+
+Plik skryptu w ZIP-ie:
+  menedzer-zr-lista.user.js
+
+Repozytorium GitHub:
+  https://github.com/esem4022-wq/OperatorRatunkowy
+
+Aktualizacje Tampermonkey:
+  Skrypt ma stałe adresy @updateURL i @downloadURL do pliku
+  menedzer-zr-lista.user.js w gałęzi main repozytorium.
+
+
+HISTORIA WERSJI
+===============
+
+v0.5 — 20.08.2026
+-----------------
+- Dodano zakładkę „Kopiuj”.
+- W zakładce kopiowania widoczne są dane źródłowego ZR:
+  ID, nazwa ZR, numer kolumny i kategoria.
+- Zamiast przycisków „Zapisz / Edycja” jest przycisk „Kopiuj”.
+- Po prawej stronie przycisku „Kopiuj” dodano pola docelowe:
+  numer kolumny i kategoria.
+- Kopiowanie korzysta z natywnego formularza gry /aaos/{id}/copy,
+  dzięki czemu zachowywana jest cała zawartość i wymagania kopiowanego ZR.
+- Po skopiowaniu skrypt próbuje wykryć nowy ZR w API i podaje jego nowe ID.
+- Zachowano wyszukiwanie, filtrowanie i sortowanie również w zakładce „Kopiuj”.
+- Przycisk „Zapisz zmienione” jest ukrywany w zakładce „Kopiuj”.
+- Zachowano obsługę aktualizacji z GitHuba.
+- Zachowano wyświetlanie ikony wyłącznie na stronie głównej i ustawianie jej obok Menedżera budynków.
+
+v0.4 — 14.08.2026
+-----------------
+- Dodano obsługę aktualizacji przez GitHub.
+- Dodano @homepageURL, @updateURL i @downloadURL.
+- Stała nazwa pliku skryptu: menedzer-zr-lista.user.js.
+
+v0.3 — 13.08.2026
+-----------------
+- Ikona Menedżera ZR Lista jest automatycznie ustawiana po lewej stronie przycisku „Budynki OR”.
+- Przycisk jest wyświetlany tylko na stronie głównej OperatorRatunkowy.
+- Skrypt nie uruchamia przycisku w iframe'ach ani na podstronach/oknach gry.
+
+v0.2 — 12.08.2026
+-----------------
+- Zmieniono nazwę userscriptu na „Menedżer ZR Lista”.
+- Rozdzielono ten skrypt od „Menedżer ZR OR”.
+- Poprawiono pozycjonowanie przycisku uruchamiającego.
+
+v0.1 — 12.08.2026
+-----------------
+- Pierwsza wersja osobnego Menedżera ZR Lista.
+- Lista ZR pobierana z API gry.
+- Wyszukiwanie, filtrowanie i sortowanie.
+- Szybka edycja nazwy, numeru kolumny i kategorii.
+- Zapis pojedynczego ZR i wszystkich zmienionych ZR.
+- Przycisk przejścia do pełnej edycji ZR.

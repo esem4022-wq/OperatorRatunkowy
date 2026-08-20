@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.4
-// @description  Osobny menedżer ZR: lista, szybka edycja nazwy, kolumny i kategorii.
+// @version      0.5
+// @description  Osobny menedżer ZR: lista, szybka edycja oraz kopiowanie ZR do wybranej kolumny i kategorii.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.4';
+    const VERSION = '0.5';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -32,7 +32,10 @@
         saving: false,
         filter: '',
         categoryFilter: 'all',
-        sort: 'caption-asc'
+        sort: 'caption-asc',
+        activeTab: 'list',
+        copyTargets: new Map(),
+        copying: false
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -96,8 +99,9 @@
         }
 
         state.dirty.clear();
+        state.copyTargets.clear();
         populateCategoryFilter();
-        renderTable();
+        renderActiveTable();
         updateStats();
         updateSaveAllButton();
         setStatus(`Wczytano ${state.aaos.length} ZR.`, 'success');
@@ -139,10 +143,21 @@
         updateSaveAllButton();
     }
 
-    function sortedFilteredAAOs() {
+    function valuesForView(aao, mode = state.activeTab) {
+        if (mode === 'copy') {
+            return {
+                caption: aao.caption,
+                column: aao.column,
+                aao_category_id: aao.aao_category_id
+            };
+        }
+        return currentRowValues(aao.id);
+    }
+
+    function sortedFilteredAAOs(mode = state.activeTab) {
         const q = normalize(state.filter);
         const rows = state.aaos.filter(aao => {
-            const v = currentRowValues(aao.id);
+            const v = valuesForView(aao, mode);
             if (!v) return false;
             if (state.categoryFilter === 'none' && v.aao_category_id !== null) return false;
             if (state.categoryFilter !== 'all' && state.categoryFilter !== 'none' &&
@@ -155,7 +170,7 @@
         });
 
         rows.sort((a, b) => {
-            const av = currentRowValues(a.id), bv = currentRowValues(b.id);
+            const av = valuesForView(a, mode), bv = valuesForView(b, mode);
             switch (state.sort) {
                 case 'caption-desc': return bv.caption.localeCompare(av.caption, 'pl', { numeric: true, sensitivity: 'base' });
                 case 'column-asc': return Number(av.column) - Number(bv.column) || av.caption.localeCompare(bv.caption, 'pl');
@@ -209,6 +224,209 @@
         document.querySelectorAll('.orzr-column').forEach(el => el.addEventListener('input', () => markDirty(Number(el.dataset.id), 'column', Math.max(1, Number.parseInt(el.value, 10) || 1))));
         document.querySelectorAll('.orzr-category').forEach(el => el.addEventListener('change', () => markDirty(Number(el.dataset.id), 'aao_category_id', el.value === '' ? null : Number(el.value))));
         document.querySelectorAll('.orzr-save-row').forEach(el => el.addEventListener('click', () => saveOne(Number(el.dataset.id), el)));
+    }
+
+    function getCopyTarget(id) {
+        const base = state.aaos.find(x => x.id === id);
+        if (!base) return null;
+        if (!state.copyTargets.has(id)) {
+            state.copyTargets.set(id, {
+                column: Number(base.column) || 1,
+                aao_category_id: base.aao_category_id
+            });
+        }
+        return state.copyTargets.get(id);
+    }
+
+    function setCopyTarget(id, key, value) {
+        const target = getCopyTarget(id);
+        if (!target) return;
+        target[key] = value;
+    }
+
+    function renderCopyTable() {
+        const tbody = document.getElementById('orzr-copy-body');
+        if (!tbody) return;
+        const rows = sortedFilteredAAOs('copy');
+        tbody.innerHTML = '';
+        const empty = document.getElementById('orzr-empty');
+        if (empty) empty.hidden = rows.length > 0;
+
+        for (const aao of rows) {
+            const target = getCopyTarget(aao.id);
+            const tr = document.createElement('tr');
+            tr.dataset.zrId = aao.id;
+            tr.innerHTML = `
+                <td class="orzr-id">${aao.id}</td>
+                <td><input type="text" class="form-control input-sm" value="${escapeHTML(aao.caption)}" readonly></td>
+                <td><input type="number" class="form-control input-sm" value="${Number(aao.column) || 1}" readonly></td>
+                <td><select class="form-control input-sm" disabled>${categoryOptions(aao.aao_category_id)}</select></td>
+                <td class="orzr-copy-action">
+                    <button type="button" class="btn btn-primary btn-sm orzr-copy-row" data-id="${aao.id}">⧉ Kopiuj</button>
+                </td>
+                <td><input type="number" class="form-control input-sm orzr-copy-column" value="${Number(target.column) || 1}" min="1" step="1" data-id="${aao.id}"></td>
+                <td><select class="form-control input-sm orzr-copy-category" data-id="${aao.id}">${categoryOptions(target.aao_category_id)}</select></td>`;
+            tbody.appendChild(tr);
+        }
+        bindCopyEvents();
+        updateStats();
+        updateCopyButtons();
+    }
+
+    function bindCopyEvents() {
+        document.querySelectorAll('.orzr-copy-column').forEach(el => el.addEventListener('input', () => {
+            setCopyTarget(Number(el.dataset.id), 'column', Math.max(1, Number.parseInt(el.value, 10) || 1));
+        }));
+        document.querySelectorAll('.orzr-copy-category').forEach(el => el.addEventListener('change', () => {
+            setCopyTarget(Number(el.dataset.id), 'aao_category_id', el.value === '' ? null : Number(el.value));
+        }));
+        document.querySelectorAll('.orzr-copy-row').forEach(el => el.addEventListener('click', () => copyOne(Number(el.dataset.id), el)));
+    }
+
+    function updateCopyButtons() {
+        document.querySelectorAll('.orzr-copy-row').forEach(btn => {
+            btn.disabled = state.copying;
+        });
+    }
+
+    async function fetchAAOListNormalized() {
+        const raw = await fetchJSON('/api/v1/aaos');
+        return unwrapArray(raw).map(aao => ({
+            ...aao,
+            id: Number(aao.id),
+            caption: String(aao.caption ?? ''),
+            column: Number(aao.column ?? 1),
+            aao_category_id: aao.aao_category_id == null || aao.aao_category_id === ''
+                ? null : Number(aao.aao_category_id)
+        })).filter(aao => Number.isFinite(aao.id));
+    }
+
+    async function copyViaNativeEditor(id, target) {
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:10px;height:10px;border:0;opacity:0;pointer-events:none';
+        frame.src = `/aaos/${id}/copy`;
+        document.body.appendChild(frame);
+        try {
+            await waitForFrameLoad(frame);
+            const doc = frame.contentDocument;
+            if (!doc) throw new Error('Nie można otworzyć formularza kopiowania ZR.');
+            const form = doc.querySelector('form[action*="/aaos"]') || doc.querySelector('form');
+            if (!form) throw new Error('Nie znaleziono formularza kopiowania ZR.');
+            const column = findColumnField(doc);
+            const category = findCategoryField(doc);
+            if (!column) throw new Error('Nie znaleziono pola docelowego numeru kolumny.');
+            if (!category) throw new Error('Nie znaleziono pola docelowej kategorii.');
+
+            setNativeValue(column, target.column);
+            setNativeValue(category, target.aao_category_id);
+
+            const secondLoad = waitForFrameLoad(frame);
+            const submit = doc.querySelector('#save-button') || form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submit) submit.click();
+            else if (form.requestSubmit) form.requestSubmit();
+            else form.submit();
+            await secondLoad;
+
+            const resultDoc = frame.contentDocument;
+            const errorBox = resultDoc?.querySelector('.alert-danger,.alert-error,.has-error .help-block,.field_with_errors');
+            if (errorBox && normalize(errorBox.textContent)) {
+                throw new Error(errorBox.textContent.replace(/\s+/g, ' ').trim());
+            }
+        } finally {
+            setTimeout(() => frame.remove(), 50);
+        }
+    }
+
+    async function findNewCopy(source, target, knownIds) {
+        for (let attempt = 0; attempt < 6; attempt++) {
+            if (attempt) await new Promise(r => setTimeout(r, 250));
+            try {
+                const list = await fetchAAOListNormalized();
+                const candidates = list.filter(aao =>
+                    !knownIds.has(aao.id) &&
+                    aao.caption === source.caption &&
+                    Number(aao.column) === Number(target.column) &&
+                    aao.aao_category_id === target.aao_category_id
+                );
+                if (candidates.length) {
+                    candidates.sort((a, b) => b.id - a.id);
+                    return candidates[0];
+                }
+            } catch (e) {
+                console.warn(TAG, 'Weryfikacja kopii przez API nie powiodła się:', e);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    async function copyOne(id, button = null) {
+        if (state.copying) return;
+        const source = state.aaos.find(x => x.id === id);
+        const target = getCopyTarget(id);
+        if (!source || !target) return;
+
+        state.copying = true;
+        const oldText = button?.textContent;
+        if (button) button.textContent = 'Kopiuję…';
+        updateCopyButtons();
+
+        const knownIds = new Set(state.aaos.map(x => x.id));
+        try {
+            setStatus(
+                `Kopiuję ZR „${source.caption}” → kolumna ${target.column}, ${getCategoryName(target.aao_category_id)}…`,
+                'info'
+            );
+            await copyViaNativeEditor(id, target);
+            const created = await findNewCopy(source, target, knownIds);
+            if (created) {
+                state.aaos.push(created);
+                setStatus(
+                    `Skopiowano „${source.caption}” do kolumny ${target.column}, ${getCategoryName(target.aao_category_id)}. Nowe ID: ${created.id}.`,
+                    'success'
+                );
+            } else {
+                setStatus(
+                    `Kopiowanie „${source.caption}” zostało wysłane. Jeśli nowa kopia nie pojawi się od razu, użyj „Odśwież”.`,
+                    'success'
+                );
+            }
+            renderCopyTable();
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd kopiowania ZR ${id}: ${e.message || e}`, 'danger');
+        } finally {
+            state.copying = false;
+            if (button && document.contains(button)) button.textContent = oldText || '⧉ Kopiuj';
+            updateCopyButtons();
+        }
+    }
+
+    function renderActiveTable() {
+        const listTable = document.getElementById('orzr-table');
+        const copyTable = document.getElementById('orzr-copy-table');
+        const saveAll = document.getElementById('orzr-save-all');
+        const changedStat = document.getElementById('orzr-changed-stat');
+
+        const copying = state.activeTab === 'copy';
+        if (listTable) listTable.hidden = copying;
+        if (copyTable) copyTable.hidden = !copying;
+        if (saveAll) saveAll.hidden = copying;
+        if (changedStat) changedStat.hidden = copying;
+
+        if (copying) renderCopyTable();
+        else renderTable();
+
+        document.querySelectorAll('.orzr-tab').forEach(btn => {
+            btn.classList.toggle('orzr-tab-active', btn.dataset.tab === state.activeTab);
+        });
+    }
+
+    function setActiveTab(tab) {
+        if (!['list', 'copy'].includes(tab)) return;
+        state.activeTab = tab;
+        setStatus('', 'info');
+        renderActiveTable();
     }
 
     function setStatus(text, type = 'info') {
@@ -335,7 +553,7 @@
             });
             state.dirty.delete(id);
             setStatus(`Zapisano: ${base.caption}`, 'success');
-            renderTable();
+            renderActiveTable();
             updateSaveAllButton();
         } catch (e) {
             console.error(TAG, e);
@@ -376,7 +594,7 @@
                     failed++;
                 }
             }
-            renderTable();
+            renderActiveTable();
             setStatus(
                 failed ? `Zapisano ${ok}. Błędy: ${failed}.` : `Zapisano wszystkie zmiany: ${ok} ZR.`,
                 failed ? 'warning' : 'success'
@@ -410,9 +628,12 @@
 #orzr-launcher:hover{filter:brightness(1.08)}
 #orzr-manager-overlay{position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.55);padding:22px;display:none}
 #orzr-manager-overlay.orzr-open{display:block}
-#orzr-manager{max-width:1450px;height:calc(100vh - 44px);margin:0 auto;background:#fff;color:#222;border-radius:7px;box-shadow:0 4px 20px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:Arial,sans-serif}
+#orzr-manager{max-width:1750px;height:calc(100vh - 44px);margin:0 auto;background:#fff;color:#222;border-radius:7px;box-shadow:0 4px 20px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:Arial,sans-serif}
 #orzr-manager-header{padding:12px 14px;background:#333;color:#fff;display:flex;align-items:center;gap:12px}
 #orzr-manager-header h3{margin:0;font-size:20px;flex:1}
+#orzr-tabs{display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid #ddd;background:#f7f7f7}
+.orzr-tab{border:1px solid #ccc;border-bottom:0;border-radius:5px 5px 0 0;background:#e9e9e9;padding:8px 16px;font-weight:700;cursor:pointer}
+.orzr-tab.orzr-tab-active{background:#fff;color:#337ab7;position:relative;top:1px}
 #orzr-close{border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer}
 #orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 240px 230px auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
 #orzr-toolbar input,#orzr-toolbar select{width:100%}
@@ -423,14 +644,22 @@
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
 #orzr-table th:nth-child(4),#orzr-table td:nth-child(4){width:280px}
 #orzr-table th:nth-child(5),#orzr-table td:nth-child(5){width:210px}
+#orzr-copy-table th:nth-child(1),#orzr-copy-table td:nth-child(1){width:80px}
+#orzr-copy-table th:nth-child(3),#orzr-copy-table td:nth-child(3){width:110px}
+#orzr-copy-table th:nth-child(4),#orzr-copy-table td:nth-child(4){width:230px}
+#orzr-copy-table th:nth-child(5),#orzr-copy-table td:nth-child(5){width:115px;text-align:center}
+#orzr-copy-table th:nth-child(6),#orzr-copy-table td:nth-child(6){width:155px}
+#orzr-copy-table th:nth-child(7),#orzr-copy-table td:nth-child(7){width:250px}
+#orzr-copy-table select:disabled,#orzr-copy-table input:read-only{background:#f7f7f7;color:#555;opacity:1}
+.orzr-copy-action{white-space:nowrap}
 .orzr-actions{white-space:nowrap}
 .orzr-actions .btn+.btn{margin-left:4px}
 #orzr-empty{padding:30px;text-align:center;color:#777}
@@ -502,6 +731,10 @@
         <h3>📋 Menedżer ZR Lista <small style="opacity:.7">v${VERSION}</small></h3>
         <button id="orzr-close" type="button">×</button>
     </div>
+    <div id="orzr-tabs">
+        <button type="button" class="orzr-tab orzr-tab-active" data-tab="list">✎ Lista / edycja</button>
+        <button type="button" class="orzr-tab" data-tab="copy">⧉ Kopiuj</button>
+    </div>
     <div id="orzr-toolbar">
         <input id="orzr-search" type="search" class="form-control" placeholder="Szukaj po nazwie, kategorii, kolumnie lub ID…">
         <select id="orzr-filter-category" class="form-control">
@@ -522,7 +755,7 @@
     <div id="orzr-stats">
         Wszystkich ZR: <strong id="orzr-stat-total">0</strong>
         &nbsp;|&nbsp; Widocznych: <strong id="orzr-stat-shown">0</strong>
-        &nbsp;|&nbsp; Zmienionych: <strong id="orzr-stat-changed">0</strong>
+        <span id="orzr-changed-stat">&nbsp;|&nbsp; Zmienionych: <strong id="orzr-stat-changed">0</strong></span>
     </div>
     <div id="orzr-status" class="orzr-status orzr-status-info" hidden></div>
     <div id="orzr-table-wrap">
@@ -530,26 +763,36 @@
             <thead><tr><th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Akcje</th></tr></thead>
             <tbody id="orzr-list-body"></tbody>
         </table>
+        <table id="orzr-copy-table" hidden>
+            <thead><tr>
+                <th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th>
+                <th>Kopiuj</th><th>Docelowy nr kolumny</th><th>Docelowa kategoria</th>
+            </tr></thead>
+            <tbody id="orzr-copy-body"></tbody>
+        </table>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
 </div>`;
         document.body.appendChild(overlay);
 
+        document.querySelectorAll('.orzr-tab').forEach(btn => {
+            btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
+        });
         document.getElementById('orzr-close').addEventListener('click', closeManager);
         overlay.addEventListener('click', e => {
             if (e.target === overlay) closeManager();
         });
         document.getElementById('orzr-search').addEventListener('input', e => {
             state.filter = e.target.value;
-            renderTable();
+            renderActiveTable();
         });
         document.getElementById('orzr-filter-category').addEventListener('change', e => {
             state.categoryFilter = e.target.value;
-            renderTable();
+            renderActiveTable();
         });
         document.getElementById('orzr-sort').addEventListener('change', e => {
             state.sort = e.target.value;
-            renderTable();
+            renderActiveTable();
         });
         document.getElementById('orzr-refresh').addEventListener('click', async () => {
             if (state.dirty.size && !confirm('Masz niezapisane zmiany. Odświeżyć listę i je odrzucić?')) return;
@@ -578,7 +821,7 @@
                 setStatus(`Błąd pobierania listy: ${e.message || e}`, 'danger');
             }
         } else {
-            renderTable();
+            renderActiveTable();
             updateStats();
             updateSaveAllButton();
         }
