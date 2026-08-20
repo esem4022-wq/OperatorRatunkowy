@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.41
+// @version      0.42
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -274,12 +274,12 @@
             ) continue;
 
             const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!text || text.length < 4 || text.length > 100) continue;
+            if (!text || text.length < 4 || text.length > 220) continue;
             if (/UTWÓRZ\s+ZR|UTWORZ\s+ZR|Zaznaczono\s+ZR/i.test(text)) continue;
             if (isMissionNameNoise(text)) continue;
 
             const r = el.getBoundingClientRect();
-            if (r.height > 50 || r.width < 80) continue;
+            if (r.height > 100 || r.width < 80) continue;
 
             let score = 0;
 
@@ -635,7 +635,7 @@
                 if (!el.isConnected) continue;
                 const raw = String(el.getAttribute('data-mission-title') || '').trim();
                 const name = sanitizeMissionName(raw);
-                if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
+                if (name && !isMissionNameNoise(name)) return name;
             }
         }
         return '';
@@ -699,9 +699,17 @@
         const exactTitle = exactMissionTitleFromGame();
         if (exactTitle) return exactTitle;
 
-        // Fallback: tytuł z żółtej karty. Ciemny nagłówek zawiera też
-        // teksty typu „24 minuty temu”, które w części układów DOM są osobnym
-        // elementem i wcześniej mogły wygrać jako nazwa misji.
+        // v0.42: ciemny nagłówek otwartej misji jest pierwszym fallbackiem.
+        // Dzięki temu długie tytuły łamane na dwie linie nie są mylone z
+        // dodatkowymi etykietami z żółtej karty (np. „Centrum handlowe”).
+        const openedHeader = findOpenedMissionHeader();
+        const openedTitle = findMissionTitleElement(openedHeader);
+        if (openedTitle) {
+            const name = sanitizeMissionName(openedTitle.textContent);
+            if (name && !isMissionNameNoise(name)) return name;
+        }
+
+        // Fallback: tytuł z żółtej karty.
         if (infoBlock) {
             const headings = infoBlock.querySelectorAll(
                 'h1,h2,h3,h4,h5,.panel-title,.modal-title,[class*="mission"][class*="title"],strong'
@@ -714,15 +722,14 @@
                 const name = sanitizeMissionName(raw);
                 const n = normalize(name);
 
-                if (!name || name.length > 60) continue;
+                if (!name) continue;
                 if (['pojazdy', 'pacjenci', 'woda', 'piana'].includes(n)) continue;
                 if (/^\d+\s+/.test(name)) continue;
 
                 return name;
             }
 
-            // Najstabilniejszy fallback dla żółtej karty: wszystko przed
-            // nagłówkiem „Pojazdy”. Na karcie jest tam nazwa misji.
+            // Ostatni fallback dla żółtej karty: wszystko przed „Pojazdy”.
             const compact = (infoBlock.innerText || infoBlock.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .replace(/\s+/g, ' ')
@@ -731,16 +738,8 @@
             const m = compact.match(/^(.+?)\s+Pojazdy\b/i);
             if (m) {
                 const name = sanitizeMissionName(m[1]);
-                if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
+                if (name && !isMissionNameNoise(name)) return name;
             }
-        }
-
-        // Dopiero potem próbujemy ciemnego nagłówka.
-        const openedHeader = findOpenedMissionHeader();
-        const openedTitle = findMissionTitleElement(openedHeader);
-        if (openedTitle) {
-            const name = sanitizeMissionName(openedTitle.textContent);
-            if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
         }
 
         // Ostatni fallback - starsza metoda wyszukania nagłówka.
@@ -748,7 +747,7 @@
         const title = findMissionTitleElement(header);
         if (title) {
             const name = sanitizeMissionName(title.textContent);
-            if (name && !isMissionNameNoise(name) && name.length <= 60) return name;
+            if (name && !isMissionNameNoise(name)) return name;
         }
 
         return 'Misja bez nazwy';
@@ -1747,6 +1746,26 @@
             .trim();
     }
 
+    function zrNameCandidates(value) {
+        const full = sanitizeMissionName(value);
+        if (!full) return [];
+
+        const list = [full];
+        // Pole nazwy ZR w grze ma limit 60 znaków. Dla długich nazw misji
+        // próbujemy również dokładnie takiej wersji, jaką da się zapisać w ZR.
+        const limited = full.length > 60 ? full.slice(0, 60).trimEnd() : full;
+        if (limited && exactMissionNameKey(limited) !== exactMissionNameKey(full)) {
+            list.push(limited);
+        }
+        return list;
+    }
+
+    function zrNameForEditor(value) {
+        const full = sanitizeMissionName(value);
+        if (!full) return '';
+        return full.length > 60 ? full.slice(0, 60).trimEnd() : full;
+    }
+
     function unwrapAAOList(data) {
         if (Array.isArray(data)) return data;
         if (Array.isArray(data?.result)) return data.result;
@@ -2011,10 +2030,10 @@
     async function autoSelectTargetName(missionName) {
         const missionKey = exactMissionNameKey(missionName);
 
-        // Reguły specjalne po DOKŁADNEJ nazwie misji.
+        // Reguły specjalne nazw misji.
         // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
         if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
-        if (missionKey === exactMissionNameKey('Transport krytyczny')) return 'A TK';
+        if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) return 'A TK';
 
         let vehicles = [];
         let maxPatients = 0;
@@ -2152,7 +2171,7 @@
             const title = findMissionTitleElement(header);
             name = sanitizeMissionName(title?.textContent || '');
         }
-        if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name) || name.length > 60) return '';
+        if (!name || name === 'Misja bez nazwy' || isMissionNameNoise(name)) return '';
         return name;
     }
 
@@ -2256,30 +2275,35 @@
     }
 
     function findAAOInActiveAZR(group, control, caption) {
-        const wanted = exactMissionNameKey(caption);
-        if (!wanted) return null;
+        const wantedKeys = new Set(
+            zrNameCandidates(caption).map(exactMissionNameKey).filter(Boolean)
+        );
+        if (!wantedKeys.size) return null;
 
         const pane = paneForCategoryControl(control);
 
-        // Najpierw WYŁĄCZNIE panel własnej kategorii AZR.
+        // Jeśli Operator ma osobny panel kategorii, wolno przeszukiwać WYŁĄCZNIE go.
         if (pane) {
             for (const el of getAAOCandidates(pane)) {
-                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+                if (!isRenderedInActiveCategory(el)) continue;
+                if (wantedKeys.has(exactMissionNameKey(aaoCaptionFromElement(el)))) return el;
             }
+            return null;
         }
 
-        // Niektóre wersje gry podmieniają zawartość #mission-aao-group zamiast
-        // utrzymywać osobne tab-pane. Po aktywowaniu AZR przeszukujemy grupę.
-        if (group?.querySelectorAll) {
+        // W wariancie, w którym gra podmienia zawartość #mission-aao-group,
+        // przeszukujemy grupę tylko po aktywowaniu AZR. Nie używamy document.
+        if (group?.querySelectorAll && categoryControlIsActive(control)) {
             for (const el of getAAOCandidates(group)) {
-                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
+                if (!isRenderedInActiveCategory(el)) continue;
+                if (wantedKeys.has(exactMissionNameKey(aaoCaptionFromElement(el)))) return el;
             }
         }
 
         return null;
     }
 
-    function findAAOButtonById(group, id) {
+    function findAAOButtonById(group, control, id) {
         if (id == null || id === '') return null;
 
         const escapedId = CSS.escape(String(id));
@@ -2293,34 +2317,22 @@
             `[data-aao-id="${escapedId}"]`
         ];
 
-        const roots = [group, document].filter(Boolean);
+        const pane = paneForCategoryControl(control);
+        const roots = pane ? [pane] : [group].filter(Boolean);
+
         for (const root of roots) {
             for (const selector of selectors) {
                 try {
                     const target = root.querySelector(selector);
-                    if (target) return target;
+                    if (target && isRenderedInActiveCategory(target)) return target;
                 } catch {}
             }
         }
-
         return null;
     }
 
-    function findAAOButtonByExactCaption(group, caption) {
-        if (!caption) return null;
-        const wanted = exactMissionNameKey(caption);
-        if (!wanted) return null;
-
-        const roots = [group, document].filter(Boolean);
-        const seen = new Set();
-        for (const root of roots) {
-            for (const el of getAAOCandidates(root)) {
-                if (seen.has(el)) continue;
-                seen.add(el);
-                if (exactMissionNameKey(aaoCaptionFromElement(el)) === wanted) return el;
-            }
-        }
-        return null;
+    function findAAOButtonByExactCaption(group, control, caption) {
+        return findAAOInActiveAZR(group, control, caption);
     }
 
     function activateAAOTabForTarget(target) {
@@ -2438,16 +2450,23 @@
     }
 
     async function apiAAOForAZR(targetName, categoryId) {
-        const wanted = exactMissionNameKey(targetName);
-        if (!wanted) return null;
+        // v0.42: bez poprawnego ID kategorii AZR nie szukamy nigdzie indziej.
+        if (categoryId == null || categoryId === '') return null;
+
+        const wantedKeys = new Set(
+            zrNameCandidates(targetName)
+                .map(exactMissionNameKey)
+                .filter(Boolean)
+        );
+        if (!wantedKeys.size) return null;
 
         const aaos = await loadAAOsForAutoSelect(false);
         return (Array.isArray(aaos) ? aaos : []).find(aao => {
-            const caption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
-            if (exactMissionNameKey(caption) !== wanted) return false;
-            if (categoryId == null) return true;
             const cat = aao?.aao_category_id ?? aao?.category_id ?? aao?.aaoCategoryId;
-            return String(cat ?? '') === String(categoryId);
+            if (String(cat ?? '') !== String(categoryId)) return false;
+
+            const caption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
+            return wantedKeys.has(exactMissionNameKey(caption));
         }) || null;
     }
 
@@ -2490,21 +2509,20 @@
     }
 
     async function waitForAAOAfterAZRSwitch(group, control, targetName, aaoId = null) {
-        // Najpierw czekamy na aktywację/załadowanie własnej kategorii.
         await waitUntilAZRIsActive(control, 1800);
-
-        // Wyczyść poprzedni filtr, bo mógł ukrywać docelową ZR po zmianie misji.
         setAAOSearch(group, '');
 
         for (let i = 0; i < 35; i++) {
-            let target = findAAOInActiveAZR(group, control, targetName);
-            if (!target && aaoId != null) target = findAAOButtonById(group, aaoId);
+            // ID z API kategorii AZR jest źródłem prawdy. Dzięki temu nawet jeśli
+            // w innych kategoriach istnieje ZR o tej samej nazwie, nie może wygrać.
+            let target = aaoId != null ? findAAOButtonById(group, control, aaoId) : null;
+
+            // Caption fallback jest dozwolony tylko wewnątrz aktywnego panelu AZR.
+            if (!target) target = findAAOInActiveAZR(group, control, targetName);
             if (target) return target;
 
-            // Po chwili używamy wbudowanego filtra AAO. Filtr działa już na
-            // aktywnej kategorii AZR i pomaga przy bardzo długiej jednej kolumnie.
-            if (i === 8) setAAOSearch(group, targetName);
-            await waitMs(100);
+            if (i === 6) setAAOSearch(group, zrNameForEditor(targetName) || targetName);
+            await waitMs(80);
         }
         return null;
     }
@@ -2563,17 +2581,17 @@
         const missionKey = exactMissionNameKey(missionName);
         if (!missionKey) return;
 
-        // Dokładnie 1 sekunda po wykryciu nowej misji.
+        // Dokładnie 0,5 sekundy po wykryciu nowej misji.
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
             state.autoSelectAttempts = 0;
             clearTimeout(state.autoSelectRetryTimer);
-            state.autoSelectRetryTimer = setTimeout(() => autoSelectMatchingAAO(), 1000);
+            state.autoSelectRetryTimer = setTimeout(() => autoSelectMatchingAAO(), 500);
             return;
         }
 
-        if (Date.now() - state.autoSelectFirstSeenAt < 950) return;
+        if (Date.now() - state.autoSelectFirstSeenAt < 450) return;
         state.autoSelectAttempts += 1;
 
         if (isMissionAlreadyRunning()) {
@@ -2611,19 +2629,31 @@
             const domCategoryId = categoryIdFromControl(control);
             const categoryId = domCategoryId ?? apiCategoryId;
 
-            // Najpierw ustalamy ID docelowej ZR przez API. Dzięki temu nawet gdy
-            // tekst przycisku jest opakowany ikonami, możemy znaleźć #aao_<ID>.
+            // Najpierw wymagamy potwierdzenia przez API, że docelowa ZR naprawdę
+            // należy do własnej kategorii AZR. Nie ma globalnego fallbacku po nazwie.
             let apiAAO = await apiAAOForAZR(targetName, categoryId);
-            if (!apiAAO && (state.autoSelectAttempts === 2 || state.autoSelectAttempts === 6)) {
+            if (!apiAAO && (state.autoSelectAttempts === 1 || state.autoSelectAttempts === 3)) {
                 await loadAAOsForAutoSelect(true);
                 apiAAO = await apiAAOForAZR(targetName, categoryId);
             }
-            const aaoId = apiAAO?.id ?? apiAAO?.aao_id ?? null;
 
-            // Mechanizm identyczny z klasycznym LSS: aktywacja własnej kategorii
-            // przez Bootstrap tab('show'), a potem wyszukanie aao_btn / #aao_ID.
+            if (!apiAAO) {
+                log(`Auto-wybór: w AZR nie ma ZR „${targetName}”. Wracam do Pożary.`);
+                returnToPozaryCategory(group);
+                if (group.dataset) group.dataset.orzrAutoSelectedMission = missionKey;
+                removeAutoSelectStatus();
+                return;
+            }
+
+            const aaoId = apiAAO?.id ?? apiAAO?.aao_id ?? null;
+            if (aaoId == null) {
+                log(`Auto-wybór: ZR „${targetName}” istnieje w AZR, ale API nie zwróciło jej ID.`);
+                returnToPozaryCategory(group);
+                return;
+            }
+
             showAZRCategory(control);
-            await waitMs(120);
+            await waitMs(80);
 
             const target = await waitForAAOAfterAZRSwitch(group, control, targetName, aaoId);
 
@@ -3154,8 +3184,8 @@
 
         const caption = state.fields.find(x => x.kind === 'caption');
         if (caption && state.capture?.name && !caption.input.value.trim()) {
-            const safeName = sanitizeMissionName(state.capture.name);
-            if (safeName && safeName.length <= 60) {
+            const safeName = zrNameForEditor(state.capture.name);
+            if (safeName) {
                 setInput(caption.input, safeName);
             } else {
                 console.warn(TAG, 'Nie wpisuję podejrzanej nazwy ZR:', state.capture.name);
@@ -3215,8 +3245,8 @@
         if (new URLSearchParams(location.search).get('orzr_from_mission') === '1' && state.capture) {
             const caption = state.fields.find(x => x.kind === 'caption');
             if (caption && !caption.input.value.trim()) {
-                const safeName = sanitizeMissionName(state.capture.name);
-                if (safeName && safeName.length <= 60) {
+                const safeName = zrNameForEditor(state.capture.name);
+                if (safeName) {
                     setInput(caption.input, safeName);
                 } else {
                     console.warn(TAG, 'Nie wpisuję podejrzanej nazwy ZR:', state.capture.name);

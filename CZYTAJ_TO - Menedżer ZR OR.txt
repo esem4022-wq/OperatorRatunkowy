@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.41
+Wersja: 0.42
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -21,11 +21,12 @@ NAJWAŻNIEJSZE FUNKCJE
 - odczyt nazwy misji i wymaganych pojazdów,
 - odczyt wody i piany,
 - maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P podczas tworzenia ZR,
-- auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`,
+- auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`; ZR z innych kategorii nie są brane pod uwagę nawet przy identycznej nazwie,
+- dla długich nazw misji skrypt poprawnie odczytuje tytuł łamany na kilka linii; przy tworzeniu nazwa ZR jest ograniczana do limitu 60 znaków gry,
 - dokładnie 1 pacjent bez innych wymaganych pojazdów: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
 - ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
 - misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
-- misja `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
+- misja, której nazwa zaczyna się od `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
 - jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`,
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
@@ -33,6 +34,15 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.42
+- auto-zaznaczanie przeszukuje wyłącznie ZR faktycznie należące do własnej kategorii `AZR`; usunięto globalne wyszukiwanie po wszystkich kategoriach,
+- ID docelowej ZR jest najpierw potwierdzane przez API dla kategorii `AZR`, a po przełączeniu kategorii klikany jest tylko ten konkretny przycisk,
+- jeśli ZR nie istnieje w `AZR`, skrypt wraca do kategorii `Pożary` i nie próbuje szukać jej w innych kategoriach,
+- poprawiono długie, wielowierszowe nazwy misji; nie powinny już kończyć jako `Misja bez nazwy`,
+- przy nazwach dłuższych niż 60 znaków pole nowej ZR otrzymuje pierwsze 60 znaków, zgodnie z limitem gry,
+- reguła `Transport krytyczny` działa po początku nazwy, więc obsługuje również dodatkową treść w nawiasach,
+- opóźnienie automatycznego zaznaczania zmniejszono z 1 s do 0,5 s.
+
 v0.41
 - doprecyzowano regułę `Straż`: działa wyłącznie wtedy, gdy jedynym wymaganiem misji jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, inne pojazdy, woda lub piana wyłączają skrót i skrypt szuka normalnej ZR po nazwie misji,
 - dodano regułę: `Transport pacjenta` -> ZR `Ambulans T` w kategorii `AZR`,
@@ -128,7 +138,7 @@ v0.31
 - `#mission_help` wskazuje dokładny typ bieżącej misji i jej `mission_id`, więc nie jest mylony z linkiem z sekcji „Może się rozwinąć w…”,
 - poprawiono odczyt pojazdów dla misji „Samopodpalenie” i podobnych: wymagania z helpa są parsowane strukturalnie z tabeli, z tekstowym fallbackiem,
 - poprawiono wodę i pianę: liczba musi znajdować się bezpośrednio przy nazwie zasobu; eliminuje to błędne wartości typu 25 zamiast 8000,
-- auto-zaznaczanie ZR ma 1,5 s opóźnienia po otwarciu misji, aby Operator zdążył załadować dane trwającej misji,
+- auto-zaznaczanie ZR ma 0,5 s opóźnienia po otwarciu misji,
 - wykrywanie trwającej misji nie zależy już od tego, czy tabela pojazdów jest aktualnie widoczna w viewportcie,
 - tuż przed automatycznym kliknięciem ZR wykonywana jest ponowna kontrola, czy misja już trwa,
 - zachowano fioletową ramkę i informację „Zaznaczono ZR” tylko dla faktycznego auto-wyboru,
