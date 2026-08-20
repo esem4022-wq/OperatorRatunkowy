@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.27
+// @version      0.28
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.27';
-    const CAPTURE_KEY = 'or_zr_capture_v027';
+    const VERSION = '0.28';
+    const CAPTURE_KEY = 'or_zr_capture_v028';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -295,7 +295,62 @@
         return score;
     }
 
+    function findExactMissionCardByTitle() {
+        const missionName = getOpenedMissionName();
+        const wanted = normalize(missionName);
+        if (!wanted) return null;
+
+        const openedHeader = findOpenedMissionHeader();
+        const titleCandidates = document.querySelectorAll(
+            'h1,h2,h3,h4,h5,strong,.panel-title,.modal-title,[class*="mission"][class*="title"],[class*="caption"]'
+        );
+
+        const cards = [];
+
+        for (const titleEl of titleCandidates) {
+            if (!isVisible(titleEl)) continue;
+            if (openedHeader?.contains(titleEl)) continue;
+
+            const titleText = sanitizeMissionName(titleEl.textContent || '');
+            if (normalize(titleText) !== wanted) continue;
+
+            let cur = titleEl;
+            for (let depth = 0; depth < 9 && cur; depth++, cur = cur.parentElement) {
+                if (!isVisible(cur)) continue;
+
+                const raw = (cur.innerText || cur.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .trim();
+                const compact = raw.replace(/\s+/g, ' ').trim();
+
+                if (!/\bPojazdy\b/i.test(compact)) continue;
+
+                // Najbliższy przodek zawierający tytuł + sekcję Pojazdy jest
+                // zdecydowanie najpewniejszą żółtą kartą bieżącej misji.
+                const containsUnits = /\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(compact);
+                const r = cur.getBoundingClientRect();
+                let score = 100 - depth * 8;
+                if (!containsUnits) score += 40;
+                if (r.left > innerWidth * 0.30) score += 10;
+                if (/\bPacjenci\b/i.test(compact)) score += 3;
+                if (/\bMoże się rozwinąć\b|\bMoze sie rozwinac\b/i.test(compact)) score += 2;
+
+                cards.push({ el: cur, score, len: compact.length });
+                break;
+            }
+        }
+
+        cards.sort((a, b) => b.score - a.score || a.len - b.len);
+        return cards[0]?.el || null;
+    }
+
     function findMissionInfoBlock() {
+        const exactCard = findExactMissionCardByTitle();
+        if (exactCard) {
+            log('Dokładnie dopasowana karta aktualnej misji:', exactCard, exactCard.innerText);
+            return exactCard;
+        }
+
         const missionName = getOpenedMissionName();
         const candidates = [];
         const seen = new Set();
@@ -396,13 +451,21 @@
         if (!missionName) return false;
 
         const cardText = getMissionCardText(block, missionName);
-        if (!cardText) return false;
+        if (!cardText || !/\bPojazdy\b/i.test(cardText)) return false;
 
-        // Musi to być karta o tej samej nazwie i musi zawierać sekcję Pojazdy.
-        return (
-            normalize(cardText).includes(normalize(missionName)) &&
-            /\bPojazdy\b/i.test(cardText)
-        );
+        const wanted = normalize(missionName);
+
+        // Najpewniejszy wariant: karta zawiera osobny element z dokładnie taką
+        // samą nazwą jak ciemny nagłówek misji.
+        for (const el of block.querySelectorAll(
+            'h1,h2,h3,h4,h5,strong,.panel-title,.modal-title,[class*="mission"][class*="title"],[class*="caption"]'
+        )) {
+            const title = sanitizeMissionName(el.textContent || '');
+            if (normalize(title) === wanted) return true;
+        }
+
+        // Fallback dla starszego układu HTML, gdzie tytuł i treść są jednym tekstem.
+        return normalize(cardText).includes(wanted);
     }
 
     function sanitizeMissionName(value) {
@@ -648,6 +711,78 @@
         }
 
         return segment.slice(0, cut).trim();
+    }
+
+    function getMissionCardLines(block) {
+        if (!block) return [];
+
+        let raw = (block.innerText || block.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .trim();
+
+        if (!raw) return [];
+
+        // Jeżeli kontener jest szerszy niż sama karta, odcinamy wszystko od
+        // sekcji dostępnych jednostek w dół, zachowując znaki nowych linii.
+        const stop = /(?:^|\n)\s*(?:Dostępne jednostki|Dostepne jednostki|Alarmowo)\b/i.exec(raw);
+        if (stop) raw = raw.slice(0, stop.index);
+
+        return cleanLines(raw);
+    }
+
+    function extractVehiclesFromCardLines(block) {
+        const result = [];
+        const map = new Map();
+        const lines = getMissionCardLines(block);
+        if (!lines.length) return result;
+
+        let start = lines.findIndex(line => normalize(line) === 'pojazdy');
+        if (start < 0) {
+            start = lines.findIndex(line => /^pojazdy\b/i.test(line));
+        }
+        if (start < 0) return result;
+
+        const isStop = line => {
+            const n = normalize(line);
+            return (
+                n === 'pacjenci' ||
+                n === 'personel' ||
+                n.startsWith('moze sie rozwinac') ||
+                n.startsWith('potrzebna woda') ||
+                n.startsWith('wymagana woda') ||
+                n === 'woda' ||
+                n.startsWith('wymagana piana') ||
+                n.startsWith('potrzebna piana') ||
+                n === 'piana' ||
+                n.startsWith('dostepne jednostki') ||
+                n.startsWith('alarmowo')
+            );
+        };
+
+        for (let i = start + 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (isStop(line)) break;
+
+            let count = null;
+            let rawLabel = '';
+
+            let m = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
+            if (m) {
+                count = Number.parseInt(m[1], 10);
+                rawLabel = m[2].trim();
+            } else if (/^\s*\d+\s*$/.test(line) && lines[i + 1] && !isStop(lines[i + 1])) {
+                // Niektóre układy HTML rozbijają liczbę i nazwę pojazdu na osobne linie.
+                count = Number.parseInt(line, 10);
+                rawLabel = lines[++i].trim();
+            }
+
+            if (!count || !rawLabel) continue;
+
+            const chance = parseChanceFromLabel(rawLabel);
+            addVehicle(result, map, rawLabel, count, chance);
+        }
+
+        return result;
     }
 
     function extractVehiclesFromFlatText(block) {
@@ -989,8 +1124,12 @@
             return data;
         }
 
-        // Odczyt wyłącznie z sekcji "Pojazdy" aktualnej żółtej karty.
-        let vehicles = extractVehiclesFromFlatText(block);
+        // v0.28: najpierw czytamy zachowane linie sekcji "Pojazdy".
+        // Dzięki temu misje z sekcją Pacjenci nie gubią wcześniejszych wymagań.
+        // Parser płaskiego tekstu zostaje tylko jako bezpieczny fallback.
+        const lineVehicles = extractVehiclesFromCardLines(block);
+        const flatVehicles = extractVehiclesFromFlatText(block);
+        let vehicles = mergeVehicles(lineVehicles, flatVehicles);
 
         if (hasContaminatedVehicleList(vehicles)) {
             console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
@@ -1074,8 +1213,50 @@
                 outline-offset: 1px !important;
                 box-shadow: 0 0 8px rgba(142, 68, 173, .78) !important;
             }
+            #orzr-auto-select-status {
+                display: inline-flex !important;
+                align-items: center !important;
+                height: 30px !important;
+                padding: 0 10px !important;
+                border: 1px solid #9b59b6 !important;
+                border-radius: 4px !important;
+                background: #8e44ad !important;
+                color: #fff !important;
+                font: 700 12px/28px Arial,sans-serif !important;
+                box-shadow: 0 1px 4px rgba(0,0,0,.35) !important;
+                white-space: nowrap !important;
+            }
         `;
         document.head.appendChild(style);
+    }
+
+    function showAutoSelectStatus(aaoName) {
+        const header = findOpenedMissionHeader();
+        if (!header) return;
+
+        ensureAutoSelectStyle();
+
+        let status = document.getElementById('orzr-auto-select-status');
+        if (status && status.parentElement !== header) status.remove();
+
+        if (!status) {
+            status = document.createElement('span');
+            status.id = 'orzr-auto-select-status';
+
+            const actions = document.getElementById('orzr-header-actions');
+            if (actions?.parentElement === header) {
+                actions.appendChild(status);
+            } else {
+                header.appendChild(status);
+            }
+        }
+
+        status.textContent = `✓ Zaznaczono ZR: ${aaoName}`;
+        status.title = `Menedżer ZR automatycznie zaznaczył ZR „${aaoName}”`;
+    }
+
+    function removeAutoSelectStatus() {
+        document.getElementById('orzr-auto-select-status')?.remove();
     }
 
     function currentMissionNameForAutoSelect() {
@@ -1199,6 +1380,7 @@
                 ensureAutoSelectStyle();
                 target.classList.add('orzr-auto-selected-aao');
                 target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR`;
+                showAutoSelectStatus(aao?.caption || missionName);
 
                 target.click();
                 log(`Automatycznie wybrano ZR „${missionName}” (ID ${id}).`);
@@ -1217,6 +1399,7 @@
 
     function removeHeaderButtons() {
         document.getElementById('orzr-header-actions')?.remove();
+        removeAutoSelectStatus();
     }
 
     function ensureHeaderButtons() {
@@ -1427,6 +1610,7 @@
             [/slop slrr/g, ' oficer operacyjny slop slrr '],
             [/cysterny?/g, ' cysterna '],
             [/piana gasnicza/g, ' piana '],
+            [/^opi$/g, ' opi furgonetka policja '],
             [/ambulanse? s lub p/g, ' ambulans s p ratownictwo medyczne '],
             [/ambulanse?/g, ' ambulans s p ratownictwo medyczne ']
         ];
