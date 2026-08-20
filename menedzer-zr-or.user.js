@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.26
+// @version      0.27
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.26';
-    const CAPTURE_KEY = 'or_zr_capture_v026';
+    const VERSION = '0.27';
+    const CAPTURE_KEY = 'or_zr_capture_v027';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -255,87 +255,154 @@
     // ODCZYT MISJI
     // ------------------------------------------------------------------
 
+    function getOpenedMissionName() {
+        const header = findOpenedMissionHeader();
+        const title = findMissionTitleElement(header);
+        return sanitizeMissionName(title?.textContent || '');
+    }
+
+    function missionCardCandidateScore(el, missionName) {
+        if (!el || !isVisible(el)) return -9999;
+
+        const r = el.getBoundingClientRect();
+        if (r.width < 280 || r.height < 70) return -9999;
+
+        const raw = (el.innerText || el.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .trim();
+        const text = raw.replace(/\s+/g, ' ').trim();
+
+        if (!text || text.length < 10 || text.length > 12000) return -9999;
+        if (!/\bPojazdy\b/i.test(text)) return -9999;
+        if (!/\b\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(text)) return -9999;
+
+        let score = 0;
+        const ntext = normalize(text);
+        const nname = normalize(missionName);
+
+        if (nname && ntext.includes(nname)) score += 50;
+        if (el.matches?.('.alert-warning,.panel-warning,.alert,.panel,.well')) score += 18;
+        if (/\bPacjenci\b/i.test(text)) score += 5;
+        if (/\bMoże się rozwinąć|\bMoze sie rozwinac/i.test(text)) score += 4;
+        if (/\bWoda\b|\bPiana\b/i.test(text)) score += 4;
+        if (r.left > innerWidth * 0.30) score += 5;
+
+        // Duży kontener obejmujący także listę jednostek jest mniej pożądany,
+        // ale NIE dyskwalifikujemy go — potrafimy później wyciąć samą kartę.
+        if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(text)) score -= 20;
+
+        score -= Math.floor(text.length / 900);
+        return score;
+    }
+
     function findMissionInfoBlock() {
-        const strictCandidates = [];
-        const fallbackCandidates = [];
+        const missionName = getOpenedMissionName();
+        const candidates = [];
+        const seen = new Set();
 
-        for (const el of document.querySelectorAll('div,section,article,aside')) {
-            if (!isVisible(el)) continue;
+        const selectors = [
+            '.alert-warning', '.panel-warning', '.alert', '.panel', '.well',
+            '[class*="mission"]', '[id*="mission"]',
+            'section', 'article', 'aside', 'div'
+        ];
 
-            const r = el.getBoundingClientRect();
-            if (r.width < 280 || r.height < 80) continue;
+        for (const selector of selectors) {
+            let elements = [];
+            try { elements = [...document.querySelectorAll(selector)]; } catch {}
 
-            const rawText = (el.innerText || el.textContent || '')
-                .replace(/\u00a0/g, ' ')
-                .trim();
+            for (const el of elements) {
+                if (seen.has(el)) continue;
+                seen.add(el);
 
-            const text = rawText.replace(/\s+/g, ' ').trim();
+                const score = missionCardCandidateScore(el, missionName);
+                if (score <= -9999) continue;
 
-            if (text.length < 10 || text.length > 9000) continue;
-            if (!/\bPojazdy\b/i.test(text)) continue;
-            if (!/\b\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(text)) continue;
-
-            const containsUnitsArea =
-                /\bDostępne jednostki\b/i.test(text) ||
-                /\bDostepne jednostki\b/i.test(text) ||
-                /\bAlarmowo\b/i.test(text);
-
-            let score = 0;
-
-            if (/Może się rozwinąć|Moze sie rozwinac/i.test(text)) score += 15;
-            if (/\bPacjenci\b/i.test(text)) score += 5;
-            if (/\bMinimum pacjent/i.test(text)) score += 5;
-            if (/\bMaksimum pacjent/i.test(text)) score += 5;
-            if (/\bwoda\b|\bpiana\b/i.test(text)) score += 3;
-
-            // Karta wymagań jest po prawej stronie okna misji.
-            if (r.left > innerWidth * 0.30) score += 5;
-
-            // Mniejszy kontener jest lepszy.
-            score -= Math.floor(text.length / 800);
-
-            const item = { el, score, len: text.length };
-
-            // Kontener zawierający "Dostępne jednostki" nie może być preferowany.
-            if (containsUnitsArea) fallbackCandidates.push(item);
-            else strictCandidates.push(item);
+                const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+                candidates.push({ el, score, len: text.length });
+            }
         }
 
-        strictCandidates.sort((a, b) => b.score - a.score || a.len - b.len);
-        fallbackCandidates.sort((a, b) => b.score - a.score || a.len - b.len);
+        candidates.sort((a, b) => b.score - a.score || a.len - b.len);
 
-        // Najpierw wybieramy wyłącznie czystą kartę misji.
-        const chosen =
-            strictCandidates[0]?.el ||
-            fallbackCandidates[0]?.el ||
-            null;
+        let chosen = candidates[0]?.el || null;
+
+        // Jeśli najmniejszy znaleziony element nie zawiera nazwy misji,
+        // spróbuj wejść po rodzicach do właściwej żółtej karty.
+        if (chosen && missionName) {
+            let cur = chosen;
+            for (let i = 0; i < 7 && cur; i++, cur = cur.parentElement) {
+                if (!isVisible(cur)) continue;
+                const text = (cur.innerText || cur.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                if (
+                    normalize(text).includes(normalize(missionName)) &&
+                    /\bPojazdy\b/i.test(text)
+                ) {
+                    // Preferuj pierwszy możliwie mały kontener zawierający nazwę + Pojazdy.
+                    chosen = cur;
+                    break;
+                }
+            }
+        }
 
         if (chosen) log('Pole informacji o misji:', chosen, chosen.innerText);
-
         return chosen;
+    }
+
+    function getMissionCardText(block, missionName = '') {
+        if (!block) return '';
+
+        let text = (block.innerText || block.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text) return '';
+
+        const name = sanitizeMissionName(missionName || getOpenedMissionName());
+        if (name) {
+            const pos = normalize(text).indexOf(normalize(name));
+            if (pos >= 0) {
+                // index w normalize() nie zawsze jest 1:1 dla znaków diakrytycznych,
+                // więc najpierw próbujemy zwykłego wyszukania bez uwzględniania wielkości liter.
+                const direct = text.toLocaleLowerCase('pl-PL').indexOf(name.toLocaleLowerCase('pl-PL'));
+                if (direct >= 0) text = text.slice(direct);
+            }
+        }
+
+        // Nawet jeżeli znaleziony blok jest szerszy, wszystko po tej sekcji
+        // nie należy już do żółtej karty wymagań.
+        const stopPatterns = [
+            /\s+Dostępne jednostki\b/i,
+            /\s+Dostepne jednostki\b/i,
+            /\s+Alarmowo\b/i
+        ];
+        let cut = text.length;
+        for (const re of stopPatterns) {
+            const m = re.exec(text);
+            if (m && m.index < cut) cut = m.index;
+        }
+
+        return text.slice(0, cut).trim();
     }
 
     function missionInfoBlockMatchesCurrentMission(block) {
         if (!block) return false;
 
-        const header = findOpenedMissionHeader();
-        const title = findMissionTitleElement(header);
-        const missionName = sanitizeMissionName(title?.textContent || '');
+        const missionName = getOpenedMissionName();
         if (!missionName) return false;
 
-        const text = (block.innerText || block.textContent || '')
-            .replace(/\u00a0/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+        const cardText = getMissionCardText(block, missionName);
+        if (!cardText) return false;
 
-        // Nie wolno używać kontenera obejmującego listę dostępnych jednostek.
-        if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(text)) {
-            return false;
-        }
-
-        // Żółta karta bieżącej misji zawiera jej nazwę. To zabezpiecza przed
-        // przypadkowym odczytem innego panelu lub misji rozwojowej.
-        return normalize(text).includes(normalize(missionName));
+        // Musi to być karta o tej samej nazwie i musi zawierać sekcję Pojazdy.
+        return (
+            normalize(cardText).includes(normalize(missionName)) &&
+            /\bPojazdy\b/i.test(cardText)
+        );
     }
 
     function sanitizeMissionName(value) {
@@ -548,7 +615,7 @@
     }
 
     function getVehiclesTextSegment(block) {
-        const text = (block?.innerText || block?.textContent || document.body?.innerText || '')
+        const text = getMissionCardText(block)
             .replace(/\u00a0/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
@@ -628,11 +695,13 @@
         const patterns = type === 'water'
             ? [
                 /(?:Potrzebna|Wymagana)?\s*woda(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
-                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*wody\b/i
+                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*wody\b/i,
+                /\b([\d\s.]+)\s+Woda\b/i
             ]
             : [
                 /(?:Wymagana|Potrzebna)?\s*piana(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
-                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*piany\b/i
+                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*piany\b/i,
+                /\b([\d\s.]+)\s+Piana(?:\s+gaśnicza)?\b/i
             ];
 
         for (const re of patterns) {
@@ -653,7 +722,7 @@
         // Nie przeszukujemy całej strony, bo znajdują się tam przyciski/teksty
         // dotyczące innych pojazdów i reguł.
         return extractResourceFromText(
-            block?.innerText || block?.textContent || '',
+            getMissionCardText(block),
             type
         ) || 0;
     }
@@ -744,7 +813,7 @@
 
         // 2. Tekst samej żółtej karty.
         let value = extractMaxPatientsFromText(
-            block?.innerText || block?.textContent || ''
+            getMissionCardText(block)
         );
 
         if (value > 0) return value;
@@ -913,7 +982,7 @@
                 maxPatients: 0,
                 sourceUrl: location.href,
                 capturedAt: Date.now(),
-                readError: 'Nie znaleziono jednoznacznej karty aktualnej misji.'
+                readError: 'Nie udało się powiązać widocznej karty wymagań z aktualną misją.'
             };
             state.capture = data;
             saveJSON(CAPTURE_KEY, data);
