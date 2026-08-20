@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.30
+// @version      0.31
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.30';
-    const CAPTURE_KEY = 'or_zr_capture_v030';
+    const VERSION = '0.31';
+    const CAPTURE_KEY = 'or_zr_capture_v031';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -33,7 +33,10 @@
         map: loadJSON(MAP_KEY, {}),
         fields: [],
         aaosPromise: null,
-        autoSelectBusy: false
+        autoSelectBusy: false,
+        autoSelectMissionKey: '',
+        autoSelectFirstSeenAt: 0,
+        autoSelectRetryTimer: null
     };
 
     function log(...args) {
@@ -967,16 +970,21 @@
             .replace(/\s+/g, ' ')
             .trim();
 
+        // v0.31: liczba musi znajdować się BEZPOŚREDNIO przy nazwie zasobu.
+        // Nie dopuszczamy już wzorca "Woda ... dowolna późniejsza liczba",
+        // bo mógł złapać np. 25 z innego elementu strony.
         const patterns = type === 'water'
             ? [
-                /(?:Potrzebna|Wymagana)?\s*woda(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
-                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*wody\b/i,
-                /\b([\d\s.]+)\s+Woda\b/i
+                /\b([\d][\d\s.]*)\s+Woda\b/i,
+                /\bPotrzebna\s+woda\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i,
+                /\bWymagana\s+woda\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i,
+                /\bWoda\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i
             ]
             : [
-                /(?:Wymagana|Potrzebna)?\s*piana(?:\s+gaśnicza)?\s*:?\s*([\d\s.]+)/i,
-                /([\d\s.]+)\s*(?:l|litrów|litrow)?\s+(?:potrzebnej|wymaganej)?\s*piany\b/i,
-                /\b([\d\s.]+)\s+Piana(?:\s+gaśnicza)?\b/i
+                /\b([\d][\d\s.]*)\s+Piana(?:\s+gaśnicza)?\b/i,
+                /\bPotrzebna\s+piana(?:\s+gaśnicza)?\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i,
+                /\bWymagana\s+piana(?:\s+gaśnicza)?\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i,
+                /\bPiana(?:\s+gaśnicza)?\s*:\s*([\d][\d\s.]*)\s*(?:l\b|litr(?:ów|y)?\b|$)/i
             ];
 
         for (const re of patterns) {
@@ -985,7 +993,6 @@
 
             const digits = m[1].replace(/[^\d]/g, '');
             const value = digits ? Number.parseInt(digits, 10) : 0;
-
             if (value > 0) return value;
         }
 
@@ -1228,6 +1235,177 @@
         return { vehicles, water, foam, maxPatients };
     }
 
+    function getExactCurrentMissionHelpUrl() {
+        // Operator/LSS udostępnia ukryty link #mission_help wskazujący
+        // DOKŁADNIE typ aktualnej misji oraz jej mission_id.
+        // To nie jest link z sekcji "Może się rozwinąć w...".
+        const candidates = [
+            document.querySelector('#mission_help[href*="/einsaetze/"]'),
+            document.querySelector('a#mission_help'),
+            document.querySelector('a[href*="/einsaetze/"][href*="mission_id="]')
+        ].filter(Boolean);
+
+        for (const link of candidates) {
+            const raw = link.href || link.getAttribute('href') || '';
+            if (!raw) continue;
+
+            try {
+                const url = new URL(raw, location.origin);
+                if (!/^\/einsaetze\/\d+\/?$/i.test(url.pathname)) continue;
+
+                // Preferujemy link zawierający mission_id; dzięki temu nie pomylimy
+                // aktualnej misji z wariantem z "Może się rozwinąć w...".
+                if (url.searchParams.get('mission_id')) return url.href;
+
+                // #mission_help sam w sobie jest autorytatywnym źródłem nawet wtedy,
+                // gdy w danej wersji gry mission_id nie jest jawnie dopisane.
+                if (link.id === 'mission_help') return url.href;
+            } catch {}
+        }
+
+        return '';
+    }
+
+    function parseRequirementPair(labelRaw, valueRaw, out) {
+        const label = String(labelRaw || '').replace(/\s+/g, ' ').trim();
+        const valueText = String(valueRaw || '').replace(/\s+/g, ' ').trim();
+        if (!label || !valueText) return;
+
+        const value = parseIntLoose(valueText);
+        if (value == null) return;
+
+        const nl = normalize(label);
+
+        if (
+            nl === 'maks pacjenci' ||
+            nl.includes('maksimum pacjent') ||
+            (nl.includes('pacjent') && nl.includes('maks'))
+        ) {
+            out.maxPatients = Math.max(out.maxPatients, value);
+            return;
+        }
+
+        if (nl.includes('woda')) {
+            out.water = Math.max(out.water, value);
+            return;
+        }
+
+        if (nl.includes('piana')) {
+            out.foam = Math.max(out.foam, value);
+            return;
+        }
+
+        if (nl.includes('szans') || nl.includes('prawdopodobienstwo')) {
+            out.chances.push({ label, value });
+            return;
+        }
+
+        // Pomiń warunki generowania misji i personel.
+        if (
+            nl.includes('posterunk') ||
+            nl.includes('rozbudow') ||
+            nl.includes('minimalna liczba') ||
+            nl.includes('minimum ') ||
+            nl.includes('personel') ||
+            nl.includes('strazak') ||
+            nl.includes('policjant') ||
+            nl.includes('ratownik')
+        ) {
+            return;
+        }
+
+        if (
+            nl.startsWith('wymagane') ||
+            nl.startsWith('wymagany') ||
+            nl.startsWith('wymagana') ||
+            nl.startsWith('potrzebne') ||
+            nl.startsWith('potrzebny') ||
+            nl.startsWith('potrzebna')
+        ) {
+            const vehicleLabel = label
+                .replace(/^(?:Wymagan(?:e|y|a)|Potrzebn(?:e|y|a))\s+/i, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            addVehicle(out.vehicles, out.byName, vehicleLabel, value, null);
+        }
+    }
+
+    function parseExactMissionHelpHtml(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const out = {
+            vehicles: [],
+            byName: new Map(),
+            chances: [],
+            water: 0,
+            foam: 0,
+            maxPatients: 0
+        };
+
+        // 1. Najpierw strukturalne tabele - najpewniejsze źródło.
+        for (const tr of doc.querySelectorAll('tr')) {
+            const cells = [...tr.querySelectorAll(':scope > th, :scope > td')];
+            if (cells.length < 2) continue;
+
+            const a = cells[0].textContent.replace(/\s+/g, ' ').trim();
+            const b = cells[1].textContent.replace(/\s+/g, ' ').trim();
+
+            // Obsługujemy oba układy: "etykieta | liczba" i "liczba | etykieta".
+            if (/^\s*\d[\d\s.]*\s*$/.test(a) && !/^\s*\d[\d\s.]*\s*$/.test(b)) {
+                parseRequirementPair(b, a, out);
+            } else {
+                parseRequirementPair(a, b, out);
+            }
+        }
+
+        // 2. Fallback tekstowy dla wariantów helpa bez klasycznej tabeli.
+        const bodyText = String(doc.body?.innerText || doc.body?.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\r/g, '')
+            .trim();
+
+        if (bodyText) {
+            const textVehicles = extractVehiclesFromCardText(bodyText);
+            for (const item of textVehicles) {
+                addVehicle(out.vehicles, out.byName, item.label, item.count, item.chance);
+            }
+
+            out.water = Math.max(out.water, extractResourceFromText(bodyText, 'water') || 0);
+            out.foam = Math.max(out.foam, extractResourceFromText(bodyText, 'foam') || 0);
+            out.maxPatients = Math.max(out.maxPatients, extractMaxPatientsFromText(bodyText) || 0);
+        }
+
+        // Dopasuj procenty do pojazdów, jeśli help podał je w osobnych wierszach.
+        for (const chance of out.chances) {
+            const cn = normalize(chance.label);
+            let best = null;
+            let bestScore = 0;
+
+            for (const vehicle of out.vehicles) {
+                const vn = normalize(vehicle.label);
+                let score = 0;
+                for (const token of vn.split(' ')) {
+                    if (token.length >= 2 && cn.includes(token)) score++;
+                }
+                if (score > bestScore) {
+                    best = vehicle;
+                    bestScore = score;
+                }
+            }
+
+            if (best && bestScore > 0 && best.chance == null) {
+                best.chance = chance.value;
+            }
+        }
+
+        return {
+            vehicles: out.vehicles,
+            water: out.water,
+            foam: out.foam,
+            maxPatients: out.maxPatients
+        };
+    }
+
     function visiblePageText() {
         return String(document.body?.innerText || '')
             .replace(/\u00a0/g, ' ')
@@ -1372,43 +1550,59 @@
     }
 
     async function captureMission() {
-        // v0.30: źródłem danych jest tekst WIDOCZNEJ żółtej karty, a nie jej
-        // struktura HTML. Dzięki temu działamy także wtedy, gdy Operator rozbije
-        // nagłówki i wartości na nietypowe div/span albo nie zachowa linii.
         const openedName = sanitizeMissionName(getOpenedMissionName());
         const block = findMissionInfoBlock();
         const name = openedName || getMissionName(block);
-        const cardText = findCurrentMissionCardText(name);
 
-        if (!cardText || !/\bPojazdy\b/i.test(cardText)) {
-            const data = {
-                name,
-                vehicles: [],
-                water: 0,
-                foam: 0,
-                maxPatients: 0,
-                sourceUrl: location.href,
-                capturedAt: Date.now(),
-                readError: 'Nie znaleziono tekstu żółtej karty aktualnej misji.'
-            };
-            state.capture = data;
-            saveJSON(CAPTURE_KEY, data);
-            return data;
+        let vehicles = [];
+        let water = 0;
+        let foam = 0;
+        let maxPatients = 0;
+        let source = '';
+
+        // v0.31: pierwszym źródłem jest ukryty #mission_help aktualnej misji.
+        // Link zawiera /einsaetze/<typ> + mission_id, więc nie może wskazać
+        // wariantu z sekcji "Może się rozwinąć w...".
+        const helpUrl = getExactCurrentMissionHelpUrl();
+
+        if (helpUrl) {
+            try {
+                const html = await xhrText(helpUrl);
+                const parsed = parseExactMissionHelpHtml(html);
+
+                vehicles = parsed.vehicles || [];
+                water = parsed.water || 0;
+                foam = parsed.foam || 0;
+                maxPatients = parsed.maxPatients || 0;
+                source = 'mission_help';
+
+                log('Odczyt z dokładnego #mission_help:', helpUrl, parsed);
+            } catch (error) {
+                console.warn(TAG, 'Odczyt #mission_help nie powiódł się:', error);
+            }
         }
 
-        let vehicles = extractVehiclesFromCardText(cardText);
+        // Fallback: tekst widocznej żółtej karty, ale tylko jeśli help nie dał
+        // pełnych danych. Nie korzystamy z żadnego linku rozwojowego.
+        if (!vehicles.length || (!water && !foam && !maxPatients)) {
+            const cardText = findCurrentMissionCardText(name);
+
+            if (cardText && /\bPojazdy\b/i.test(cardText)) {
+                if (!vehicles.length) {
+                    vehicles = extractVehiclesFromCardText(cardText);
+                }
+                if (!water) water = extractResourceFromText(cardText, 'water') || 0;
+                if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
+                if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
+                source = source || 'visible_card';
+            }
+        }
 
         if (hasContaminatedVehicleList(vehicles)) {
             console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
             vehicles = [];
         }
 
-        // Woda i piana mogą być w sekcji Pojazdy, np. "8000 Woda" / "6200 Piana gaśnicza".
-        const water = extractResourceFromText(cardText, 'water') || 0;
-        const foam = extractResourceFromText(cardText, 'foam') || 0;
-        const maxPatients = extractMaxPatientsFromText(cardText) || 0;
-
-        // Nie korzystamy z żadnego linku z "Może się rozwinąć w...".
         const data = {
             name,
             vehicles,
@@ -1416,12 +1610,17 @@
             foam,
             maxPatients,
             sourceUrl: location.href,
-            capturedAt: Date.now()
+            capturedAt: Date.now(),
+            readSource: source
         };
+
+        if (!vehicles.length && !water && !foam && !maxPatients) {
+            data.readError = 'Nie udało się odczytać wymagań z dokładnego mission_help ani z widocznej karty.';
+        }
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji v0.30:', data);
+        log('Odczyt misji v0.31:', data);
 
         return data;
     }
@@ -1587,43 +1786,45 @@
     }
 
     function containerHasDispatchedVehicles(container) {
-        if (!container || !isVisible(container)) return false;
+        if (!container) return false;
 
-        // Typowe wiersze/elementy pojazdów w grze.
-        const vehicleLike = container.querySelector(
-            'tr[id*="vehicle"], [id^="vehicle_"], [data-vehicle-id], [vehicle_id], .vehicle, .mission_vehicle'
-        );
-        if (vehicleLike) return true;
+        // NIE wymagamy widoczności w aktualnym viewportcie. Przy długiej misji
+        // tabela pojazdów może być daleko niżej, a misja nadal już trwa.
+        if (container.querySelector(
+            'tr[id^="vehicle_row"], [id^="vehicle_"][vehicle_id], [data-vehicle-id], [vehicle_id], .mission_vehicle'
+        )) {
+            return true;
+        }
 
         const text = (container.innerText || container.textContent || '')
             .replace(/\u00a0/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Sam nagłówek bez listy nie oznacza rozpoczętej misji.
         if (!text || text.length < 3) return false;
 
-        return /\b(?:dojazd|na miejscu|przybył|przybyl|pojazd|jednostk)\b/i.test(text) &&
+        return /\b(?:dojazd|na miejscu|przybył|przybyl|wraca|pojazd|jednostk)\b/i.test(text) &&
                /\b\d+\b/.test(text);
     }
 
     function isMissionAlreadyRunning() {
-        // Po wysłaniu jednostek Operator pokazuje m.in. komunikat
-        // "... pomyślnie wysłano.". To bardzo pewny sygnał.
-        for (const el of document.querySelectorAll('.alert-success,.alert-info,.alert')) {
-            if (!isVisible(el)) continue;
-            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+        // 1. Najpewniejszy sygnał: rzeczywiste wiersze pojazdów jadących
+        // lub znajdujących się na miejscu. Działa także poza viewportem.
+        const rowSelectors = [
+            '#mission_vehicle_driving tr[id^="vehicle_row"]',
+            '#mission_vehicle_at_mission tr[id^="vehicle_row"]',
+            '#mission-vehicle-driving tr[id^="vehicle_row"]',
+            '#mission-vehicle-at-mission tr[id^="vehicle_row"]'
+        ];
 
-            if (
-                /pomyślnie wysłano|pomyslnie wyslano/i.test(text) ||
-                /wysłano.*(?:pojazd|jednostk)|wyslano.*(?:pojazd|jednostk)/i.test(text)
-            ) {
-                return true;
-            }
+        for (const selector of rowSelectors) {
+            try {
+                if (document.querySelector(selector)) return true;
+            } catch {}
         }
 
-        // Typowe kontenery pojazdów jadących / będących już na miejscu.
-        const selectors = [
+        // 2. Całe kontenery statusu pojazdów - bez wymogu isVisible().
+        const containerSelectors = [
             '#mission_vehicle_driving',
             '#mission_vehicle_at_mission',
             '#mission-vehicle-driving',
@@ -1634,17 +1835,27 @@
             '[id*="mission_vehicle_at_mission"]'
         ];
 
-        for (const selector of selectors) {
+        for (const selector of containerSelectors) {
             for (const el of document.querySelectorAll(selector)) {
                 if (containerHasDispatchedVehicles(el)) return true;
             }
         }
 
-        // Widoczne paski realizacji wymaganej wody/piany pojawiają się po rozpoczęciu
-        // obsługi misji. To dodatkowy fallback dla misji pożarowych.
-        for (const el of document.querySelectorAll('.progress, .progress-bar')) {
-            if (!isVisible(el)) continue;
+        // 3. Komunikat wysłania. Nie musi być aktualnie widoczny w viewportcie.
+        for (const el of document.querySelectorAll('.alert-success,.alert-info,.alert')) {
+            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
 
+            if (
+                /pomyślnie wysłano|pomyslnie wyslano/i.test(text) ||
+                /wysłano.*(?:pojazd|jednostk)|wyslano.*(?:pojazd|jednostk)/i.test(text)
+            ) {
+                return true;
+            }
+        }
+
+        // 4. Paski realizacji wymaganej wody/piany są sygnałem, że jednostki
+        // już pracują przy misji. Również bez wymogu bycia w viewportcie.
+        for (const el of document.querySelectorAll('.progress, .progress-bar')) {
             const parentText = (el.parentElement?.parentElement?.innerText || el.parentElement?.innerText || '')
                 .replace(/\s+/g, ' ')
                 .trim();
@@ -1660,8 +1871,29 @@
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
-        // v0.29: automatyczny wybór ZR ma pomagać wyłącznie PRZED pierwszym
-        // wysłaniem pojazdów. Dla trwającej misji nie klikamy ZR ponownie.
+        const missionName = currentMissionNameForAutoSelect();
+        if (!missionName) return;
+
+        const missionKey = exactMissionNameKey(missionName);
+        if (!missionKey) return;
+
+        // v0.31: po otwarciu misji dajemy Operatorowi 1,5 s na doładowanie
+        // tabel pojazdów jadących/na miejscu. Wcześniej auto-wybór mógł kliknąć
+        // ZR zanim DOM trwającej misji zdążył się uzupełnić.
+        if (state.autoSelectMissionKey !== missionKey) {
+            state.autoSelectMissionKey = missionKey;
+            state.autoSelectFirstSeenAt = Date.now();
+
+            clearTimeout(state.autoSelectRetryTimer);
+            state.autoSelectRetryTimer = setTimeout(() => {
+                autoSelectMatchingAAO();
+            }, 1600);
+
+            return;
+        }
+
+        if (Date.now() - state.autoSelectFirstSeenAt < 1400) return;
+
         if (isMissionAlreadyRunning()) {
             removeAutoSelectStatus();
 
@@ -1673,14 +1905,8 @@
             return;
         }
 
-        const missionName = currentMissionNameForAutoSelect();
-        if (!missionName) return;
-
         const group = document.getElementById('mission-aao-group');
         if (!group) return;
-
-        const missionKey = exactMissionNameKey(missionName);
-        if (!missionKey) return;
 
         // Klikamy najwyżej raz na danym ekranie misji. To krytyczne, ponieważ
         // drugie kliknięcie tej samej ZR mogłoby ponownie dodać pojazdy.
@@ -1718,6 +1944,13 @@
                 if (!isAAOAvailable(target)) {
                     log(`ZR „${missionName}” istnieje, ale nie jest obecnie dostępna.`);
                     group.dataset.orzrAutoCheckedMission = missionKey;
+                    return;
+                }
+
+                // API/lista ZR mogła ładować się chwilę. Tuż przed kliknięciem
+                // sprawdzamy stan misji jeszcze raz.
+                if (isMissionAlreadyRunning()) {
+                    removeAutoSelectStatus();
                     return;
                 }
 
