@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.5
-// @description  Osobny menedżer ZR: lista, szybka edycja oraz kopiowanie ZR do wybranej kolumny i kategorii.
+// @version      0.6
+// @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie oraz masowe ustawianie docelowej kolumny i kategorii.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-lista.user.js
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.5';
+    const VERSION = '0.6';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -160,7 +160,8 @@
             const v = valuesForView(aao, mode);
             if (!v) return false;
             if (state.categoryFilter === 'none' && v.aao_category_id !== null) return false;
-            if (state.categoryFilter !== 'all' && state.categoryFilter !== 'none' &&
+            if (state.categoryFilter === 'with' && v.aao_category_id === null) return false;
+            if (!['all', 'none', 'with'].includes(state.categoryFilter) &&
                 Number(state.categoryFilter) !== Number(v.aao_category_id)) return false;
             if (q) {
                 const haystack = normalize(`${v.caption} ${v.column} ${getCategoryName(v.aao_category_id)} ${aao.id}`);
@@ -244,6 +245,41 @@
         target[key] = value;
     }
 
+    function getVisibleCopyRows() {
+        return sortedFilteredAAOs('copy');
+    }
+
+    function applyCopyColumnToAllVisible() {
+        if (state.copying) return;
+        const input = document.getElementById('orzr-copy-all-column');
+        if (!input) return;
+        const column = Math.max(1, Number.parseInt(input.value, 10) || 1);
+        input.value = String(column);
+        const rows = getVisibleCopyRows();
+        if (!rows.length) {
+            setStatus('Brak widocznych ZR, dla których można ustawić docelowy numer kolumny.', 'warning');
+            return;
+        }
+        for (const aao of rows) setCopyTarget(aao.id, 'column', column);
+        renderCopyTable();
+        setStatus(`Ustawiono docelowy nr kolumny ${column} dla ${rows.length} widocznych ZR.`, 'success');
+    }
+
+    function applyCopyCategoryToAllVisible() {
+        if (state.copying) return;
+        const select = document.getElementById('orzr-copy-all-category');
+        if (!select) return;
+        const categoryId = select.value === '' ? null : Number(select.value);
+        const rows = getVisibleCopyRows();
+        if (!rows.length) {
+            setStatus('Brak widocznych ZR, dla których można ustawić kategorię docelową.', 'warning');
+            return;
+        }
+        for (const aao of rows) setCopyTarget(aao.id, 'aao_category_id', categoryId);
+        renderCopyTable();
+        setStatus(`Ustawiono docelową kategorię „${getCategoryName(categoryId)}” dla ${rows.length} widocznych ZR.`, 'success');
+    }
+
     function renderCopyTable() {
         const tbody = document.getElementById('orzr-copy-body');
         if (!tbody) return;
@@ -285,6 +321,9 @@
 
     function updateCopyButtons() {
         document.querySelectorAll('.orzr-copy-row').forEach(btn => {
+            btn.disabled = state.copying;
+        });
+        document.querySelectorAll('.orzr-copy-bulk-apply').forEach(btn => {
             btn.disabled = state.copying;
         });
     }
@@ -407,10 +446,12 @@
         const copyTable = document.getElementById('orzr-copy-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
+        const copyBulk = document.getElementById('orzr-copy-bulk');
 
         const copying = state.activeTab === 'copy';
         if (listTable) listTable.hidden = copying;
         if (copyTable) copyTable.hidden = !copying;
+        if (copyBulk) copyBulk.hidden = !copying;
         if (saveAll) saveAll.hidden = copying;
         if (changedStat) changedStat.hidden = copying;
 
@@ -457,7 +498,7 @@
         const select = document.getElementById('orzr-filter-category');
         if (!select) return;
         const old = state.categoryFilter;
-        select.innerHTML = '<option value="all">Wszystkie kategorie</option><option value="none">Bez kategorii</option>';
+        select.innerHTML = '<option value="all">Wszystkie kategorie</option><option value="with">Wszystkie z kategorią</option><option value="none">Bez kategorii</option>';
         for (const [id, name] of [...state.categories.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pl'))) {
             const opt = document.createElement('option');
             opt.value = id;
@@ -465,6 +506,13 @@
             select.appendChild(opt);
         }
         select.value = [...select.options].some(o => o.value === old) ? old : 'all';
+
+        const bulkCategory = document.getElementById('orzr-copy-all-category');
+        if (bulkCategory) {
+            const previous = bulkCategory.value;
+            bulkCategory.innerHTML = categoryOptions(previous === '' ? null : Number(previous));
+            if ([...bulkCategory.options].some(o => o.value === previous)) bulkCategory.value = previous;
+        }
     }
 
     function waitForFrameLoad(frame, timeoutMs = 15000) {
@@ -638,6 +686,13 @@
 #orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 240px 230px auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
 #orzr-toolbar input,#orzr-toolbar select{width:100%}
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
+#orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-copy-bulk[hidden]{display:none}
+.orzr-copy-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.orzr-copy-bulk-group strong{white-space:nowrap}
+#orzr-copy-all-column{width:95px}
+#orzr-copy-all-category{min-width:220px;max-width:300px}
+.orzr-copy-bulk-note{font-size:12px;color:#666;flex-basis:100%}
 .orzr-status{margin:8px 12px 0;padding:8px 10px;border-radius:4px;font-size:13px}
 .orzr-status-info{background:#d9edf7;border:1px solid #bce8f1}
 .orzr-status-success{background:#dff0d8;border:1px solid #d6e9c6}
@@ -739,6 +794,7 @@
         <input id="orzr-search" type="search" class="form-control" placeholder="Szukaj po nazwie, kategorii, kolumnie lub ID…">
         <select id="orzr-filter-category" class="form-control">
             <option value="all">Wszystkie kategorie</option>
+            <option value="with">Wszystkie z kategorią</option>
             <option value="none">Bez kategorii</option>
         </select>
         <select id="orzr-sort" class="form-control">
@@ -751,6 +807,21 @@
         </select>
         <button id="orzr-refresh" type="button" class="btn btn-default">↻ Odśwież</button>
         <button id="orzr-save-all" type="button" class="btn btn-success" disabled>💾 Zapisz zmienione (0)</button>
+    </div>
+    <div id="orzr-copy-bulk" hidden>
+        <div class="orzr-copy-bulk-group">
+            <strong>Docelowy nr kolumny dla wszystkich:</strong>
+            <input id="orzr-copy-all-column" type="number" class="form-control input-sm" min="1" step="1" value="1">
+            <button id="orzr-copy-all-column-apply" type="button" class="btn btn-primary btn-sm orzr-copy-bulk-apply">Ustaw dla wszystkich</button>
+        </div>
+        <div class="orzr-copy-bulk-group">
+            <strong>Docelowa kategoria dla wszystkich:</strong>
+            <select id="orzr-copy-all-category" class="form-control input-sm">
+                <option value="">Bez kategorii</option>
+            </select>
+            <button id="orzr-copy-all-category-apply" type="button" class="btn btn-primary btn-sm orzr-copy-bulk-apply">Ustaw dla wszystkich</button>
+        </div>
+        <div class="orzr-copy-bulk-note">„Dla wszystkich” oznacza wszystkie ZR aktualnie widoczne po zastosowaniu wyszukiwania i filtrów.</div>
     </div>
     <div id="orzr-stats">
         Wszystkich ZR: <strong id="orzr-stat-total">0</strong>
@@ -804,6 +875,8 @@
             }
         });
         document.getElementById('orzr-save-all').addEventListener('click', saveAllChanged);
+        document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
+        document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();
         });

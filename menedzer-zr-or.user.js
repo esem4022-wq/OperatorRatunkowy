@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.34
+// @version      0.35
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.34';
-    const CAPTURE_KEY = 'or_zr_capture_v034';
+    const VERSION = '0.35';
+    const CAPTURE_KEY = 'or_zr_capture_v035';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -34,6 +34,9 @@
         fields: [],
         aaosPromise: null,
         aaosLoadedAt: 0,
+        aaoCategoriesPromise: null,
+        aaoCategoriesLoadedAt: 0,
+        azrCategoryId: null,
         autoSelectBusy: false,
         autoSelectMissionKey: '',
         autoSelectFirstSeenAt: 0,
@@ -1761,6 +1764,165 @@
         return state.aaosPromise;
     }
 
+    function unwrapAAOCategories(data) {
+        const raw = data?.result ?? data;
+        const result = [];
+
+        if (Array.isArray(raw)) {
+            for (const item of raw) {
+                const id = item?.id ?? item?.aao_category_id ?? item?.category_id;
+                const name = item?.caption ?? item?.name ?? item?.title ?? item?.label;
+                if (id == null || !name) continue;
+                result.push({ id: String(id), name: String(name) });
+            }
+            return result;
+        }
+
+        if (raw && typeof raw === 'object') {
+            for (const [id, value] of Object.entries(raw)) {
+                if (value && typeof value === 'object') {
+                    const name = value.caption ?? value.name ?? value.title ?? value.label;
+                    if (name) result.push({ id: String(value.id ?? id), name: String(name) });
+                } else if (value != null) {
+                    result.push({ id: String(id), name: String(value) });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    function loadAZRCategoryId(force = false) {
+        const maxAge = 10000;
+
+        if (
+            !force &&
+            state.aaoCategoriesPromise &&
+            state.aaoCategoriesLoadedAt &&
+            Date.now() - state.aaoCategoriesLoadedAt < maxAge
+        ) {
+            return state.aaoCategoriesPromise;
+        }
+
+        state.aaoCategoriesLoadedAt = Date.now();
+        state.aaoCategoriesPromise = fetch('/api/v1/aao_categories', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
+        })
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then(unwrapAAOCategories)
+            .then(categories => {
+                const azr = categories.find(category =>
+                    exactMissionNameKey(category?.name || '') === 'azr'
+                );
+                state.azrCategoryId = azr?.id ?? null;
+                return state.azrCategoryId;
+            })
+            .catch(error => {
+                state.aaoCategoriesPromise = null;
+                state.aaoCategoriesLoadedAt = 0;
+                state.azrCategoryId = null;
+                console.warn(TAG, 'Nie udało się znaleźć kategorii AZR:', error);
+                return null;
+            });
+
+        return state.aaoCategoriesPromise;
+    }
+
+    function aaoBelongsToCategory(aao, categoryId) {
+        if (!aao || categoryId == null) return false;
+        const id = aao.aao_category_id ?? aao.category_id ?? aao.aaoCategoryId;
+        return String(id ?? '') === String(categoryId);
+    }
+
+    function findAZRCategoryControl(group, categoryId) {
+        const roots = [group, group?.parentElement, group?.parentElement?.parentElement, document].filter(Boolean);
+        const id = String(categoryId ?? '');
+        const selectors = id ? [
+            `[data-aao-category-id="${CSS.escape(id)}"]`,
+            `[aao_category_id="${CSS.escape(id)}"]`,
+            `[data-category-id="${CSS.escape(id)}"]`,
+            `#aao_category_${CSS.escape(id)}`,
+            `[href*="aao_category_id=${CSS.escape(id)}"]`
+        ] : [];
+
+        for (const root of roots) {
+            for (const selector of selectors) {
+                try {
+                    const el = root.querySelector?.(selector);
+                    if (el) return el;
+                } catch {}
+            }
+        }
+
+        // Fallback po dokładnym tekście kategorii. Ograniczamy się do elementów
+        // sterujących zakładkami/listą kategorii, a nie do przycisków samych ZR.
+        const candidates = document.querySelectorAll(
+            '.nav-tabs a, .nav-pills a, [role="tab"], button[data-toggle="tab"], button[data-bs-toggle="tab"], .aao-category, .aao_category'
+        );
+        for (const el of candidates) {
+            if (exactMissionNameKey(el.textContent || '') === 'azr') return el;
+        }
+
+        return null;
+    }
+
+    function ensureAZRCategoryActive(group, categoryId) {
+        const control = findAZRCategoryControl(group, categoryId);
+        if (!control) return false;
+
+        const cls = control.classList;
+        const parentCls = control.parentElement?.classList;
+        const isActive =
+            cls?.contains('active') ||
+            parentCls?.contains('active') ||
+            control.getAttribute('aria-selected') === 'true';
+
+        if (isActive) return false;
+
+        control.click();
+        return true;
+    }
+
+    async function autoSelectTargetName(missionName) {
+        let vehicles = [];
+        let maxPatients = 0;
+
+        // Najpewniejsze źródło: dokładny mission_help bieżącej misji.
+        const helpUrl = getExactCurrentMissionHelpUrl();
+        if (helpUrl) {
+            try {
+                const html = await xhrText(helpUrl);
+                const parsed = parseExactMissionHelpHtml(html);
+                vehicles = parsed?.vehicles || [];
+                maxPatients = Number.parseInt(parsed?.maxPatients, 10) || 0;
+            } catch (error) {
+                console.warn(TAG, 'Nie udało się sprawdzić reguły Ambulans dla auto-wyboru:', error);
+            }
+        }
+
+        // Fallback na tekst aktualnej karty, jeżeli help nie podał danych.
+        if (!maxPatients && !vehicles.length) {
+            const cardText = findCurrentMissionCardText(missionName);
+            if (cardText) {
+                vehicles = extractVehiclesFromCardText(cardText);
+                maxPatients = extractMaxPatientsFromText(cardText) || 0;
+            }
+        }
+
+        const hasOtherRequiredVehicles =
+            Array.isArray(vehicles) && vehicles.some(v => Number(v?.count) > 0);
+
+        // Specjalny przypadek dotyczy WYŁĄCZNIE auto-zaznaczania istniejącej ZR.
+        if (maxPatients === 1 && !hasOtherRequiredVehicles) return 'Ambulans';
+
+        return missionName;
+    }
+
     function scheduleAutoSelectRetry(delay = 500) {
         if (state.autoSelectAttempts >= 12) return;
         clearTimeout(state.autoSelectRetryTimer);
@@ -2039,15 +2201,16 @@
         const missionKey = exactMissionNameKey(missionName);
         if (!missionKey) return;
 
-        // v0.34: po otwarciu misji czekamy 1 s. To wystarcza na doładowanie
-        // list ZR i informacji o stanie misji, a jednocześnie szybciej zaznacza ZR.
+        // v0.35: 1 sekunda opóźnienia po otwarciu misji.
         if (state.autoSelectMissionKey !== missionKey) {
             state.autoSelectMissionKey = missionKey;
             state.autoSelectFirstSeenAt = Date.now();
             state.autoSelectAttempts = 0;
-            // Nowa lub właśnie utworzona ZR mogła nie istnieć w poprzednim cache API.
             state.aaosPromise = null;
             state.aaosLoadedAt = 0;
+            state.aaoCategoriesPromise = null;
+            state.aaoCategoriesLoadedAt = 0;
+            state.azrCategoryId = null;
 
             clearTimeout(state.autoSelectRetryTimer);
             state.autoSelectRetryTimer = setTimeout(() => {
@@ -2063,12 +2226,10 @@
 
         if (isMissionAlreadyRunning()) {
             removeAutoSelectStatus();
-
             const group = document.getElementById('mission-aao-group');
             group?.querySelectorAll('.orzr-auto-selected-aao').forEach(el =>
                 el.classList.remove('orzr-auto-selected-aao')
             );
-
             return;
         }
 
@@ -2078,29 +2239,46 @@
             return;
         }
 
-        // Klikamy najwyżej raz na danym ekranie misji. To krytyczne, ponieważ
-        // drugie kliknięcie tej samej ZR mogłoby ponownie dodać pojazdy.
         if (group.dataset.orzrAutoSelectedMission === missionKey) return;
         if (group.dataset.orzrAutoCheckedMission === missionKey) return;
 
         state.autoSelectBusy = true;
 
         try {
-            const aaos = await loadAAOsForAutoSelect(state.autoSelectAttempts > 1);
+            const [aaos, azrCategoryId, targetName] = await Promise.all([
+                loadAAOsForAutoSelect(state.autoSelectAttempts > 1),
+                loadAZRCategoryId(state.autoSelectAttempts > 1),
+                autoSelectTargetName(missionName)
+            ]);
+
+            if (!azrCategoryId) {
+                log('Auto-wybór pominięty: nie znaleziono kategorii AZR.');
+                if (state.autoSelectAttempts < 6) scheduleAutoSelectRetry(700);
+                return;
+            }
+
             if (!aaos.length) return;
 
+            const targetKey = exactMissionNameKey(targetName);
             const matches = aaos.filter(aao =>
-                exactMissionNameKey(aao?.caption || '') === missionKey
+                aaoBelongsToCategory(aao, azrCategoryId) &&
+                exactMissionNameKey(aao?.caption || '') === targetKey
             );
 
             if (!matches.length) {
-                // Po utworzeniu nowej ZR API bywa przez chwilę opóźnione.
-                // Próbujemy kilka razy zamiast od razu zapamiętywać brak.
                 if (state.autoSelectAttempts < 6) {
                     scheduleAutoSelectRetry(650);
                     return;
                 }
                 group.dataset.orzrAutoCheckedMission = missionKey;
+                log(`Brak ZR „${targetName}” w kategorii AZR.`);
+                return;
+            }
+
+            // Auto-wybór ma przeszukiwać WYŁĄCZNIE AZR. Najpierw przełączamy
+            // kategorię AZR, dopiero potem szukamy i klikamy konkretną ZR.
+            if (ensureAZRCategoryActive(group, azrCategoryId)) {
+                scheduleAutoSelectRetry(300);
                 return;
             }
 
@@ -2108,59 +2286,49 @@
                 const id = String(aao?.id ?? '').trim();
                 if (!id) continue;
 
-                // Obsługa obu wariantów DOM Operatora, w tym pierwszej
-                // wyświetlanej kategorii z elementami id="aao_<ID>".
                 const target =
                     findAAOButtonById(group, id) ||
-                    findAAOButtonByExactCaption(group, aao?.caption || missionName);
+                    findAAOButtonByExactCaption(group, targetName);
 
-                // Jeśli ZR jest w ukrytej zakładce kategorii, przełącz ją najpierw.
-                if (target && activateAAOTabForTarget(target)) {
-                    scheduleAutoSelectRetry(250);
-                    return;
-                }
-
-                // ZR może być jeszcze w trakcie doładowywania. Nie polegamy już
-                // tylko na MutationObserverze — aktywnie ponawiamy próbę.
                 if (!target) {
-                    scheduleAutoSelectRetry(450);
+                    scheduleAutoSelectRetry(400);
                     continue;
                 }
 
-                // Czerwona etykieta oznacza niedostępne ZR – takiego nie klikamy.
+                // Dodatkowe zabezpieczenie: element musi znajdować się w aktualnie
+                // wybranej kategorii AZR. Nie klikamy kopii z innej kategorii.
+                const targetCaption = sanitizeMissionName(target.textContent || '');
+                if (exactMissionNameKey(targetCaption) !== targetKey) continue;
+
                 if (!isAAOAvailable(target)) {
-                    log(`ZR „${missionName}” istnieje, ale nie jest obecnie dostępna.`);
+                    log(`ZR „${targetName}” w AZR istnieje, ale nie jest obecnie dostępna.`);
                     group.dataset.orzrAutoCheckedMission = missionKey;
                     return;
                 }
 
-                // API/lista ZR mogła ładować się chwilę. Tuż przed kliknięciem
-                // sprawdzamy stan misji jeszcze raz.
+                // Ostatnia kontrola przed kliknięciem – trwająca misja nie może
+                // dostać automatycznie zaznaczonej ZR.
                 if (isMissionAlreadyRunning()) {
                     removeAutoSelectStatus();
                     return;
                 }
 
-                // Znacznik ustawiamy PRZED kliknięciem, żeby zmiany DOM wywołane
-                // przez grę nie spowodowały drugiego automatycznego kliknięcia.
                 group.dataset.orzrAutoSelectedMission = missionKey;
                 group.dataset.orzrAutoSelectedAaoId = id;
 
                 ensureAutoSelectStyle();
                 target.classList.add('orzr-auto-selected-aao');
-                target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR`;
-                showAutoSelectStatus(aao?.caption || missionName);
+                target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
+                showAutoSelectStatus(aao?.caption || targetName);
 
                 target.click();
-                log(`Automatycznie wybrano ZR „${missionName}” (ID ${id}).`);
+                log(`Automatycznie wybrano ZR „${targetName}” z kategorii AZR (ID ${id}).`);
                 return;
             }
 
-            if (state.autoSelectAttempts < 12) {
-                scheduleAutoSelectRetry(500);
-            }
+            if (state.autoSelectAttempts < 12) scheduleAutoSelectRetry(500);
         } catch (error) {
-            console.warn(TAG, 'Automatyczny wybór ZR nie powiódł się:', error);
+            console.warn(TAG, 'Automatyczny wybór ZR z kategorii AZR nie powiódł się:', error);
         } finally {
             state.autoSelectBusy = false;
         }
@@ -2430,37 +2598,6 @@
             if (f) return f;
         }
 
-        // Specjalna ZR: dokładnie 1 pacjent i brak innych wymaganych pojazdów
-        // => Ambulans P.
-        if (
-            req.kind === 'vehicle' &&
-            normalize(req.label) === 'ambulans p'
-        ) {
-            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
-
-            const exactLabels = [
-                'ambulans p',
-                'ambulans typu p',
-                'ambulans podstawowy'
-            ];
-
-            for (const wanted of exactLabels) {
-                const f = vehicleFields.find(x => normalize(x.label) === wanted);
-                if (f) return f;
-            }
-
-            const fallback = vehicleFields.find(x => {
-                const n = normalize(x.label);
-                return n.includes('ambulans') &&
-                    (/(^|\s)p($|\s)/.test(n) || n.includes('podstaw')) &&
-                    !n.includes('ambulans s') &&
-                    !n.includes('ambulans t') &&
-                    !n.includes('transport');
-            });
-
-            if (fallback) return fallback;
-        }
-
         // Pacjenci: nie używamy tu fuzzy-matchingu. Szukamy konkretnego pola
         // odpowiadającego ambulansowi S/P. W interfejsie Operatora najczęściej
         // jest ono opisane po prostu jako "Ambulans".
@@ -2581,18 +2718,9 @@
         const maxPatients = Number.parseInt(state.capture.maxPatients, 10);
 
         if (Number.isFinite(maxPatients) && maxPatients > 0) {
-            const hasOtherRequiredVehicles =
-                Array.isArray(state.capture.vehicles) &&
-                state.capture.vehicles.some(v => Number(v?.count) > 0);
-
-            const patientVehicleLabel =
-                maxPatients === 1 && !hasOtherRequiredVehicles
-                    ? 'Ambulans P'
-                    : 'Ambulans S lub P';
-
             list.push({
                 kind: 'vehicle',
-                label: patientVehicleLabel,
+                label: 'Ambulans S lub P',
                 value: maxPatients,
                 chance: null
             });

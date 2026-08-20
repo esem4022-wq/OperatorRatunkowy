@@ -15,6 +15,15 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.6 — 20.08.2026
+-----------------
+- W filtrze kategorii dodano pozycję „Wszystkie z kategorią”, która pokazuje tylko ZR mające przypisaną dowolną kategorię.
+- W zakładce „Kopiuj” dodano wspólne pole docelowego numeru kolumny oraz przycisk „Ustaw dla wszystkich”.
+- W zakładce „Kopiuj” dodano wspólny wybór kategorii docelowej oraz przycisk „Ustaw dla wszystkich”.
+- Ustawienia zbiorcze są stosowane do wszystkich ZR aktualnie widocznych po wyszukiwaniu i filtrach.
+- Zachowano indywidualną możliwość zmiany docelowej kolumny i kategorii dla każdego ZR.
+- Zachowano obsługę GitHuba, stałą nazwę pliku userscriptu oraz dotychczasowe funkcje.
+
 v0.5 — 20.08.2026
 -----------------
 - Dodano zakładkę „Kopiuj”.
