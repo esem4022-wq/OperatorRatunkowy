@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.42
+// @version      0.43
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.41';
-    const CAPTURE_KEY = 'or_zr_capture_v041';
+    const VERSION = '0.43';
+    const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -2027,6 +2027,11 @@
         );
     }
 
+    function isSingleOPIRequirement(vehicle) {
+        if (!vehicle || Number(vehicle.count) !== 1) return false;
+        return normalize(vehicle.label || '') === 'opi';
+    }
+
     async function autoSelectTargetName(missionName) {
         const missionKey = exactMissionNameKey(missionName);
 
@@ -2072,6 +2077,15 @@
 
         // Dokładnie 1 pacjent i brak wymaganych pojazdów -> gotowa ZR „Ambulans”.
         if (maxPatients === 1 && requiredVehicles.length === 0) return 'Ambulans';
+
+        // Jeżeli jedynym wymaganiem w sekcji Pojazdy jest dokładnie 1 OPI,
+        // użyj wspólnej ZR „Radiowóz” z kategorii AZR.
+        if (
+            requiredVehicles.length === 1 &&
+            isSingleOPIRequirement(requiredVehicles[0])
+        ) {
+            return 'Radiowóz';
+        }
 
         // ZR „Straż” TYLKO gdy jedynym wymaganiem misji jest dokładnie 1
         // samochód/wóz pożarniczy. Jeśli są pacjenci, woda, piana lub jakikolwiek

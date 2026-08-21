@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.42
+Wersja: 0.43
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -24,6 +24,7 @@ NAJWAŻNIEJSZE FUNKCJE
 - auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`; ZR z innych kategorii nie są brane pod uwagę nawet przy identycznej nazwie,
 - dla długich nazw misji skrypt poprawnie odczytuje tytuł łamany na kilka linii; przy tworzeniu nazwa ZR jest ograniczana do limitu 60 znaków gry,
 - dokładnie 1 pacjent bez innych wymaganych pojazdów: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
+- jeśli jedynym wymaganiem w sekcji pojazdów jest dokładnie `1 OPI`: auto-zaznacz ZR `Radiowóz` z kategorii `AZR`,
 - ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
 - misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
 - misja, której nazwa zaczyna się od `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
@@ -34,6 +35,11 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.43
+- dodano specjalną regułę auto-zaznaczania: jeśli jedynym wymaganiem w sekcji `Pojazdy` jest dokładnie `1 OPI`, skrypt wybiera ZR `Radiowóz` z kategorii `AZR`,
+- reguła dotyczy wyłącznie auto-zaznaczania gotowej ZR; tworzenie ZR pozostaje bez zmian,
+- zachowano wyszukiwanie wyłącznie w `AZR`, opóźnienie 0,5 s oraz pozostałe reguły specjalne.
+
 v0.42
 - auto-zaznaczanie przeszukuje wyłącznie ZR faktycznie należące do własnej kategorii `AZR`; usunięto globalne wyszukiwanie po wszystkich kategoriach,
 - ID docelowej ZR jest najpierw potwierdzane przez API dla kategorii `AZR`, a po przełączeniu kategorii klikany jest tylko ten konkretny przycisk,
