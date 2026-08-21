@@ -15,6 +15,15 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.16 — 21.08.2026
+------------------
+- Ulepszono listę błędów synchronizacji pojazdów AZR.
+- Przy każdym błędzie jest teraz osobna kolumna „Różnice pojazdów”, która pokazuje dokładnie które wymagania pojazdowe nie zgadzają się między ZR źródłowym i AZR.
+- Różnice są opisywane w formie np. „GBA: powinno 2, w AZR 1” albo „OPI: powinno 0, w AZR 1”.
+- Komunikat techniczny błędu pozostaje w osobnej kolumnie „Błąd techniczny”.
+- Po nieudanej aktualizacji skrypt próbuje ponownie odczytać aktualny ZR w AZR, aby pokazać rzeczywiste różnice pozostałe po zapisie.
+- Zachowano przycisk „Edycja AZR”, obsługę GitHuba, stałą nazwę userscriptu oraz pełną historię wersji.
+
 v0.15 — 21.08.2026
 ------------------
 - W zakładce „Brakuje w AZR” po synchronizacji pojazdów wyświetlana jest szczegółowa lista błędów aktualizacji.

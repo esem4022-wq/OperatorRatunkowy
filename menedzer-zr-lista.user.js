@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.15
+// @version      0.16
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.15';
+    const VERSION = '0.16';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -846,6 +846,26 @@
         return String(a?.signature ?? '') === String(b?.signature ?? '');
     }
 
+    function describeVehicleSnapshotDiff(expectedSnapshot, actualSnapshot) {
+        const expected = new Map((expectedSnapshot?.fields || []).map(field => [field.key, field]));
+        const actual = new Map((actualSnapshot?.fields || []).map(field => [field.key, field]));
+        const keys = [...new Set([...expected.keys(), ...actual.keys()])].sort();
+        const rows = [];
+
+        for (const key of keys) {
+            const exp = expected.get(key);
+            const act = actual.get(key);
+            const expValue = normalizeVehicleRequirementValue(exp?.rawValue ?? exp?.value ?? '');
+            const actValue = normalizeVehicleRequirementValue(act?.rawValue ?? act?.value ?? '');
+            if (expValue === actValue) continue;
+
+            const label = String(exp?.label || act?.label || exp?.name || act?.name || key).replace(/\s+/g, ' ').trim();
+            rows.push(`${label}: powinno ${expValue}, w AZR ${actValue}`);
+        }
+
+        return rows.length ? rows.join(' • ') : 'Nie udało się ustalić różniących się pojazdów.';
+    }
+
     function getAZRVehicleComparisonGroups() {
         const azrCategoryId = getAZRCategoryId();
         if (azrCategoryId == null) return [];
@@ -949,6 +969,7 @@
                 <td>${escapeHTML(error.name || '')}</td>
                 <td class="orzr-id">${Number(error.sourceId) || ''}</td>
                 <td>${escapeHTML(error.sourceCategory || '')}</td>
+                <td class="orzr-azr-vehicle-diff">${escapeHTML(error.vehicleDiff || 'Nie udało się ustalić różnic pojazdów.')}</td>
                 <td class="orzr-azr-error-message">${escapeHTML(error.message || 'Nieznany błąd')}</td>
                 <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${Number(error.targetId) || ''}/edit">✎ Edycja AZR</a></td>`;
             tbody.appendChild(tr);
@@ -1025,7 +1046,8 @@
                                 name: group.name,
                                 source: canonical.source,
                                 target,
-                                sourceSnapshot: canonical.snapshot
+                                sourceSnapshot: canonical.snapshot,
+                                targetSnapshot
                             });
                         }
                     }
@@ -1069,11 +1091,22 @@
                 } catch (e) {
                     console.error(TAG, `Błąd aktualizacji pojazdów AZR ${item.target.id}`, e);
                     updateErrors++;
+
+                    let currentTargetSnapshot = item.targetSnapshot || null;
+                    try {
+                        // Po błędzie próbujemy odczytać faktyczny bieżący stan AZR,
+                        // aby lista pokazała konkretnie które pojazdy nadal się różnią.
+                        currentTargetSnapshot = await readVehicleRequirementSnapshot(item.target.id);
+                    } catch (diffReadError) {
+                        console.warn(TAG, `Nie udało się ponownie odczytać pojazdów AZR ${item.target.id} do opisu różnic`, diffReadError);
+                    }
+
                     state.azrUpdateErrors.push({
                         targetId: item.target.id,
                         name: item.name,
                         sourceId: item.source.id,
                         sourceCategory: getCategoryName(item.source.aao_category_id),
+                        vehicleDiff: describeVehicleSnapshotDiff(item.sourceSnapshot, currentTargetSnapshot),
                         message: String(e?.message || e || 'Nieznany błąd')
                     });
                     renderAZRUpdateErrors();
@@ -1981,8 +2014,10 @@
 .orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
 #orzr-azr-update-errors-table th:nth-child(1),#orzr-azr-update-errors-table td:nth-child(1){width:90px}
 #orzr-azr-update-errors-table th:nth-child(3),#orzr-azr-update-errors-table td:nth-child(3){width:90px}
-#orzr-azr-update-errors-table th:nth-child(4),#orzr-azr-update-errors-table td:nth-child(4){width:220px}
-#orzr-azr-update-errors-table th:nth-child(6),#orzr-azr-update-errors-table td:nth-child(6){width:125px}
+#orzr-azr-update-errors-table th:nth-child(4),#orzr-azr-update-errors-table td:nth-child(4){width:180px}
+#orzr-azr-update-errors-table th:nth-child(5),#orzr-azr-update-errors-table td:nth-child(5){width:420px}
+#orzr-azr-update-errors-table th:nth-child(7),#orzr-azr-update-errors-table td:nth-child(7){width:125px}
+.orzr-azr-vehicle-diff{white-space:pre-wrap;overflow-wrap:anywhere;color:#8a6d3b;font-weight:600}
 .orzr-azr-error-message{white-space:pre-wrap;overflow-wrap:anywhere;color:#a94442}
 .orzr-copy-action{white-space:nowrap}
 .orzr-actions{white-space:nowrap}
@@ -2131,7 +2166,7 @@
     <div id="orzr-azr-update-errors" hidden>
         <div class="orzr-azr-update-errors-title">⚠ Błędy aktualizacji AZR: <span id="orzr-azr-update-errors-count">0</span></div>
         <table id="orzr-azr-update-errors-table">
-            <thead><tr><th>ID AZR</th><th>Nazwa ZR</th><th>ID źródła</th><th>Kategoria źródłowa</th><th>Błąd</th><th>Akcje</th></tr></thead>
+            <thead><tr><th>ID AZR</th><th>Nazwa ZR</th><th>ID źródła</th><th>Kategoria źródłowa</th><th>Różnice pojazdów</th><th>Błąd techniczny</th><th>Akcje</th></tr></thead>
             <tbody id="orzr-azr-update-errors-body"></tbody>
         </table>
     </div>
