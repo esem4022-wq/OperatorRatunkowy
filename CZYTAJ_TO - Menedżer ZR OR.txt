@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.43
+Wersja: 0.44
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -35,6 +35,12 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v0.44
+- poprawiono auto-zaznaczanie dla misji z technicznym dopiskiem `(możliwy alarm fałszywy)` na końcu nazwy,
+- przy wyszukiwaniu ZR w kategorii `AZR` dopisek jest pomijany, np. `Płonąca maszyna (możliwy alarm fałszywy)` szuka ZR `Płonąca maszyna`,
+- inne nawiasy będące prawidłową częścią nazwy misji nie są usuwane,
+- pozostałe reguły auto-zaznaczania i tworzenia ZR pozostają bez zmian.
+
 v0.43
 - dodano specjalną regułę auto-zaznaczania: jeśli jedynym wymaganiem w sekcji `Pojazdy` jest dokładnie `1 OPI`, skrypt wybiera ZR `Radiowóz` z kategorii `AZR`,
 - reguła dotyczy wyłącznie auto-zaznaczania gotowej ZR; tworzenie ZR pozostaje bez zmian,

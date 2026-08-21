@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.13
+// @version      0.15
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.13';
+    const VERSION = '0.15';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -40,7 +40,8 @@
         cleanupMode: null,
         cleanupSelected: new Set(),
         deleting: false,
-        azrVehicleSyncing: false
+        azrVehicleSyncing: false,
+        azrUpdateErrors: []
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -108,6 +109,7 @@
         state.cleanupResults = [];
         state.cleanupMode = null;
         state.cleanupSelected.clear();
+        state.azrUpdateErrors = [];
         populateCategoryFilter();
         renderActiveTable();
         updateStats();
@@ -929,6 +931,30 @@
         }
     }
 
+    function renderAZRUpdateErrors() {
+        const section = document.getElementById('orzr-azr-update-errors');
+        const tbody = document.getElementById('orzr-azr-update-errors-body');
+        const count = document.getElementById('orzr-azr-update-errors-count');
+        if (!section || !tbody) return;
+
+        const errors = Array.isArray(state.azrUpdateErrors) ? state.azrUpdateErrors : [];
+        section.hidden = state.activeTab !== 'missing-azr' || errors.length === 0;
+        if (count) count.textContent = errors.length;
+        tbody.innerHTML = '';
+
+        for (const error of errors) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="orzr-id">${Number(error.targetId) || ''}</td>
+                <td>${escapeHTML(error.name || '')}</td>
+                <td class="orzr-id">${Number(error.sourceId) || ''}</td>
+                <td>${escapeHTML(error.sourceCategory || '')}</td>
+                <td class="orzr-azr-error-message">${escapeHTML(error.message || 'Nieznany błąd')}</td>
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${Number(error.targetId) || ''}/edit">✎ Edycja AZR</a></td>`;
+            tbody.appendChild(tr);
+        }
+    }
+
     async function syncAZRVehicleRequirements() {
         if (state.copying || state.azrVehicleSyncing) return;
         const azrCategoryId = getAZRCategoryId();
@@ -954,6 +980,8 @@
 
         const button = document.getElementById('orzr-missing-azr-sync-vehicles');
         state.azrVehicleSyncing = true;
+        state.azrUpdateErrors = [];
+        renderAZRUpdateErrors();
         updateMissingAZRButtons();
 
         const snapshotCache = new Map();
@@ -1041,6 +1069,14 @@
                 } catch (e) {
                     console.error(TAG, `Błąd aktualizacji pojazdów AZR ${item.target.id}`, e);
                     updateErrors++;
+                    state.azrUpdateErrors.push({
+                        targetId: item.target.id,
+                        name: item.name,
+                        sourceId: item.source.id,
+                        sourceCategory: getCategoryName(item.source.aao_category_id),
+                        message: String(e?.message || e || 'Nieznany błąd')
+                    });
+                    renderAZRUpdateErrors();
                 }
             }
 
@@ -1055,6 +1091,7 @@
                 updateErrors ? `błędy aktualizacji: ${updateErrors}` : ''
             ].filter(Boolean);
             setStatus(`Synchronizacja pojazdów AZR zakończona. ${parts.join(' • ')}.`, conflicts.length || scanErrors || updateErrors ? 'warning' : 'success');
+            renderAZRUpdateErrors();
         } finally {
             state.azrVehicleSyncing = false;
             if (button && document.contains(button)) button.textContent = '🔄 Sprawdź i aktualizuj pojazdy AZR';
@@ -1619,6 +1656,7 @@
         const copyBulk = document.getElementById('orzr-copy-bulk');
         const cleanupTools = document.getElementById('orzr-cleanup-tools');
         const missingAZRTools = document.getElementById('orzr-missing-azr-tools');
+        const azrUpdateErrors = document.getElementById('orzr-azr-update-errors');
         const toolbar = document.getElementById('orzr-toolbar');
         const normalEmpty = document.getElementById('orzr-empty');
         const cleanupEmpty = document.getElementById('orzr-cleanup-empty');
@@ -1637,6 +1675,7 @@
         if (copyBulk) copyBulk.hidden = !copying;
         if (cleanupTools) cleanupTools.hidden = !cleaning;
         if (missingAZRTools) missingAZRTools.hidden = !missingAZR;
+        if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrUpdateErrors.length === 0;
         if (toolbar) toolbar.hidden = cleaning || missingAZR;
         if (saveAll) saveAll.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
@@ -1647,8 +1686,10 @@
 
         if (copying) renderCopyTable();
         else if (cleaning) renderCleanupTable();
-        else if (missingAZR) renderMissingAZRTable();
-        else renderTable();
+        else if (missingAZR) {
+            renderMissingAZRTable();
+            renderAZRUpdateErrors();
+        } else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
             btn.classList.toggle('orzr-tab-active', btn.dataset.tab === state.activeTab);
@@ -1902,9 +1943,9 @@
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -1935,6 +1976,14 @@
 .orzr-missing-note{margin-top:3px;font-size:11px;color:#777}
 #orzr-missing-azr-copy-all{white-space:nowrap}
 .orzr-missing-azr-info{font-size:12px;color:#555}
+#orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
+#orzr-azr-update-errors[hidden]{display:none}
+.orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
+#orzr-azr-update-errors-table th:nth-child(1),#orzr-azr-update-errors-table td:nth-child(1){width:90px}
+#orzr-azr-update-errors-table th:nth-child(3),#orzr-azr-update-errors-table td:nth-child(3){width:90px}
+#orzr-azr-update-errors-table th:nth-child(4),#orzr-azr-update-errors-table td:nth-child(4){width:220px}
+#orzr-azr-update-errors-table th:nth-child(6),#orzr-azr-update-errors-table td:nth-child(6){width:125px}
+.orzr-azr-error-message{white-space:pre-wrap;overflow-wrap:anywhere;color:#a94442}
 .orzr-copy-action{white-space:nowrap}
 .orzr-actions{white-space:nowrap}
 .orzr-actions .btn+.btn{margin-left:4px}
@@ -2079,6 +2128,13 @@
         <span id="orzr-changed-stat">&nbsp;|&nbsp; Zmienionych: <strong id="orzr-stat-changed">0</strong></span>
     </div>
     <div id="orzr-status" class="orzr-status orzr-status-info" hidden></div>
+    <div id="orzr-azr-update-errors" hidden>
+        <div class="orzr-azr-update-errors-title">⚠ Błędy aktualizacji AZR: <span id="orzr-azr-update-errors-count">0</span></div>
+        <table id="orzr-azr-update-errors-table">
+            <thead><tr><th>ID AZR</th><th>Nazwa ZR</th><th>ID źródła</th><th>Kategoria źródłowa</th><th>Błąd</th><th>Akcje</th></tr></thead>
+            <tbody id="orzr-azr-update-errors-body"></tbody>
+        </table>
+    </div>
     <div id="orzr-table-wrap">
         <table id="orzr-table">
             <thead><tr><th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Akcje</th></tr></thead>

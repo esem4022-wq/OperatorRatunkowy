@@ -15,6 +15,15 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v0.15 — 21.08.2026
+------------------
+- W zakładce „Brakuje w AZR” po synchronizacji pojazdów wyświetlana jest szczegółowa lista błędów aktualizacji.
+- Lista pokazuje: ID ZR w AZR, nazwę ZR, ID ZR źródłowego, kategorię źródłową oraz dokładny komunikat błędu.
+- Przy każdym błędzie dodano przycisk „Edycja AZR”, prowadzący bezpośrednio do ZR, którego aktualizacja się nie udała.
+- Lista błędów jest czyszczona przy rozpoczęciu kolejnej synchronizacji i pokazuje błędy z ostatniego uruchomienia.
+- v0.14 pozostaje wycofana; rozwój kontynuowany jest od poprawnej bazy v0.13.
+- Zachowano obsługę GitHuba, stałą nazwę userscriptu oraz pełną historię wcześniejszych poprawnych wersji.
+
 v0.13 — 20.08.2026
 ------------------
 - W zakładce „Brakuje w AZR” dodano przycisk „Sprawdź i aktualizuj pojazdy AZR”.

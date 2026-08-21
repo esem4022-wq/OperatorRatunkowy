@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.43
+// @version      0.44
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.43';
+    const VERSION = '0.44';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -1728,7 +1728,7 @@
 
         state.capture = data;
         saveJSON(CAPTURE_KEY, data);
-        log('Odczyt misji v0.41:', data);
+        log('Odczyt misji:', data);
 
         return data;
     }
@@ -1736,6 +1736,23 @@
     // ------------------------------------------------------------------
     // AUTOMATYCZNY WYBÓR ISTNIEJĄCEGO ZR
     // ------------------------------------------------------------------
+
+    function stripFalseAlarmSuffix(value) {
+        let text = sanitizeMissionName(value);
+        if (!text) return '';
+
+        // Część misji ma techniczny dopisek w nagłówku, np.
+        // "Płonąca maszyna (możliwy alarm fałszywy)".
+        // W AZR użytkownik przechowuje ZR pod właściwą nazwą misji bez tego dopisku.
+        // Usuwamy WYŁĄCZNIE ten końcowy nawias - innych nawiasów w nazwach nie ruszamy.
+        text = text
+            .replace(/\s*\(\s*możliwy\s+alarm\s+fałszywy\s*\)\s*$/i, '')
+            .replace(/\s*\(\s*mozliwy\s+alarm\s+falszywy\s*\)\s*$/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        return text;
+    }
 
     function exactMissionNameKey(value) {
         return sanitizeMissionName(value)
@@ -2033,7 +2050,10 @@
     }
 
     async function autoSelectTargetName(missionName) {
-        const missionKey = exactMissionNameKey(missionName);
+        // Dla auto-zaznaczania ignorujemy techniczny dopisek
+        // "(możliwy alarm fałszywy)" na końcu nazwy.
+        const matchMissionName = stripFalseAlarmSuffix(missionName) || missionName;
+        const missionKey = exactMissionNameKey(matchMissionName);
 
         // Reguły specjalne nazw misji.
         // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
@@ -2104,7 +2124,7 @@
 
         if (onlyOneFireVehicle && !hasAnythingElse) return 'Straż';
 
-        return missionName;
+        return matchMissionName;
     }
 
     function scheduleAutoSelectRetry(delay = 500) {

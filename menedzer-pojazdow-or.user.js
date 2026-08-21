@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.10
+// @version      2.13
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
 // @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-pojazdow-or.user.js
 // @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-pojazdow-or.user.js
+// @supportURL   https://github.com/esem4022-wq/OperatorRatunkowy/issues
 // @match        https://operatorratunkowy.pl/*
 // @match        https://www.operatorratunkowy.pl/*
 // @run-at       document-idle
@@ -16,11 +17,14 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.10
+ * Wersja 2.13
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
  * - osobna karta Załoga: max, przydzielona i brakujaca obsada pojazdu,
+ * - v2.12: osobna karta Stan do indywidualnej i zbiorczej zmiany FMS pojazdu 2/6,
+ * - v2.12: stan 2 = dostepny, stan 6 = niedostepny; zmiana przez /vehicles/{id}/set_fms/{status},
+ * - po wczytaniu personelu liczba przydzielonych jest brana ze spisu personelu; API jest tylko fallbackiem,
  * - sprawdzanie czy w jednostce jest wystarczajacy wolny personel do pelnej obsady,
  * - przy ocenie personelu uwzgledniane sa wymagane szkolenia/kursy pojazdu,
  * - szczegoly personelu sa pobierane leniwie ze strony jednostki oraz /vehicles/{id}/zuweisung,
@@ -100,6 +104,7 @@
   const STORAGE_KEY = 'orFleetManagerV01Settings';
   const PAGE_SIZE = 200;
   const CREW_PAGE_SIZE = 100;
+  const STATUS_PAGE_SIZE = 100;
   const CREW_DETAIL_CONCURRENCY = 4;
   const VEHICLE_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/vehicles';
 
@@ -160,6 +165,14 @@
     crewAssigning: new Set(),
     crewSelected: new Set(),
     crewBatchAssigning: false,
+    vehicleStatusQuery: '',
+    vehicleStatusBuildingId: '',
+    vehicleStatusTypeId: '',
+    vehicleStatusFilter: '',
+    vehicleStatusPage: 1,
+    vehicleStatusSelected: new Set(),
+    vehicleStatusChanging: new Set(),
+    vehicleStatusBatchChanging: false,
     selected: new Set(),
     draftNames: new Map(),
     settings: loadSettings(),
@@ -770,6 +783,11 @@
       const catalogMaxPersonnel = catalogMaxRaw === null || catalogMaxRaw === undefined
         ? null
         : Math.max(0, Number(catalogMaxRaw) || 0);
+      const fmsRaw = valueOf(v, ['fms_real', 'fmsReal', 'fms', 'state'], null);
+      const parsedFms = fmsRaw === null || fmsRaw === undefined || fmsRaw === ''
+        ? null
+        : Number(fmsRaw);
+      const fmsStatus = Number.isFinite(parsedFms) ? parsedFms : null;
 
       return {
         id,
@@ -783,6 +801,7 @@
         maxPersonnelOverride,
         catalogMaxPersonnel,
         catalogEntry,
+        fmsStatus,
       };
     }).filter(v => v.id);
 
@@ -811,6 +830,7 @@
       if (force) {
         state.selected.clear();
         state.crewSelected.clear();
+        state.vehicleStatusSelected.clear();
         state.draftNames.clear();
         state.crewDetails.clear();
         state.crewLoadGeneration += 1;
@@ -834,10 +854,12 @@
 
       state.page = 1;
       state.crewPage = 1;
+      state.vehicleStatusPage = 1;
       rebuildFilterOptions();
       rebuildCrewFilterOptions();
       renderTable();
       renderCrewTable();
+      renderVehicleStatusTable();
 
       const sourceText = state.vehicleClassesSource === 'aao' ? 'AAO gry' : 'fallback';
       const diagCount = state.vehicleClassDiagnostics.length;
@@ -1816,10 +1838,36 @@
     return null;
   }
 
+  function effectiveAssignedCrew(vehicle) {
+    const apiAssigned = Math.max(0, Number(vehicle?.assignedPersonnelCount) || 0);
+    const cache = state.crewDetails.get(String(vehicle?.buildingId ?? ''));
+
+    if (cache?.status === 'loaded' && cache.detail?.personnel) {
+      const rosterAssigned = cache.detail.personnel.filter(
+        person => String(person.assignedVehicleId || '') === String(vehicle?.id || '')
+      ).length;
+      return {
+        count: rosterAssigned,
+        api: apiAssigned,
+        roster: rosterAssigned,
+        source: 'roster',
+        mismatch: rosterAssigned !== apiAssigned,
+      };
+    }
+
+    return {
+      count: apiAssigned,
+      api: apiAssigned,
+      roster: null,
+      source: 'api',
+      mismatch: false,
+    };
+  }
+
   function vehicleMissingCrew(vehicle) {
     const maxCrew = vehicleMaxCrew(vehicle);
     if (maxCrew === null) return null;
-    return Math.max(0, maxCrew - Math.max(0, Number(vehicle.assignedPersonnelCount) || 0));
+    return Math.max(0, maxCrew - effectiveAssignedCrew(vehicle).count);
   }
 
   function crewFilteredVehicles() {
@@ -2322,7 +2370,8 @@
 
   function crewAvailability(vehicle) {
     const maxCrew = vehicleMaxCrew(vehicle);
-    const assigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
+    const assignedInfo = effectiveAssignedCrew(vehicle);
+    const assigned = assignedInfo.count;
 
     if (maxCrew === null) {
       return { kind: 'unknown', label: '?', detail: 'Nie udało się ustalić maksymalnej załogi.', title: '' };
@@ -2390,10 +2439,13 @@
       };
     }
 
-    if (assignedPeople.length && assignedPeople.length !== assigned) {
+    if (assignedInfo.mismatch) {
       return {
-        kind: 'warn', label: 'TAK*',
-        detail: `Personelu wystarcza, ale API podaje ${assigned} przydzielonych, a strona przydziału ${assignedPeople.length}.`,
+        kind: missing > 0 ? 'warn' : 'ok',
+        label: 'TAK*',
+        detail: missing > 0
+          ? `Można uzupełnić do ${maxCrew}. Spis personelu: ${assignedInfo.roster}; API: ${assignedInfo.api}. Używam spisu personelu.`
+          : `Pełna obsada. Spis personelu: ${assignedInfo.roster}; API: ${assignedInfo.api}. Używam spisu personelu.`,
         title,
       };
     }
@@ -2454,13 +2506,12 @@
     );
     const apiAssigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
 
-    // Przy operacji zapisującej wymagamy zgodności obu źródeł. Lepiej odmówić
-    // niż przez rozbieżność przydzielić o jedną osobę za dużo.
+    // Do zapisu źródłem nadrzędnym jest świeżo pobrany spis personelu jednostki.
+    // API bywa opóźnione i może zwracać 0 mimo faktycznie przypisanych osób.
     if (assignedPeople.length !== apiAssigned) {
-      return {
-        ok: false,
-        error: `Niezgodna liczba przydzielonych osób: API ${apiAssigned}, strona przydziału ${assignedPeople.length}. Odśwież personel i spróbuj ponownie.`,
-      };
+      console.warn(
+        `[OR Fleet Manager] Rozbieżność obsady pojazdu ${vehicle.id}: API ${apiAssigned}, spis personelu ${assignedPeople.length}. Używam spisu personelu.`
+      );
     }
 
     const missing = Math.max(0, maxCrew - assignedPeople.length);
@@ -2803,7 +2854,8 @@
     tbody.innerHTML = current.map(vehicle => {
       const selected = state.crewSelected.has(String(vehicle.id));
       const maxCrew = vehicleMaxCrew(vehicle);
-      const assigned = Math.max(0, Number(vehicle.assignedPersonnelCount) || 0);
+      const assignedInfo = effectiveAssignedCrew(vehicle);
+      const assigned = assignedInfo.count;
       const missing = maxCrew === null ? null : Math.max(0, maxCrew - assigned);
       const status = crewAvailability(vehicle);
       const fullCrew = maxCrew !== null && maxCrew > 0 && assigned >= maxCrew;
@@ -2821,7 +2873,7 @@
         `<td>${esc(vehicle.typeName)}</td>` +
         `<td>${esc(vehicle.name)}</td>` +
         `<td class="or-fm-center or-fm-number">${maxCrew === null ? '?' : esc(maxCrew)}</td>` +
-        `<td class="or-fm-center or-fm-number">${esc(assigned)}</td>` +
+        `<td class="or-fm-center or-fm-number" title="${assignedInfo.mismatch ? esc(`Spis personelu: ${assignedInfo.roster}; API: ${assignedInfo.api}. Używany jest spis personelu.`) : ''}">${esc(assigned)}${assignedInfo.mismatch ? '*' : ''}</td>` +
         `<td class="or-fm-center or-fm-number ${missing > 0 ? 'or-fm-missing' : ''}">${missing === null ? '?' : esc(missing)}</td>` +
         `<td class="or-fm-crew-status-cell">${crewStatusHtml(status)}</td>` +
         `<td class="or-fm-center"><button type="button" class="or-fm-btn or-fm-btn-small or-fm-assign-btn" data-vehicle-id="${esc(vehicle.id)}" title="${esc(assignTitle)}" ${canAssign ? '' : 'disabled'}>${assigning ? 'Przydzielam…' : fullCrew ? 'Pełna' : 'Do max'}</button></td>` +
@@ -2922,20 +2974,271 @@
     }
   }
 
+  function vehicleStatusLabel(status) {
+    const n = Number(status);
+    if (n === 2) return '2 — Dostępny';
+    if (n === 6) return '6 — Niedostępny';
+    if (Number.isFinite(n)) return `Status ${n}`;
+    return 'Nieznany';
+  }
+
+  function vehicleStatusClass(status) {
+    const n = Number(status);
+    if (n === 2) return 'or-fm-fms-2';
+    if (n === 6) return 'or-fm-fms-6';
+    return 'or-fm-fms-other';
+  }
+
+  function vehicleStatusFilteredVehicles() {
+    const q = state.vehicleStatusQuery.trim().toLocaleLowerCase('pl');
+    return sortVehicles(state.vehicles.filter(vehicle => {
+      if (state.vehicleStatusBuildingId && vehicle.buildingId !== state.vehicleStatusBuildingId) return false;
+      if (state.vehicleStatusTypeId && vehicle.typeId !== state.vehicleStatusTypeId) return false;
+
+      if (state.vehicleStatusFilter === '2' && Number(vehicle.fmsStatus) !== 2) return false;
+      if (state.vehicleStatusFilter === '6' && Number(vehicle.fmsStatus) !== 6) return false;
+      if (state.vehicleStatusFilter === 'other' && [2, 6].includes(Number(vehicle.fmsStatus))) return false;
+
+      if (q) {
+        const hay = `${vehicle.name} ${vehicle.typeName} ${vehicle.buildingName} ${vehicle.id} ${vehicleStatusLabel(vehicle.fmsStatus)}`.toLocaleLowerCase('pl');
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    }));
+  }
+
+  function rebuildVehicleStatusFilterOptions() {
+    const buildingSelect = document.getElementById(`${APP_ID}-status-building-filter`);
+    const typeSelect = document.getElementById(`${APP_ID}-status-type-filter`);
+    if (!buildingSelect || !typeSelect) return;
+
+    const usedBuildings = new Map();
+    const usedTypes = new Map();
+    for (const vehicle of state.vehicles) {
+      usedBuildings.set(vehicle.buildingId, vehicle.buildingName);
+      usedTypes.set(vehicle.typeId, vehicle.typeName);
+    }
+
+    buildingSelect.innerHTML = `<option value="">Wszystkie jednostki</option>` +
+      [...usedBuildings.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }))
+        .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`)
+        .join('');
+
+    typeSelect.innerHTML = `<option value="">Wszystkie typy</option>` +
+      [...usedTypes.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }))
+        .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`)
+        .join('');
+
+    buildingSelect.value = state.vehicleStatusBuildingId;
+    typeSelect.value = state.vehicleStatusTypeId;
+  }
+
+  function applyVehicleStatusBuildingFilter(buildingId) {
+    state.vehicleStatusBuildingId = String(buildingId ?? '');
+    state.vehicleStatusPage = 1;
+    state.vehicleStatusSelected.clear();
+    const select = document.getElementById(`${APP_ID}-status-building-filter`);
+    if (select) select.value = state.vehicleStatusBuildingId;
+    renderVehicleStatusTable();
+  }
+
+  function changeVehicleStatusBuildingFilterByStep(step) {
+    const select = document.getElementById(`${APP_ID}-status-building-filter`);
+    if (!select) return;
+    const options = [...select.options].filter(option => option.value);
+    if (!options.length) return;
+
+    let currentIndex = options.findIndex(option => option.value === state.vehicleStatusBuildingId);
+    if (currentIndex < 0) currentIndex = step > 0 ? -1 : 0;
+    let nextIndex = currentIndex + step;
+    if (nextIndex < 0) nextIndex = options.length - 1;
+    if (nextIndex >= options.length) nextIndex = 0;
+    applyVehicleStatusBuildingFilter(options[nextIndex].value);
+  }
+
+  async function setVehicleFmsStatus(vehicleId, targetStatus, { quiet = false } = {}) {
+    const id = String(vehicleId || '');
+    const status = Number(targetStatus);
+    if (!id || ![2, 6].includes(status)) throw new Error('Nieprawidłowy pojazd lub stan.');
+    if (state.vehicleStatusChanging.has(id)) return false;
+
+    const vehicle = state.vehicles.find(item => String(item.id) === id);
+    if (!vehicle) throw new Error(`Nie znaleziono pojazdu ${id}.`);
+
+    if (Number(vehicle.fmsStatus) === status) return true;
+
+    state.vehicleStatusChanging.add(id);
+    renderVehicleStatusTable();
+    try {
+      const response = await fetch(`/vehicles/${encodeURIComponent(id)}/set_fms/${status}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
+        },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      vehicle.fmsStatus = status;
+      if (!quiet) setVehicleStatusMessage(`Ustawiono ${vehicle.name}: ${vehicleStatusLabel(status)}.`, 'ok');
+      return true;
+    } catch (error) {
+      if (!quiet) setVehicleStatusMessage(`Nie udało się zmienić stanu ${vehicle.name}: ${error.message}`, 'error');
+      throw error;
+    } finally {
+      state.vehicleStatusChanging.delete(id);
+      renderVehicleStatusTable();
+    }
+  }
+
+  function setVehicleStatusMessage(message, kind = 'info') {
+    const el = document.getElementById(`${APP_ID}-vehicle-status-message`);
+    if (!el) return;
+    el.className = `or-fm-status or-fm-status-${kind}`;
+    el.textContent = message;
+  }
+
+  async function setSelectedVehicleFmsStatus() {
+    if (state.vehicleStatusBatchChanging) return;
+    const target = Number(document.getElementById(`${APP_ID}-status-bulk-target`)?.value || 2);
+    if (![2, 6].includes(target)) return;
+
+    const vehicles = sortVehicles(
+      state.vehicles.filter(vehicle => state.vehicleStatusSelected.has(String(vehicle.id)))
+    );
+    if (!vehicles.length) {
+      alert('Najpierw zaznacz pojazdy w karcie Stan.');
+      return;
+    }
+
+    state.vehicleStatusBatchChanging = true;
+    renderVehicleStatusTable();
+    let changed = 0;
+    let skipped = 0;
+    const failed = [];
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const vehicle = vehicles[i];
+      setVehicleStatusMessage(`Zmieniam stan ${i + 1}/${vehicles.length}: ${vehicle.name} → ${vehicleStatusLabel(target)}…`, 'info');
+      if (Number(vehicle.fmsStatus) === target) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await setVehicleFmsStatus(vehicle.id, target, { quiet: true });
+        changed += 1;
+      } catch (error) {
+        failed.push(`${vehicle.name}: ${error.message}`);
+      }
+      await sleep(150);
+    }
+
+    state.vehicleStatusBatchChanging = false;
+    renderVehicleStatusTable();
+    setVehicleStatusMessage(
+      failed.length
+        ? `Zakończono: zmieniono ${changed}, bez zmian ${skipped}, błędy ${failed.length}. Pierwszy błąd: ${failed[0]}`
+        : `Gotowe. Zmieniono ${changed} pojazdów na ${vehicleStatusLabel(target)}${skipped ? `; ${skipped} już miało ten stan` : ''}.`,
+      failed.length ? 'warn' : 'ok'
+    );
+  }
+
+  function renderVehicleStatusTable() {
+    const tbody = document.getElementById(`${APP_ID}-status-tbody`);
+    const summary = document.getElementById(`${APP_ID}-status-summary`);
+    const pager = document.getElementById(`${APP_ID}-status-pager`);
+    if (!tbody || !summary || !pager) return;
+
+    const bulkButton = document.getElementById(`${APP_ID}-status-apply-selected`);
+    if (bulkButton) {
+      bulkButton.disabled = state.vehicleStatusBatchChanging || state.vehicleStatusSelected.size === 0;
+      bulkButton.textContent = state.vehicleStatusBatchChanging ? 'Zmieniam zaznaczone…' : 'Ustaw stan zaznaczonych';
+    }
+
+    const filtered = vehicleStatusFilteredVehicles();
+    const pages = Math.max(1, Math.ceil(filtered.length / STATUS_PAGE_SIZE));
+    state.vehicleStatusPage = Math.max(1, Math.min(state.vehicleStatusPage, pages));
+    const start = (state.vehicleStatusPage - 1) * STATUS_PAGE_SIZE;
+    const current = filtered.slice(start, start + STATUS_PAGE_SIZE);
+
+    tbody.innerHTML = current.map(vehicle => {
+      const id = String(vehicle.id);
+      const selected = state.vehicleStatusSelected.has(id);
+      const changing = state.vehicleStatusChanging.has(id);
+      const fms = Number(vehicle.fmsStatus);
+      return `<tr>` +
+        `<td class="or-fm-center"><input type="checkbox" class="or-fm-status-row-check" data-vehicle-id="${esc(id)}" ${selected ? 'checked' : ''}></td>` +
+        `<td class="or-fm-id"><a href="/vehicles/${esc(id)}" target="_blank" rel="noopener">${esc(id)}</a></td>` +
+        `<td>${esc(vehicle.buildingName)}</td>` +
+        `<td>${esc(vehicle.typeName)}</td>` +
+        `<td>${esc(vehicle.name)}</td>` +
+        `<td class="or-fm-center"><span class="or-fm-fms-badge ${vehicleStatusClass(fms)}">${esc(vehicleStatusLabel(fms))}</span></td>` +
+        `<td class="or-fm-center or-fm-status-actions">` +
+          `<button type="button" class="or-fm-btn or-fm-btn-small or-fm-set-fms" data-vehicle-id="${esc(id)}" data-fms="2" ${changing || fms === 2 ? 'disabled' : ''}>2 — Dostępny</button>` +
+          `<button type="button" class="or-fm-btn or-fm-btn-small or-fm-set-fms" data-vehicle-id="${esc(id)}" data-fms="6" ${changing || fms === 6 ? 'disabled' : ''}>6 — Niedostępny</button>` +
+        `</td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="or-fm-empty">Brak pojazdów dla wybranych filtrów.</td></tr>`;
+
+    const count2 = filtered.filter(vehicle => Number(vehicle.fmsStatus) === 2).length;
+    const count6 = filtered.filter(vehicle => Number(vehicle.fmsStatus) === 6).length;
+    summary.textContent = `Widoczne: ${filtered.length} / ${state.vehicles.length} | Zaznaczone: ${state.vehicleStatusSelected.size} | Dostępne (2): ${count2} | Niedostępne (6): ${count6}`;
+
+    pager.innerHTML = `
+      <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-status-prev" ${state.vehicleStatusPage <= 1 ? 'disabled' : ''}>‹ Poprzednia</button>
+      <span>${state.vehicleStatusPage} / ${pages}</span>
+      <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-status-next" ${state.vehicleStatusPage >= pages ? 'disabled' : ''}>Następna ›</button>`;
+
+    document.getElementById(`${APP_ID}-status-prev`)?.addEventListener('click', () => {
+      state.vehicleStatusPage -= 1;
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-next`)?.addEventListener('click', () => {
+      state.vehicleStatusPage += 1;
+      renderVehicleStatusTable();
+    });
+
+    tbody.querySelectorAll('.or-fm-status-row-check').forEach(checkbox => {
+      checkbox.addEventListener('change', () => {
+        const id = String(checkbox.dataset.vehicleId || '');
+        if (checkbox.checked) state.vehicleStatusSelected.add(id);
+        else state.vehicleStatusSelected.delete(id);
+        renderVehicleStatusTable();
+      });
+    });
+
+    tbody.querySelectorAll('.or-fm-set-fms').forEach(button => {
+      button.addEventListener('click', async () => {
+        try {
+          await setVehicleFmsStatus(button.dataset.vehicleId, Number(button.dataset.fms));
+        } catch (_) {}
+      });
+    });
+  }
+
   function switchManagerTab(tab) {
-    state.activeTab = tab === 'crew' ? 'crew' : 'names';
+    state.activeTab = ['crew', 'vehicle_status'].includes(tab) ? tab : 'names';
+    const namesActive = state.activeTab === 'names';
     const crewActive = state.activeTab === 'crew';
+    const statusActive = state.activeTab === 'vehicle_status';
 
     document.querySelectorAll(`#${APP_ID}-modal .or-fm-name-section`).forEach(element => {
-      element.classList.toggle('or-fm-tab-hidden', crewActive);
+      element.classList.toggle('or-fm-tab-hidden', !namesActive);
     });
     document.getElementById(`${APP_ID}-crew-panel`)?.classList.toggle('or-fm-tab-active', crewActive);
-    document.getElementById(`${APP_ID}-tab-names`)?.classList.toggle('or-fm-tab-selected', !crewActive);
+    document.getElementById(`${APP_ID}-status-panel`)?.classList.toggle('or-fm-tab-active', statusActive);
+    document.getElementById(`${APP_ID}-tab-names`)?.classList.toggle('or-fm-tab-selected', namesActive);
     document.getElementById(`${APP_ID}-tab-crew`)?.classList.toggle('or-fm-tab-selected', crewActive);
+    document.getElementById(`${APP_ID}-tab-status`)?.classList.toggle('or-fm-tab-selected', statusActive);
 
     if (crewActive) {
       rebuildCrewFilterOptions();
       renderCrewTable();
+    } else if (statusActive) {
+      rebuildVehicleStatusFilterOptions();
+      renderVehicleStatusTable();
     }
   }
 
@@ -2976,6 +3279,13 @@
       .or-fm-tab-hidden { display:none !important; }
       .or-fm-crew-panel { display:none; min-height:0; flex:1; flex-direction:column; }
       .or-fm-crew-panel.or-fm-tab-active { display:flex; }
+      .or-fm-status-panel { display:none; min-height:0; flex:1; flex-direction:column; }
+      .or-fm-status-panel.or-fm-tab-active { display:flex; }
+      .or-fm-fms-badge { display:inline-block; min-width:105px; padding:4px 8px; border-radius:4px; font-weight:700; }
+      .or-fm-fms-2 { background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; }
+      .or-fm-fms-6 { background:#ffebee; color:#b71c1c; border:1px solid #ef9a9a; }
+      .or-fm-fms-other { background:#eceff1; color:#455a64; border:1px solid #b0bec5; }
+      .or-fm-status-actions { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
       .or-fm-toolbar { display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px; border-bottom:1px solid #ddd; background:#f7f7f7; align-items:center; }
       .or-fm-toolbar input[type="text"], .or-fm-toolbar input[type="number"], .or-fm-toolbar select { min-height:32px; border:1px solid #bbb; border-radius:4px; padding:5px 8px; background:#fff; color:#222; }
       .or-fm-search { min-width:250px; flex:1 1 280px; }
@@ -3077,6 +3387,7 @@
         <div class="or-fm-tabs">
           <button type="button" class="or-fm-tab or-fm-tab-selected" id="${APP_ID}-tab-names">Nazwy</button>
           <button type="button" class="or-fm-tab" id="${APP_ID}-tab-crew">Załoga</button>
+          <button type="button" class="or-fm-tab" id="${APP_ID}-tab-status">Stan</button>
         </div>
 
         <div class="or-fm-toolbar or-fm-name-section">
@@ -3262,6 +3573,59 @@
           </div>
           <div id="${APP_ID}-crew-status" class="or-fm-status or-fm-status-info">Szczegóły personelu zostaną pobrane po otwarciu tej karty.</div>
         </div>
+
+        <div class="or-fm-status-panel" id="${APP_ID}-status-panel">
+          <div class="or-fm-toolbar">
+            <input id="${APP_ID}-status-search" class="or-fm-search" type="text" placeholder="Szukaj: nazwa, typ, jednostka, ID, stan...">
+            <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-status-building-prev" title="Poprzednia jednostka">‹</button>
+            <select id="${APP_ID}-status-building-filter"><option value="">Wszystkie jednostki</option></select>
+            <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-status-building-next" title="Następna jednostka">›</button>
+            <select id="${APP_ID}-status-type-filter"><option value="">Wszystkie typy</option></select>
+            <select id="${APP_ID}-status-filter" title="Filtr aktualnego stanu">
+              <option value="">Wszystkie stany</option>
+              <option value="2">Tylko 2 — Dostępny</option>
+              <option value="6">Tylko 6 — Niedostępny</option>
+              <option value="other">Inne stany</option>
+            </select>
+          </div>
+          <div class="or-fm-toolbar">
+            <button type="button" class="or-fm-btn" id="${APP_ID}-status-select-page">Zaznacz stronę</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-status-select-filtered">Zaznacz filtrowane</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-status-clear-selection">Wyczyść zaznaczenie</button>
+            <span style="width:1px;height:24px;background:#ccc"></span>
+            <select id="${APP_ID}-status-bulk-target" title="Stan docelowy dla zaznaczonych pojazdów">
+              <option value="2">2 — Dostępny</option>
+              <option value="6">6 — Niedostępny</option>
+            </select>
+            <button type="button" class="or-fm-btn or-fm-btn-primary" id="${APP_ID}-status-apply-selected">Ustaw stan zaznaczonych</button>
+          </div>
+          <div class="or-fm-help-wrap">
+            <div class="or-fm-help-toggle" style="cursor:default">
+              <span>🚦 Stan: możesz przełączać każdy pojazd osobno albo zaznaczyć wiele pojazdów. Obsługiwane ustawienia: <b>2 — Dostępny</b> i <b>6 — Niedostępny</b>. Zmiana jest wykonywana bezpośrednio w grze; przy operacji zbiorczej pojazdy są zmieniane kolejno.</span>
+            </div>
+          </div>
+          <div class="or-fm-body">
+            <div class="or-fm-table-wrap">
+              <table class="or-fm-table">
+                <thead><tr>
+                  <th style="width:36px">✓</th>
+                  <th>ID</th>
+                  <th>Jednostka</th>
+                  <th>Typ</th>
+                  <th>Pojazd</th>
+                  <th>Aktualny stan</th>
+                  <th>Zmiana stanu</th>
+                </tr></thead>
+                <tbody id="${APP_ID}-status-tbody"><tr><td colspan="7" class="or-fm-empty">Otwórz kartę Stan, aby zarządzać dostępnością pojazdów.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="or-fm-footer">
+            <div class="or-fm-summary" id="${APP_ID}-status-summary">Nie wczytano danych.</div>
+            <div class="or-fm-pager" id="${APP_ID}-status-pager"></div>
+          </div>
+          <div id="${APP_ID}-vehicle-status-message" class="or-fm-status or-fm-status-info">Gotowy do zmiany stanu pojazdów.</div>
+        </div>
         <div id="${APP_ID}-status" class="or-fm-status or-fm-status-info">Gotowy.</div>
         <div id="${APP_ID}-confirm"></div>
       </div>`;
@@ -3269,6 +3633,7 @@
 
     document.getElementById(`${APP_ID}-tab-names`).addEventListener('click', () => switchManagerTab('names'));
     document.getElementById(`${APP_ID}-tab-crew`).addEventListener('click', () => switchManagerTab('crew'));
+    document.getElementById(`${APP_ID}-tab-status`).addEventListener('click', () => switchManagerTab('vehicle_status'));
 
     const crewSearch = document.getElementById(`${APP_ID}-crew-search`);
     let crewSearchTimer = null;
@@ -3332,6 +3697,54 @@
       state.crewLoading = false;
       setCrewStatus('Odświeżam personel i kursy…', 'info');
       renderCrewTable();
+    });
+
+    const vehicleStatusSearch = document.getElementById(`${APP_ID}-status-search`);
+    let vehicleStatusSearchTimer = null;
+    vehicleStatusSearch.addEventListener('input', () => {
+      clearTimeout(vehicleStatusSearchTimer);
+      vehicleStatusSearchTimer = setTimeout(() => {
+        state.vehicleStatusQuery = vehicleStatusSearch.value;
+        state.vehicleStatusPage = 1;
+        renderVehicleStatusTable();
+      }, 120);
+    });
+
+    document.getElementById(`${APP_ID}-status-building-filter`).addEventListener('change', event => {
+      applyVehicleStatusBuildingFilter(event.target.value);
+    });
+    document.getElementById(`${APP_ID}-status-building-prev`).addEventListener('click', () => {
+      changeVehicleStatusBuildingFilterByStep(-1);
+    });
+    document.getElementById(`${APP_ID}-status-building-next`).addEventListener('click', () => {
+      changeVehicleStatusBuildingFilterByStep(1);
+    });
+    document.getElementById(`${APP_ID}-status-type-filter`).addEventListener('change', event => {
+      state.vehicleStatusTypeId = event.target.value;
+      state.vehicleStatusPage = 1;
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-filter`).addEventListener('change', event => {
+      state.vehicleStatusFilter = event.target.value;
+      state.vehicleStatusPage = 1;
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-select-page`).addEventListener('click', () => {
+      const filtered = vehicleStatusFilteredVehicles();
+      const start = (state.vehicleStatusPage - 1) * STATUS_PAGE_SIZE;
+      filtered.slice(start, start + STATUS_PAGE_SIZE).forEach(vehicle => state.vehicleStatusSelected.add(String(vehicle.id)));
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-select-filtered`).addEventListener('click', () => {
+      vehicleStatusFilteredVehicles().forEach(vehicle => state.vehicleStatusSelected.add(String(vehicle.id)));
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-clear-selection`).addEventListener('click', () => {
+      state.vehicleStatusSelected.clear();
+      renderVehicleStatusTable();
+    });
+    document.getElementById(`${APP_ID}-status-apply-selected`).addEventListener('click', () => {
+      setSelectedVehicleFmsStatus();
     });
 
     button.addEventListener('click', async () => {

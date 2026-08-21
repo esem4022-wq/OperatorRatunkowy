@@ -1,0 +1,77 @@
+﻿MENEDŻER POJAZDÓW OR
+OperatorRatunkowy.pl
+
+AKTUALNA WERSJA: 2.13
+
+============================================================
+GITHUB / AKTUALIZACJE TAMPERMONKEY
+============================================================
+Repozytorium:
+https://github.com/esem4022-wq/OperatorRatunkowy
+
+Plik skryptu w repozytorium MUSI mieć stałą nazwę:
+menedzer-pojazdow-or.user.js
+
+Tampermonkey sprawdza aktualizacje z:
+https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-pojazdow-or.user.js
+
+Przy wydawaniu kolejnej wersji:
+1. Rozpakuj ZIP.
+2. W GitHub Desktop podmień w głównym katalogu repozytorium plik:
+   menedzer-pojazdow-or.user.js
+3. Zrób Commit.
+4. Zrób Push do gałęzi main.
+5. Numer wersji zmienia się w metadanych @version, ale nazwa pliku .user.js pozostaje stała.
+
+ZIP może mieć numer wersji w nazwie, np.:
+menedzer-pojazdow-or-v2.13.zip
+
+============================================================
+HISTORIA WERSJI
+============================================================
+
+v2.13
+- dodano plik „CZYTAJ_TO - Menedżer pojazdów OR.txt”,
+- uporządkowano obsługę GitHub/Tampermonkey,
+- @homepageURL wskazuje repozytorium OperatorRatunkowy,
+- @updateURL i @downloadURL wskazują stały plik menedzer-pojazdow-or.user.js w gałęzi main,
+- dodano @supportURL do Issues repozytorium.
+
+v2.12
+- dodano zakładkę „Stan”,
+- indywidualna i zbiorcza zmiana stanu pojazdu między 2 — Dostępny i 6 — Niedostępny,
+- filtrowanie i zaznaczanie pojazdów w zakładce „Stan”.
+
+v2.11
+- spis personelu jest nadrzędnym źródłem liczby osób przydzielonych do pojazdu,
+- poprawiono rozbieżności między API a faktycznym przydziałem personelu.
+
+v2.10
+- poprawiono ustalanie nazw typów pojazdów,
+- fallback: katalog → API pojazdu → AAO → „Typ ID”.
+
+v2.09
+- poprawiono mapowanie klas pojazdów z formularza AAO.
+
+v2.08
+- przycisk Menedżera pojazdów jest wyświetlany tylko na stronie głównej.
+
+v2.07
+- dodano zaznaczanie wielu pojazdów w zakładce „Załoga”,
+- dodano zbiorcze „Przydziel do max zaznaczone”.
+
+v2.06
+- poprawiono odnajdywanie strony/tabeli personelu jednostki.
+
+v2.05
+- poprawiono mechanizm przydzielania wolnego personelu,
+- dodano szablon {stara}[{n:typ:02}-{jednostka:[]}].
+
+v2.0
+- dodano osobną kartę „Załoga”,
+- kolumny: Max załoga, Przydzielona załoga, Brakująca załoga,
+- sprawdzanie dostępnego personelu z uwzględnieniem kursów/szkoleń.
+
+v1.0
+- bazowa stabilna wersja Menedżera pojazdów OR,
+- lista, filtry, masowa zmiana nazw, szablony, numeracja, eksport CSV.
