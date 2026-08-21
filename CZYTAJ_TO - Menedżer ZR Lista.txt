@@ -15,6 +15,19 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v3.01 — 21.08.2026
+------------------
+- Poprawiono niedziałające wyświetlanie konkretnych różnic pojazdów przy błędzie aktualizacji AZR.
+- Różnice są teraz zapamiętywane jeszcze PRZED próbą zapisu, więc nie zależą od tego, czy ponowny odczyt ZR po błędzie się uda.
+- Przy błędzie lista pokazuje pojazdy, które uruchomiły synchronizację; jeżeli ponowny odczyt po próbie zapisu jest możliwy, pokazuje również stan po próbie.
+- Rozbudowano odczyt etykiet pól pojazdów o układ tabelaryczny i atrybuty formularza, aby zamiast nazw technicznych częściej pokazywać rzeczywiste nazwy pojazdów.
+- Nie zmieniono logiki kopiowania, porządkowania ani pozostałych funkcji Menedżera ZR Lista.
+
+v3.0 — 21.08.2026
+-----------------
+- Ujednolicono numerację Menedżera ZR Lista z pozostałymi skryptami Operator Ratunkowy do serii 3.xx.
+- Funkcjonalnie jest to punkt bazowy po dotychczasowej serii 0.xx.
+
 v0.16 — 21.08.2026
 ------------------
 - Ulepszono listę błędów synchronizacji pojazdów AZR.

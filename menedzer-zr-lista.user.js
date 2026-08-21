@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.16
+// @version      3.01
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '0.16';
+    const VERSION = '3.01';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -741,16 +741,43 @@
 
 
     function labelForAAOField(doc, field) {
+        const clean = value => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+
         if (field.id) {
             try {
                 const label = doc.querySelector(`label[for="${CSS.escape(field.id)}"]`);
-                if (label) return label.textContent.replace(/\s+/g, ' ').trim();
+                const text = clean(label?.textContent);
+                if (text) return text;
             } catch {}
         }
 
+        // Standardowy układ formularza gry.
         const group = field.closest('.form-group,.control-group,.row,[class*="form"]');
-        const label = group?.querySelector('label');
-        return label ? label.textContent.replace(/\s+/g, ' ').trim() : '';
+        if (group) {
+            const labels = [...group.querySelectorAll('label')]
+                .map(label => clean(label.textContent))
+                .filter(Boolean);
+            if (labels.length) return labels[0];
+        }
+
+        // Fallback dla układów tabelarycznych: nazwa pojazdu bywa w sąsiedniej komórce.
+        const tr = field.closest('tr');
+        if (tr) {
+            const cells = [...tr.querySelectorAll('th,td')];
+            for (const cell of cells) {
+                if (cell.contains(field)) continue;
+                const text = clean(cell.textContent);
+                if (text && text.length <= 160 && !/^\d+(?:[.,]\d+)?$/.test(text)) return text;
+            }
+        }
+
+        // Ostatnie bezpieczne źródła opisu.
+        for (const candidate of [field.getAttribute('aria-label'), field.getAttribute('title'), field.getAttribute('placeholder')]) {
+            const text = clean(candidate);
+            if (text) return text;
+        }
+
+        return clean(field.name);
     }
 
     function isVehicleRequirementField(doc, field) {
@@ -846,6 +873,19 @@
         return String(a?.signature ?? '') === String(b?.signature ?? '');
     }
 
+    function formatVehicleSnapshot(snapshot) {
+        const items = [];
+        for (const field of snapshot?.fields || []) {
+            const value = normalizeVehicleRequirementValue(field.rawValue ?? field.value ?? '');
+            const numeric = Number(String(value).replace(',', '.'));
+            if (!Number.isFinite(numeric) || numeric <= 0) continue;
+            const label = String(field.label || field.name || field.key || 'Pojazd').replace(/\s+/g, ' ').trim();
+            items.push({ label, value });
+        }
+        items.sort((a, b) => a.label.localeCompare(b.label, 'pl', { numeric: true, sensitivity: 'base' }));
+        return items.length ? items.map(item => `${item.label}: ${item.value}`).join(' • ') : 'brak aktywnych pojazdów';
+    }
+
     function describeVehicleSnapshotDiff(expectedSnapshot, actualSnapshot) {
         const expected = new Map((expectedSnapshot?.fields || []).map(field => [field.key, field]));
         const actual = new Map((actualSnapshot?.fields || []).map(field => [field.key, field]));
@@ -863,7 +903,11 @@
             rows.push(`${label}: powinno ${expValue}, w AZR ${actValue}`);
         }
 
-        return rows.length ? rows.join(' • ') : 'Nie udało się ustalić różniących się pojazdów.';
+        if (rows.length) return rows.join(' • ');
+
+        // Jeżeli formularz gry zmienił kolejność/nazwy techniczne pól, nadal pokaż
+        // użytkownikowi czytelne zestawy pojazdów zamiast pustego komunikatu.
+        return `Źródło: ${formatVehicleSnapshot(expectedSnapshot)}\nAZR: ${formatVehicleSnapshot(actualSnapshot)}`;
     }
 
     function getAZRVehicleComparisonGroups() {
@@ -1047,7 +1091,8 @@
                                 source: canonical.source,
                                 target,
                                 sourceSnapshot: canonical.snapshot,
-                                targetSnapshot
+                                targetSnapshot,
+                                vehicleDiffBefore: describeVehicleSnapshotDiff(canonical.snapshot, targetSnapshot)
                             });
                         }
                     }
@@ -1092,13 +1137,23 @@
                     console.error(TAG, `Błąd aktualizacji pojazdów AZR ${item.target.id}`, e);
                     updateErrors++;
 
-                    let currentTargetSnapshot = item.targetSnapshot || null;
+                    // Różnice zapamiętujemy PRZED aktualizacją. Dzięki temu nawet jeśli
+                    // zapis albo ponowny odczyt AZR się nie powiedzie, lista nadal pokaże
+                    // dokładnie które pojazdy uruchomiły synchronizację.
+                    const beforeDiff = item.vehicleDiffBefore || describeVehicleSnapshotDiff(item.sourceSnapshot, item.targetSnapshot);
+                    let vehicleDiff = beforeDiff;
+
                     try {
-                        // Po błędzie próbujemy odczytać faktyczny bieżący stan AZR,
-                        // aby lista pokazała konkretnie które pojazdy nadal się różnią.
-                        currentTargetSnapshot = await readVehicleRequirementSnapshot(item.target.id);
+                        const currentTargetSnapshot = await readVehicleRequirementSnapshot(item.target.id);
+                        const afterDiff = describeVehicleSnapshotDiff(item.sourceSnapshot, currentTargetSnapshot);
+                        if (afterDiff && afterDiff !== beforeDiff) {
+                            vehicleDiff = `Przed próbą: ${beforeDiff}
+Po próbie: ${afterDiff}`;
+                        }
                     } catch (diffReadError) {
                         console.warn(TAG, `Nie udało się ponownie odczytać pojazdów AZR ${item.target.id} do opisu różnic`, diffReadError);
+                        vehicleDiff = `Przed próbą: ${beforeDiff}
+Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                     }
 
                     state.azrUpdateErrors.push({
@@ -1106,7 +1161,7 @@
                         name: item.name,
                         sourceId: item.source.id,
                         sourceCategory: getCategoryName(item.source.aao_category_id),
-                        vehicleDiff: describeVehicleSnapshotDiff(item.sourceSnapshot, currentTargetSnapshot),
+                        vehicleDiff,
                         message: String(e?.message || e || 'Nieznany błąd')
                     });
                     renderAZRUpdateErrors();

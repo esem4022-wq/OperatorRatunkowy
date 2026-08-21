@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 0.44
+Wersja: 3.01
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -23,7 +23,7 @@ NAJWAŻNIEJSZE FUNKCJE
 - maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P podczas tworzenia ZR,
 - auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`; ZR z innych kategorii nie są brane pod uwagę nawet przy identycznej nazwie,
 - dla długich nazw misji skrypt poprawnie odczytuje tytuł łamany na kilka linii; przy tworzeniu nazwa ZR jest ograniczana do limitu 60 znaków gry,
-- dokładnie 1 pacjent bez innych wymaganych pojazdów: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
+- dokładnie 1 pacjent bez innych wymaganych pojazdów albo z jedynym wymaganiem `1 Ambulans`: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
 - jeśli jedynym wymaganiem w sekcji pojazdów jest dokładnie `1 OPI`: auto-zaznacz ZR `Radiowóz` z kategorii `AZR`,
 - ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
 - misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
@@ -35,6 +35,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.01
+- poprawiono regułę `1 OPI` -> ZR `Radiowóz`: skrypt sprawdza teraz także bezpośrednio widoczną sekcję `Pojazdy`, więc różnice w opisie zwracanym przez mission_help nie blokują reguły,
+- rozpoznawanie `OPI` toleruje techniczne warianty opisu, ale nadal wymaga dokładnie jednego pojazdu tego typu,
+- doprecyzowano regułę `Ambulans`: dokładnie 1 pacjent bez innych pojazdów albo z jedynym wymaganiem `1 Ambulans` -> zaznacz ZR `Ambulans`; woda, piana lub inny pojazd wyłączają tę regułę,
+- numeracja projektu została ujednolicona do gałęzi 3.xx; ta poprawka jest wydana jako 3.01,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v0.44
 - poprawiono auto-zaznaczanie dla misji z technicznym dopiskiem `(możliwy alarm fałszywy)` na końcu nazwy,
 - przy wyszukiwaniu ZR w kategorii `AZR` dopisek jest pomijany, np. `Płonąca maszyna (możliwy alarm fałszywy)` szuka ZR `Płonąca maszyna`,

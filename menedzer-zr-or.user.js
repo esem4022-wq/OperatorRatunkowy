@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      0.44
+// @version      3.01
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '0.44';
+    const VERSION = '3.01';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -2046,7 +2046,29 @@
 
     function isSingleOPIRequirement(vehicle) {
         if (!vehicle || Number(vehicle.count) !== 1) return false;
-        return normalize(vehicle.label || '') === 'opi';
+
+        let label = normalize(vehicle.label || '')
+            .replace(/^(?:wymagane|wymagany|wymagana|potrzebne|potrzebny|potrzebna)\s+/, '')
+            .trim();
+
+        // Operator potrafi zwrócić tę samą pozycję jako samo „OPI” albo
+        // z technicznym opisem dookoła. Dla reguły skrótowej wystarczy,
+        // że OPI jest samodzielnym tokenem i nie ma drugiego typu pojazdu.
+        return (
+            label === 'opi' ||
+            /^(?:radiowoz\s+)?opi(?:\s+radiowoz)?$/.test(label) ||
+            /(?:^|\s)opi(?:\s|$)/.test(label)
+        );
+    }
+
+    function isSinglePlainAmbulanceRequirement(vehicle) {
+        if (!vehicle || Number(vehicle.count) !== 1) return false;
+
+        const label = normalize(vehicle.label || '')
+            .replace(/^(?:wymagane|wymagany|wymagana|potrzebne|potrzebny|potrzebna)\s+/, '')
+            .trim();
+
+        return label === 'ambulans';
     }
 
     async function autoSelectTargetName(missionName) {
@@ -2095,14 +2117,41 @@
             ? vehicles.filter(v => Number(v?.count) > 0)
             : [];
 
-        // Dokładnie 1 pacjent i brak wymaganych pojazdów -> gotowa ZR „Ambulans”.
-        if (maxPatients === 1 && requiredVehicles.length === 0) return 'Ambulans';
-
-        // Jeżeli jedynym wymaganiem w sekcji Pojazdy jest dokładnie 1 OPI,
-        // użyj wspólnej ZR „Radiowóz” z kategorii AZR.
+        // Dokładnie 1 pacjent:
+        // - bez sekcji Pojazdy, albo
+        // - z jedynym wymaganiem „1 Ambulans”
+        // -> zaznacz gotową ZR „Ambulans”.
+        // Woda/piana lub inny pojazd wyłączają ten skrót.
         if (
-            requiredVehicles.length === 1 &&
-            isSingleOPIRequirement(requiredVehicles[0])
+            maxPatients === 1 &&
+            water === 0 &&
+            foam === 0 &&
+            (
+                requiredVehicles.length === 0 ||
+                (
+                    requiredVehicles.length === 1 &&
+                    isSinglePlainAmbulanceRequirement(requiredVehicles[0])
+                )
+            )
+        ) {
+            return 'Ambulans';
+        }
+
+        // OPI: dodatkowo sprawdzamy bezpośrednio widoczną kartę misji.
+        // To omija różnice w opisie zwracanym przez mission_help.
+        const visibleVehicles = cardText
+            ? extractVehiclesFromCardText(cardText).filter(v => Number(v?.count) > 0)
+            : [];
+
+        if (
+            (
+                visibleVehicles.length === 1 &&
+                isSingleOPIRequirement(visibleVehicles[0])
+            ) ||
+            (
+                requiredVehicles.length === 1 &&
+                isSingleOPIRequirement(requiredVehicles[0])
+            )
         ) {
             return 'Radiowóz';
         }
