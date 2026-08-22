@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.02
+// @version      3.03
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.02';
+    const VERSION = '3.03';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -545,11 +545,11 @@
         if (azrCategoryId == null) return [];
 
         // Szukamy ZR, które nadal są w AZR, ale nie mają już odpowiednika
-        // o dokładnie tej samej nazwie w żadnej zwykłej kategorii.
-        // „Bez kategorii” jest celowo pomijane zgodnie z zasadami zakładki.
+        // o dokładnie tej samej nazwie nigdzie poza AZR.
+        // Przy wyszukiwaniu usuniętych „Bez kategorii” JEST brane pod uwagę.
         const sourceNames = new Set(
             state.aaos
-                .filter(aao => aao.aao_category_id != null && aao.aao_category_id !== azrCategoryId)
+                .filter(aao => aao.aao_category_id !== azrCategoryId)
                 .map(aao => String(aao.caption ?? ''))
         );
 
@@ -628,7 +628,7 @@
                 if (azrCategoryId == null) {
                     empty.textContent = 'Nie znaleziono kategorii o dokładnej nazwie „AZR”. Utwórz ją lub popraw jej nazwę.';
                 } else {
-                    empty.textContent = 'Nie znaleziono ZR do usunięcia z AZR. Każda nazwa w AZR ma odpowiednik w innej kategorii. „Bez kategorii” jest pomijane.';
+                    empty.textContent = 'Nie znaleziono ZR do usunięcia z AZR. Każda nazwa w AZR ma odpowiednik poza AZR, również po uwzględnieniu „Bez kategorii”.';
                 }
             }
 
@@ -714,7 +714,7 @@
             const count = getDeletedFromAZRRows().length;
             setStatus(
                 count
-                    ? `Znaleziono ${count} ZR w AZR, których nie ma już w innych kategoriach. „Bez kategorii” jest pomijane.`
+                    ? `Znaleziono ${count} ZR w AZR, których nie ma już nigdzie poza AZR (sprawdzono także „Bez kategorii”).`
                     : 'Nie znaleziono ZR do usunięcia z AZR.',
                 count ? 'warning' : 'success'
             );
@@ -730,7 +730,7 @@
         let target = state.aaos.find(aao => aao.id === id);
         if (!target || target.aao_category_id !== azrCategoryId) return;
 
-        if (!confirm(`Usunąć z AZR ZR „${target.caption}” (ID ${target.id})?\n\nSkrypt sprawdzi jeszcze raz, czy w innych kategoriach nadal nie ma ZR o tej nazwie. Tej operacji nie można cofnąć.`)) return;
+        if (!confirm(`Usunąć z AZR ZR „${target.caption}” (ID ${target.id})?\n\nSkrypt sprawdzi jeszcze raz, czy poza AZR nadal nie ma ZR o tej nazwie (także w „Bez kategorii”). Tej operacji nie można cofnąć.`)) return;
 
         state.deleting = true;
         const oldText = button?.textContent;
@@ -744,7 +744,7 @@
             const stillOrphan = target && getDeletedFromAZRRows().some(aao => aao.id === id);
             if (!stillOrphan) {
                 renderMissingAZRTable();
-                setStatus(`ZR ID ${id} nie jest już pozycją do usunięcia z AZR — znaleziono odpowiednik w innej kategorii albo ZR już nie istnieje.`, 'warning');
+                setStatus(`ZR ID ${id} nie jest już pozycją do usunięcia z AZR — znaleziono odpowiednik poza AZR (także w „Bez kategorii”) albo ZR już nie istnieje.`, 'warning');
                 return;
             }
 

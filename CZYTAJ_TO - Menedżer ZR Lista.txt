@@ -15,6 +15,14 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v3.03 — 22.08.2026
+------------------
+- Korekta funkcji „Szukaj usuniętych” w zakładce „Brakuje w AZR”.
+- Przy ustalaniu, czy ZR z kategorii AZR jest osierocone i można je usunąć, kategoria „Bez kategorii” jest teraz brana pod uwagę.
+- ZR z AZR NIE jest pokazywane jako usunięte, jeżeli ZR o dokładnie tej samej nazwie nadal istnieje w „Bez kategorii”.
+- Ta sama zasada obowiązuje przy ponownej kontroli bezpośrednio przed usunięciem z AZR.
+- Standardowe wyszukiwanie „Brakuje w AZR” nadal pomija „Bez kategorii” — zmiana dotyczy wyłącznie wyszukiwania/usuwania osieroconych ZR z AZR.
+
 v3.02 — 22.08.2026
 ------------------
 - W zakładce „Brakuje w AZR” dodano przycisk „Szukaj usuniętych”.
