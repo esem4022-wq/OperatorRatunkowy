@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.03
+Wersja: 3.04
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -35,6 +35,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.04
+- naprawiono regułę `Ambulans` dla układu `Pojazdy -> 1 Ambulans` + `Pacjenci -> Dokładnie 1 pacjent`,
+- specjalne reguły `Ambulans`, `Radiowóz` i `Straż` korzystają teraz z jednego snapshotu aktualnie widocznej żółtej karty,
+- przy opóźnieniu 0,5 s skrypt nie uznaje już braku zwykłej ZR za wynik końcowy, jeśli karta wymagań jeszcze się renderuje; ponawia odczyt co 150 ms,
+- dzięki temu reguła `Ambulans` nie jest pomijana przez wyścig ładowania DOM / mission_help,
+- wyszukiwanie docelowej ZR pozostaje wyłącznie w kategorii `AZR`, a pozostałe reguły i adresy GitHub pozostają bez zmian.
+
 v3.03
 - poprawiono auto-zaznaczanie ZR `Ambulans` dla układu widocznego na karcie misji: `Pojazdy -> 1 Ambulans` oraz `Pacjenci -> Dokładnie 1 pacjent`,
 - reguła jest teraz sprawdzana bezpośrednio na widocznej żółtej karcie i nie zależy od danych mission_help,

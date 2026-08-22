@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.03
+// @version      3.04
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.03';
+    const VERSION = '3.04';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -2165,6 +2165,117 @@
         return label === 'ambulans';
     }
 
+    function getVisibleMissionRequirementSnapshot() {
+        // v3.04: jeden wspólny snapshot widocznej żółtej karty misji.
+        // Specjalne reguły (Ambulans / Radiowóz / Straż) nie powinny zależeć
+        // od chwili, w której mission_help lub reszta DOM zdąży się załadować.
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!el || !el.isConnected) continue;
+
+            let hidden = false;
+            let node = el;
+            while (node && node !== document.body) {
+                const cs = getComputedStyle(node);
+                if (cs.display === 'none' || cs.visibility === 'hidden') {
+                    hidden = true;
+                    break;
+                }
+                node = node.parentElement;
+            }
+            if (hidden) continue;
+
+            const raw = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+
+            if (!raw || raw.length > 6000) continue;
+            if (!/\b(?:Pojazdy|Pacjenci)\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            const vehicles = /\bPojazdy\b/i.test(raw)
+                ? extractVehiclesFromCardText(raw).filter(v => Number(v?.count) > 0)
+                : [];
+            const maxPatients = extractMaxPatientsFromText(raw) || 0;
+            const water = extractResourceFromText(raw, 'water') || 0;
+            const foam = extractResourceFromText(raw, 'foam') || 0;
+
+            // Karta jest gotowa, jeśli widać już choć jedną rzeczywistą informację
+            // o wymaganiu. To celowo nie wymaga nazwy misji.
+            const ready =
+                vehicles.length > 0 ||
+                maxPatients > 0 ||
+                water > 0 ||
+                foam > 0 ||
+                /\bDokładnie\s+\d+\s+pacjent/i.test(raw) ||
+                /\bMaksimum\s+pacjent/i.test(raw);
+
+            if (!ready) continue;
+
+            candidates.push({
+                raw,
+                vehicles,
+                maxPatients,
+                water,
+                foam,
+                len: raw.length
+            });
+        }
+
+        candidates.sort((a, b) => a.len - b.len);
+        return candidates[0] || null;
+    }
+
+    function specialAutoSelectTargetFromSnapshot(snapshot) {
+        if (!snapshot) return null;
+
+        const requiredVehicles = Array.isArray(snapshot.vehicles)
+            ? snapshot.vehicles.filter(v => Number(v?.count) > 0)
+            : [];
+        const maxPatients = Number(snapshot.maxPatients) || 0;
+        const water = Number(snapshot.water) || 0;
+        const foam = Number(snapshot.foam) || 0;
+
+        // Dokładnie 1 pacjent + brak innych wymagań pojazdowych albo jedyne
+        // wymaganie 1 Ambulans -> gotowa ZR `Ambulans`.
+        if (
+            maxPatients === 1 &&
+            water === 0 &&
+            foam === 0 &&
+            (
+                requiredVehicles.length === 0 ||
+                (
+                    requiredVehicles.length === 1 &&
+                    isSinglePlainAmbulanceRequirement(requiredVehicles[0])
+                )
+            )
+        ) {
+            return 'Ambulans';
+        }
+
+        // Jedynym pojazdem jest dokładnie 1 OPI -> `Radiowóz`.
+        if (
+            requiredVehicles.length === 1 &&
+            isSingleOPIRequirement(requiredVehicles[0]) &&
+            maxPatients === 0 && water === 0 && foam === 0
+        ) {
+            return 'Radiowóz';
+        }
+
+        // `Straż` wyłącznie wtedy, gdy naprawdę nie ma nic poza 1 samochodem
+        // pożarniczym. Pacjent, woda, piana lub inny pojazd wyłącza skrót.
+        if (
+            requiredVehicles.length === 1 &&
+            isSingleFireVehicleRequirement(requiredVehicles[0]) &&
+            maxPatients === 0 && water === 0 && foam === 0
+        ) {
+            return 'Straż';
+        }
+
+        return null;
+    }
+
     async function autoSelectTargetName(missionName) {
         // Dla auto-zaznaczania ignorujemy techniczny dopisek
         // "(możliwy alarm fałszywy)" na końcu nazwy.
@@ -2175,6 +2286,12 @@
         // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
         if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
         if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) return 'A TK';
+
+        // v3.04: specjalne reguły najpierw z jednego, aktualnego snapshotu
+        // widocznej karty. To eliminuje wyścig ładowania przy 0,5 s.
+        const visibleSnapshot = getVisibleMissionRequirementSnapshot();
+        const visibleSpecialTarget = specialAutoSelectTargetFromSnapshot(visibleSnapshot);
+        if (visibleSpecialTarget) return visibleSpecialTarget;
 
         // v3.03: dokładnie 1 pacjent + jedyny pojazd `1 Ambulans`
         // ma natychmiast wybrać gotową ZR `Ambulans` z AZR.
@@ -2795,6 +2912,15 @@
         state.autoSelectBusy = true;
 
         try {
+            // Przy 0,5 s żółta karta może być jeszcze w trakcie renderowania.
+            // Nie kończymy wtedy auto-wyboru po nazwie misji, bo moglibyśmy
+            // przegapić regułę `Ambulans`/`Radiowóz` i oznaczyć próbę jako zakończoną.
+            const visibleSnapshot = getVisibleMissionRequirementSnapshot();
+            if (!visibleSnapshot && state.autoSelectAttempts <= 8) {
+                scheduleAutoSelectRetry(150);
+                return;
+            }
+
             const targetName = await autoSelectTargetName(missionName);
             if (!exactMissionNameKey(targetName)) return;
 
@@ -2824,6 +2950,13 @@
             }
 
             if (!apiAAO) {
+                // Jeśli karta dopiero się renderuje, nie utrwalamy jeszcze braku ZR.
+                // Następna próba może już rozpoznać specjalny cel `Ambulans`.
+                if (!getVisibleMissionRequirementSnapshot() && state.autoSelectAttempts <= 8) {
+                    scheduleAutoSelectRetry(150);
+                    return;
+                }
+
                 log(`Auto-wybór: w AZR nie ma ZR „${targetName}”. Wracam do Pożary.`);
                 returnToPozaryCategory(group);
                 if (group.dataset) group.dataset.orzrAutoSelectedMission = missionKey;

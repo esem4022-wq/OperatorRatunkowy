@@ -15,6 +15,16 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v3.02 — 22.08.2026
+------------------
+- W zakładce „Brakuje w AZR” dodano przycisk „Szukaj usuniętych”.
+- Funkcja odświeża listę ZR i wyszukuje pozycje, które nadal istnieją w kategorii „AZR”, ale nie mają już ZR o dokładnie tej samej nazwie w żadnej innej kategorii.
+- Kategoria „Bez kategorii” jest pomijana również przy wyszukiwaniu usuniętych.
+- Wyniki „Szukaj usuniętych” pokazują ID ZR w AZR, nazwę, numer kolumny oraz przyciski „Usuń z AZR” i „Edycja AZR”.
+- Przed usunięciem skrypt ponownie pobiera aktualną listę i sprawdza, czy ZR nadal nie ma odpowiednika w innej kategorii, aby ograniczyć ryzyko usunięcia aktualnej pozycji.
+- Przycisk zmienia się na „Pokaż brakujące”, aby szybko wrócić do standardowego widoku zakładki.
+- Zachowano synchronizację pojazdów, kopiowanie brakujących ZR do kolumny 1, GitHub, stałą nazwę userscriptu i pełną historię wersji.
+
 v3.01 — 21.08.2026
 ------------------
 - Poprawiono niedziałające wyświetlanie konkretnych różnic pojazdów przy błędzie aktualizacji AZR.
