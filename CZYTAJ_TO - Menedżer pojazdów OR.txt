@@ -1,7 +1,7 @@
 ﻿MENEDŻER POJAZDÓW OR
 OperatorRatunkowy.pl
 
-AKTUALNA WERSJA: 2.13
+AKTUALNA WERSJA: 3.01
 
 ============================================================
 GITHUB / AKTUALIZACJE TAMPERMONKEY
@@ -24,11 +24,25 @@ Przy wydawaniu kolejnej wersji:
 5. Numer wersji zmienia się w metadanych @version, ale nazwa pliku .user.js pozostaje stała.
 
 ZIP może mieć numer wersji w nazwie, np.:
-menedzer-pojazdow-or-v2.13.zip
+menedzer-pojazdow-or-v3.01.zip
 
 ============================================================
 HISTORIA WERSJI
 ============================================================
+
+v3.01
+- dodano zakładkę „Klasa”,
+- odczyt i zmiana opcji „Wysyłaj tylko w ramach klasy własnej pojazdu”,
+- indywidualne przyciski Włącz/Wyłącz przy każdym pojeździe,
+- zaznaczanie strony / filtrowanych i masowa zmiana dla zaznaczonych,
+- filtry po jednostce, typie i aktualnym ustawieniu,
+- strzałki poprzednia/następna jednostka,
+- ustawienie jest odnajdywane po rzeczywistym tekście formularza pojazdu, więc skrypt nie zależy od nazwy pola HTML,
+- przy wyłączeniu obsłużono formularze Rails z ukrytym polem 0,
+- numeracja projektu zgodna z linią 3.xx.
+
+v3.0
+- ujednolicona numeracja skryptów Operator Ratunkowy do linii 3.xx; baza funkcjonalna wcześniejszej stabilnej wersji.
 
 v2.13
 - dodano plik „CZYTAJ_TO - Menedżer pojazdów OR.txt”,

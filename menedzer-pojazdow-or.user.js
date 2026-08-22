@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      2.13
+// @version      3.01
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -17,12 +17,15 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 2.13
+ * Wersja 3.01
  *
  * Funkcje:
  * - pobiera wszystkie pojazdy i jednostki z API gry,
  * - osobna karta Załoga: max, przydzielona i brakujaca obsada pojazdu,
  * - v2.12: osobna karta Stan do indywidualnej i zbiorczej zmiany FMS pojazdu 2/6,
+ * - v3.01: osobna karta Klasa do zarzadzania opcja "Wysylaj tylko w ramach klasy wlasnej pojazdu",
+ * - v3.01: indywidualne i zbiorcze wlaczanie/wylaczanie tej opcji dla zaznaczonych pojazdow,
+ * - v3.01: stan opcji jest odczytywany z rzeczywistego formularza pojazdu, bez zgadywania nazwy pola,
  * - v2.12: stan 2 = dostepny, stan 6 = niedostepny; zmiana przez /vehicles/{id}/set_fms/{status},
  * - po wczytaniu personelu liczba przydzielonych jest brana ze spisu personelu; API jest tylko fallbackiem,
  * - sprawdzanie czy w jednostce jest wystarczajacy wolny personel do pelnej obsady,
@@ -105,6 +108,8 @@
   const PAGE_SIZE = 200;
   const CREW_PAGE_SIZE = 100;
   const STATUS_PAGE_SIZE = 100;
+  const OWN_CLASS_PAGE_SIZE = 100;
+  const OWN_CLASS_DETAIL_CONCURRENCY = 4;
   const CREW_DETAIL_CONCURRENCY = 4;
   const VEHICLE_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/vehicles';
 
@@ -173,6 +178,17 @@
     vehicleStatusSelected: new Set(),
     vehicleStatusChanging: new Set(),
     vehicleStatusBatchChanging: false,
+    ownClassQuery: '',
+    ownClassBuildingId: '',
+    ownClassTypeId: '',
+    ownClassFilter: '',
+    ownClassPage: 1,
+    ownClassSelected: new Set(),
+    ownClassDetails: new Map(),
+    ownClassLoading: false,
+    ownClassLoadGeneration: 0,
+    ownClassChanging: new Set(),
+    ownClassBatchChanging: false,
     selected: new Set(),
     draftNames: new Map(),
     settings: loadSettings(),
@@ -831,9 +847,12 @@
         state.selected.clear();
         state.crewSelected.clear();
         state.vehicleStatusSelected.clear();
+        state.ownClassSelected.clear();
         state.draftNames.clear();
         state.crewDetails.clear();
+        state.ownClassDetails.clear();
         state.crewLoadGeneration += 1;
+        state.ownClassLoadGeneration += 1;
       }
       const [vehicles, buildings, catalog] = await Promise.all([
         fetchVehicles(),
@@ -855,11 +874,13 @@
       state.page = 1;
       state.crewPage = 1;
       state.vehicleStatusPage = 1;
+      state.ownClassPage = 1;
       rebuildFilterOptions();
       rebuildCrewFilterOptions();
       renderTable();
       renderCrewTable();
       renderVehicleStatusTable();
+      renderOwnClassTable();
 
       const sourceText = state.vehicleClassesSource === 'aao' ? 'AAO gry' : 'fallback';
       const diagCount = state.vehicleClassDiagnostics.length;
@@ -3218,20 +3239,509 @@
     });
   }
 
+
+  function ownClassSettingLabel(value) {
+    if (value === true) return 'WŁĄCZONE';
+    if (value === false) return 'WYŁĄCZONE';
+    return 'Nieodczytane';
+  }
+
+  function ownClassSettingClass(value) {
+    if (value === true) return 'or-fm-own-class-on';
+    if (value === false) return 'or-fm-own-class-off';
+    return 'or-fm-own-class-unknown';
+  }
+
+  function ownClassCheckboxContext(doc, checkbox) {
+    const parts = [];
+    const id = checkbox.getAttribute('id');
+    if (id) {
+      const label = [...doc.querySelectorAll('label[for]')]
+        .find(item => item.getAttribute('for') === id);
+      if (label) parts.push(label.textContent || '');
+    }
+    const parentLabel = checkbox.closest('label');
+    if (parentLabel) parts.push(parentLabel.textContent || '');
+    const container = checkbox.closest('.checkbox, .form-group, .row, .control-group, .field, .form-check') || checkbox.parentElement;
+    if (container) parts.push(container.textContent || '');
+    parts.push(checkbox.getAttribute('name') || '', checkbox.getAttribute('id') || '', checkbox.getAttribute('title') || '');
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function findOwnClassCheckbox(doc) {
+    const checkboxes = [...doc.querySelectorAll('input[type="checkbox"]')];
+    let best = null;
+    let bestScore = -1;
+
+    for (const checkbox of checkboxes) {
+      const context = ownClassCheckboxContext(doc, checkbox);
+      const lower = context.toLocaleLowerCase('pl');
+      let score = 0;
+
+      if (/wysyłaj\s+tylko\s+w\s+ramach\s+klasy\s+własnej\s+pojazdu/i.test(context)) score += 100;
+      if (/wysylaj\s+tylko\s+w\s+ramach\s+klasy\s+wlasnej\s+pojazdu/i.test(context)) score += 100;
+      if (/only\s+dispatch\s+vehicle\s+as\s+own\s+vehicle\s+(?:class|category)/i.test(context)) score += 100;
+      if (/eigene.*fahrzeug.*klass|fahrzeug.*klass.*eigene/i.test(context)) score += 70;
+      if (/(własnej|wlasnej|own|eigene)/i.test(lower)) score += 15;
+      if (/(klas|class|category|kategor)/i.test(lower)) score += 15;
+      if (/(tylko|only|nur)/i.test(lower)) score += 10;
+      if (/(vehicle|pojazd|fahrzeug)/i.test(lower)) score += 5;
+
+      const field = `${checkbox.name || ''} ${checkbox.id || ''}`.toLowerCase();
+      if (/(class|category|klasse|kategor)/i.test(field)) score += 8;
+      if (/(own|only|ignore|default|custom)/i.test(field)) score += 6;
+
+      if (score > bestScore) {
+        best = checkbox;
+        bestScore = score;
+      }
+    }
+
+    return bestScore >= 35 ? best : null;
+  }
+
+  function ownClassCandidateUrls(vehicleId) {
+    const id = encodeURIComponent(String(vehicleId));
+    return [
+      `/vehicles/${id}/edit`,
+      `/vehicles/${id}`,
+      `/vehicles/${id}/editName`,
+    ];
+  }
+
+  async function locateOwnClassForm(vehicleId) {
+    const id = String(vehicleId || '');
+    if (!id) throw new Error('Brak ID pojazdu.');
+
+    const queue = [...ownClassCandidateUrls(id)];
+    const seen = new Set();
+    const tried = [];
+
+    while (queue.length && seen.size < 12) {
+      const url = queue.shift();
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+
+      let response;
+      try {
+        response = await fetch(url, {
+          credentials: 'same-origin',
+          headers: { 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' },
+        });
+      } catch (error) {
+        tried.push(`${url}: ${error.message}`);
+        continue;
+      }
+
+      if (!response.ok) {
+        tried.push(`${url}: HTTP ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const checkbox = findOwnClassCheckbox(doc);
+      if (checkbox) {
+        const form = checkbox.closest('form');
+        if (!form) throw new Error(`Znaleziono opcję klasy pojazdu ${id}, ale nie znaleziono formularza zapisu.`);
+        return { doc, checkbox, form, sourceUrl: url };
+      }
+
+      // Jeżeli trafiliśmy na stronę pojazdu, dołączamy znalezione linki edycji/ustawień.
+      for (const link of [...doc.querySelectorAll('a[href]')]) {
+        const href = link.getAttribute('href') || '';
+        if (!href.includes(`/vehicles/${id}`)) continue;
+        if (!/(edit|setting|einstell|bearbeit|ustaw|opc)/i.test(href + ' ' + (link.textContent || ''))) continue;
+        try {
+          const parsed = new URL(href, window.location.origin);
+          if (parsed.origin === window.location.origin && !seen.has(parsed.pathname + parsed.search)) {
+            queue.push(parsed.pathname + parsed.search);
+          }
+        } catch (_) {}
+      }
+
+      tried.push(`${url}: brak pola klasy`);
+    }
+
+    throw new Error(`Nie znaleziono opcji „Wysyłaj tylko w ramach klasy własnej pojazdu”. Sprawdzono: ${tried.join(' | ')}`);
+  }
+
+  async function fetchOwnClassDetail(vehicleId, { force = false } = {}) {
+    const id = String(vehicleId || '');
+    const cached = state.ownClassDetails.get(id);
+    if (!force && cached?.status === 'loaded') return cached;
+
+    state.ownClassDetails.set(id, { status: 'loading' });
+    try {
+      const located = await locateOwnClassForm(id);
+      const detail = {
+        status: 'loaded',
+        enabled: !!located.checkbox.checked,
+        fieldName: located.checkbox.name || '',
+        sourceUrl: located.sourceUrl,
+        loadedAt: Date.now(),
+      };
+      state.ownClassDetails.set(id, detail);
+      return detail;
+    } catch (error) {
+      const detail = { status: 'error', error: error?.message || String(error), loadedAt: Date.now() };
+      state.ownClassDetails.set(id, detail);
+      throw error;
+    }
+  }
+
+  function ownClassFilteredVehicles() {
+    const q = state.ownClassQuery.trim().toLocaleLowerCase('pl');
+    return sortVehicles(state.vehicles.filter(vehicle => {
+      if (state.ownClassBuildingId && vehicle.buildingId !== state.ownClassBuildingId) return false;
+      if (state.ownClassTypeId && vehicle.typeId !== state.ownClassTypeId) return false;
+
+      const detail = state.ownClassDetails.get(String(vehicle.id));
+      if (state.ownClassFilter === 'on' && detail?.enabled !== true) return false;
+      if (state.ownClassFilter === 'off' && detail?.enabled !== false) return false;
+      if (state.ownClassFilter === 'unknown' && detail?.status === 'loaded') return false;
+
+      if (q) {
+        const setting = detail?.status === 'loaded' ? ownClassSettingLabel(detail.enabled) : 'nieodczytane';
+        const hay = `${vehicle.name} ${vehicle.typeName} ${vehicle.buildingName} ${vehicle.id} ${setting}`.toLocaleLowerCase('pl');
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    }));
+  }
+
+  function rebuildOwnClassFilterOptions() {
+    const buildingSelect = document.getElementById(`${APP_ID}-own-class-building-filter`);
+    const typeSelect = document.getElementById(`${APP_ID}-own-class-type-filter`);
+    if (!buildingSelect || !typeSelect) return;
+
+    const usedBuildings = new Map();
+    const usedTypes = new Map();
+    for (const vehicle of state.vehicles) {
+      usedBuildings.set(vehicle.buildingId, vehicle.buildingName);
+      usedTypes.set(vehicle.typeId, vehicle.typeName);
+    }
+
+    buildingSelect.innerHTML = `<option value="">Wszystkie jednostki</option>` +
+      [...usedBuildings.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }))
+        .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`)
+        .join('');
+
+    typeSelect.innerHTML = `<option value="">Wszystkie typy</option>` +
+      [...usedTypes.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }))
+        .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`)
+        .join('');
+
+    buildingSelect.value = state.ownClassBuildingId;
+    typeSelect.value = state.ownClassTypeId;
+  }
+
+  function applyOwnClassBuildingFilter(buildingId) {
+    state.ownClassBuildingId = String(buildingId ?? '');
+    state.ownClassPage = 1;
+    state.ownClassSelected.clear();
+    const select = document.getElementById(`${APP_ID}-own-class-building-filter`);
+    if (select) select.value = state.ownClassBuildingId;
+    renderOwnClassTable();
+  }
+
+  function changeOwnClassBuildingFilterByStep(step) {
+    const select = document.getElementById(`${APP_ID}-own-class-building-filter`);
+    if (!select) return;
+    const options = [...select.options].filter(option => option.value);
+    if (!options.length) return;
+
+    let currentIndex = options.findIndex(option => option.value === state.ownClassBuildingId);
+    if (currentIndex < 0) currentIndex = step > 0 ? -1 : 0;
+    let nextIndex = currentIndex + step;
+    if (nextIndex < 0) nextIndex = options.length - 1;
+    if (nextIndex >= options.length) nextIndex = 0;
+    applyOwnClassBuildingFilter(options[nextIndex].value);
+  }
+
+  function setOwnClassMessage(message, kind = 'info') {
+    const el = document.getElementById(`${APP_ID}-own-class-message`);
+    if (!el) return;
+    el.className = `or-fm-status or-fm-status-${kind}`;
+    el.textContent = message;
+  }
+
+  async function submitOwnClassSetting(vehicleId, enabled, { quiet = false } = {}) {
+    const id = String(vehicleId || '');
+    if (!id) throw new Error('Brak ID pojazdu.');
+    if (state.ownClassChanging.has(id)) return false;
+
+    const vehicle = state.vehicles.find(item => String(item.id) === id);
+    if (!vehicle) throw new Error(`Nie znaleziono pojazdu ${id}.`);
+
+    state.ownClassChanging.add(id);
+    renderOwnClassTable();
+    try {
+      const located = await locateOwnClassForm(id);
+      const checkbox = located.checkbox;
+      const form = located.form;
+      checkbox.checked = !!enabled;
+
+      const formData = new FormData(form);
+      const fieldName = checkbox.name || '';
+
+      // Standardowy Rails check_box ma ukryte pole value=0. Jeżeli go nie ma,
+      // dodajemy wartość 0 ręcznie przy wyłączeniu, żeby serwer faktycznie zapisał false.
+      if (fieldName && !enabled) {
+        const hasHiddenForSameField = [...form.querySelectorAll('input[type="hidden"]')]
+          .some(input => input.name === fieldName);
+        if (!hasHiddenForSameField && !formData.has(fieldName)) formData.append(fieldName, '0');
+      }
+      if (fieldName && enabled && !formData.has(fieldName)) {
+        formData.append(fieldName, checkbox.value || '1');
+      }
+
+      // Niektóre formularze oczekują nazwanego przycisku submit.
+      const submit = form.querySelector('button[type="submit"][name], input[type="submit"][name]');
+      if (submit?.name && !formData.has(submit.name)) formData.append(submit.name, submit.value || '1');
+
+      const actionRaw = form.getAttribute('action') || located.sourceUrl;
+      const actionUrl = new URL(actionRaw, window.location.origin);
+      const method = String(form.getAttribute('method') || 'post').toUpperCase();
+      const fetchOptions = {
+        method,
+        credentials: 'same-origin',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
+        },
+      };
+
+      let requestUrl = actionUrl.pathname + actionUrl.search;
+      if (method === 'GET') {
+        const params = new URLSearchParams();
+        for (const [key, value] of formData.entries()) params.append(key, String(value));
+        requestUrl += (requestUrl.includes('?') ? '&' : '?') + params.toString();
+      } else {
+        fetchOptions.body = formData;
+      }
+
+      const response = await fetch(requestUrl, fetchOptions);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      state.ownClassDetails.set(id, {
+        status: 'loaded',
+        enabled: !!enabled,
+        fieldName,
+        sourceUrl: located.sourceUrl,
+        loadedAt: Date.now(),
+      });
+
+      if (!quiet) {
+        setOwnClassMessage(
+          `${vehicle.name}: ${enabled ? 'włączono' : 'wyłączono'} „Wysyłaj tylko w ramach klasy własnej pojazdu”.`,
+          'ok'
+        );
+      }
+      return true;
+    } catch (error) {
+      state.ownClassDetails.set(id, { status: 'error', error: error?.message || String(error), loadedAt: Date.now() });
+      if (!quiet) setOwnClassMessage(`Nie udało się zapisać opcji dla ${vehicle.name}: ${error.message}`, 'error');
+      throw error;
+    } finally {
+      state.ownClassChanging.delete(id);
+      renderOwnClassTable();
+    }
+  }
+
+  async function setSelectedOwnClassSetting() {
+    if (state.ownClassBatchChanging) return;
+    const target = document.getElementById(`${APP_ID}-own-class-bulk-target`)?.value === 'on';
+    const vehicles = sortVehicles(
+      state.vehicles.filter(vehicle => state.ownClassSelected.has(String(vehicle.id)))
+    );
+    if (!vehicles.length) {
+      alert('Najpierw zaznacz pojazdy w karcie Klasa.');
+      return;
+    }
+
+    state.ownClassBatchChanging = true;
+    renderOwnClassTable();
+    let changed = 0;
+    let skipped = 0;
+    const failed = [];
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const vehicle = vehicles[i];
+      const cached = state.ownClassDetails.get(String(vehicle.id));
+      setOwnClassMessage(`Zapisuję ${i + 1}/${vehicles.length}: ${vehicle.name} → ${target ? 'WŁĄCZONE' : 'WYŁĄCZONE'}…`, 'info');
+      if (cached?.status === 'loaded' && cached.enabled === target) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await submitOwnClassSetting(vehicle.id, target, { quiet: true });
+        changed += 1;
+      } catch (error) {
+        failed.push(`${vehicle.name}: ${error.message}`);
+      }
+      await sleep(180);
+    }
+
+    state.ownClassBatchChanging = false;
+    renderOwnClassTable();
+    setOwnClassMessage(
+      failed.length
+        ? `Zakończono: zmieniono ${changed}, bez zmian ${skipped}, błędy ${failed.length}. Pierwszy błąd: ${failed[0]}`
+        : `Gotowe. ${target ? 'Włączono' : 'Wyłączono'} opcję dla ${changed} pojazdów${skipped ? `; ${skipped} już miało ten stan` : ''}.`,
+      failed.length ? 'warn' : 'ok'
+    );
+  }
+
+  async function ensureOwnClassDetailsForVehicles(vehicles, { force = false } = {}) {
+    if (state.ownClassLoading) return;
+    const queue = vehicles.filter(vehicle => {
+      const cached = state.ownClassDetails.get(String(vehicle.id));
+      return force || !cached || cached.status === 'error';
+    });
+    if (!queue.length) return;
+
+    const generation = ++state.ownClassLoadGeneration;
+    state.ownClassLoading = true;
+    let cursor = 0;
+    let completed = 0;
+    let errors = 0;
+
+    setOwnClassMessage(`Odczytuję ustawienie klasy dla ${queue.length} pojazdów…`, 'info');
+
+    async function worker() {
+      while (cursor < queue.length && generation === state.ownClassLoadGeneration) {
+        const vehicle = queue[cursor++];
+        try {
+          await fetchOwnClassDetail(vehicle.id, { force });
+        } catch (_) {
+          errors += 1;
+        }
+        completed += 1;
+        if (generation === state.ownClassLoadGeneration) renderOwnClassTable({ skipEnsure: true });
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(OWN_CLASS_DETAIL_CONCURRENCY, queue.length) }, () => worker())
+    );
+
+    if (generation === state.ownClassLoadGeneration) {
+      state.ownClassLoading = false;
+      setOwnClassMessage(
+        errors
+          ? `Odczytano ${completed} pojazdów; błędy: ${errors}.`
+          : `Odczytano ustawienie klasy dla ${completed} pojazdów.`,
+        errors ? 'warn' : 'ok'
+      );
+      renderOwnClassTable({ skipEnsure: true });
+    }
+  }
+
+  function renderOwnClassTable({ skipEnsure = false } = {}) {
+    const tbody = document.getElementById(`${APP_ID}-own-class-tbody`);
+    const summary = document.getElementById(`${APP_ID}-own-class-summary`);
+    const pager = document.getElementById(`${APP_ID}-own-class-pager`);
+    if (!tbody || !summary || !pager) return;
+
+    const bulkButton = document.getElementById(`${APP_ID}-own-class-apply-selected`);
+    if (bulkButton) {
+      bulkButton.disabled = state.ownClassBatchChanging || state.ownClassSelected.size === 0;
+      bulkButton.textContent = state.ownClassBatchChanging ? 'Zapisuję zaznaczone…' : 'Ustaw dla zaznaczonych';
+    }
+
+    const filtered = ownClassFilteredVehicles();
+    const pages = Math.max(1, Math.ceil(filtered.length / OWN_CLASS_PAGE_SIZE));
+    state.ownClassPage = Math.max(1, Math.min(state.ownClassPage, pages));
+    const start = (state.ownClassPage - 1) * OWN_CLASS_PAGE_SIZE;
+    const current = filtered.slice(start, start + OWN_CLASS_PAGE_SIZE);
+
+    tbody.innerHTML = current.map(vehicle => {
+      const id = String(vehicle.id);
+      const selected = state.ownClassSelected.has(id);
+      const changing = state.ownClassChanging.has(id);
+      const detail = state.ownClassDetails.get(id);
+      const loaded = detail?.status === 'loaded';
+      const enabled = loaded ? detail.enabled : null;
+      const error = detail?.status === 'error' ? detail.error : '';
+      const statusTitle = error ? ` title="${esc(error)}"` : '';
+
+      return `<tr>` +
+        `<td class="or-fm-center"><input type="checkbox" class="or-fm-own-class-row-check" data-vehicle-id="${esc(id)}" ${selected ? 'checked' : ''}></td>` +
+        `<td class="or-fm-id"><a href="/vehicles/${esc(id)}" target="_blank" rel="noopener">${esc(id)}</a></td>` +
+        `<td>${esc(vehicle.buildingName)}</td>` +
+        `<td>${esc(vehicle.typeName)}</td>` +
+        `<td>${esc(vehicle.name)}</td>` +
+        `<td class="or-fm-center"${statusTitle}><span class="or-fm-own-class-badge ${ownClassSettingClass(enabled)}">${esc(detail?.status === 'loading' ? 'Ładowanie…' : detail?.status === 'error' ? 'Błąd odczytu' : ownClassSettingLabel(enabled))}</span></td>` +
+        `<td class="or-fm-center or-fm-status-actions">` +
+          `<button type="button" class="or-fm-btn or-fm-btn-small or-fm-set-own-class" data-vehicle-id="${esc(id)}" data-enabled="1" ${changing || enabled === true ? 'disabled' : ''}>Włącz</button>` +
+          `<button type="button" class="or-fm-btn or-fm-btn-small or-fm-set-own-class" data-vehicle-id="${esc(id)}" data-enabled="0" ${changing || enabled === false ? 'disabled' : ''}>Wyłącz</button>` +
+        `</td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="or-fm-empty">Brak pojazdów dla wybranych filtrów.</td></tr>`;
+
+    const loadedDetails = filtered.map(v => state.ownClassDetails.get(String(v.id))).filter(d => d?.status === 'loaded');
+    const enabledCount = loadedDetails.filter(d => d.enabled === true).length;
+    const disabledCount = loadedDetails.filter(d => d.enabled === false).length;
+    const unknownCount = filtered.length - loadedDetails.length;
+    summary.textContent = `Widoczne: ${filtered.length} / ${state.vehicles.length} | Zaznaczone: ${state.ownClassSelected.size} | Włączone: ${enabledCount} | Wyłączone: ${disabledCount} | Nieodczytane: ${unknownCount}`;
+
+    pager.innerHTML = `
+      <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-own-class-prev" ${state.ownClassPage <= 1 ? 'disabled' : ''}>‹ Poprzednia</button>
+      <span>${state.ownClassPage} / ${pages}</span>
+      <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-own-class-next" ${state.ownClassPage >= pages ? 'disabled' : ''}>Następna ›</button>`;
+
+    document.getElementById(`${APP_ID}-own-class-prev`)?.addEventListener('click', () => {
+      state.ownClassPage -= 1;
+      renderOwnClassTable();
+    });
+    document.getElementById(`${APP_ID}-own-class-next`)?.addEventListener('click', () => {
+      state.ownClassPage += 1;
+      renderOwnClassTable();
+    });
+
+    tbody.querySelectorAll('.or-fm-own-class-row-check').forEach(checkbox => {
+      checkbox.addEventListener('change', () => {
+        const id = String(checkbox.dataset.vehicleId || '');
+        if (checkbox.checked) state.ownClassSelected.add(id);
+        else state.ownClassSelected.delete(id);
+        renderOwnClassTable({ skipEnsure: true });
+      });
+    });
+
+    tbody.querySelectorAll('.or-fm-set-own-class').forEach(button => {
+      button.addEventListener('click', async () => {
+        try {
+          await submitOwnClassSetting(button.dataset.vehicleId, button.dataset.enabled === '1');
+        } catch (_) {}
+      });
+    });
+
+    if (!skipEnsure && state.activeTab === 'vehicle_class') {
+      ensureOwnClassDetailsForVehicles(current).catch(error => {
+        console.warn('[OR Fleet Manager] Nie udało się odczytać opcji klasy:', error);
+      });
+    }
+  }
+
   function switchManagerTab(tab) {
-    state.activeTab = ['crew', 'vehicle_status'].includes(tab) ? tab : 'names';
+    state.activeTab = ['crew', 'vehicle_status', 'vehicle_class'].includes(tab) ? tab : 'names';
     const namesActive = state.activeTab === 'names';
     const crewActive = state.activeTab === 'crew';
     const statusActive = state.activeTab === 'vehicle_status';
+    const ownClassActive = state.activeTab === 'vehicle_class';
 
     document.querySelectorAll(`#${APP_ID}-modal .or-fm-name-section`).forEach(element => {
       element.classList.toggle('or-fm-tab-hidden', !namesActive);
     });
     document.getElementById(`${APP_ID}-crew-panel`)?.classList.toggle('or-fm-tab-active', crewActive);
     document.getElementById(`${APP_ID}-status-panel`)?.classList.toggle('or-fm-tab-active', statusActive);
+    document.getElementById(`${APP_ID}-own-class-panel`)?.classList.toggle('or-fm-tab-active', ownClassActive);
     document.getElementById(`${APP_ID}-tab-names`)?.classList.toggle('or-fm-tab-selected', namesActive);
     document.getElementById(`${APP_ID}-tab-crew`)?.classList.toggle('or-fm-tab-selected', crewActive);
     document.getElementById(`${APP_ID}-tab-status`)?.classList.toggle('or-fm-tab-selected', statusActive);
+    document.getElementById(`${APP_ID}-tab-own-class`)?.classList.toggle('or-fm-tab-selected', ownClassActive);
 
     if (crewActive) {
       rebuildCrewFilterOptions();
@@ -3239,6 +3749,9 @@
     } else if (statusActive) {
       rebuildVehicleStatusFilterOptions();
       renderVehicleStatusTable();
+    } else if (ownClassActive) {
+      rebuildOwnClassFilterOptions();
+      renderOwnClassTable();
     }
   }
 
@@ -3279,13 +3792,17 @@
       .or-fm-tab-hidden { display:none !important; }
       .or-fm-crew-panel { display:none; min-height:0; flex:1; flex-direction:column; }
       .or-fm-crew-panel.or-fm-tab-active { display:flex; }
-      .or-fm-status-panel { display:none; min-height:0; flex:1; flex-direction:column; }
-      .or-fm-status-panel.or-fm-tab-active { display:flex; }
+      .or-fm-status-panel, .or-fm-own-class-panel { display:none; min-height:0; flex:1; flex-direction:column; }
+      .or-fm-status-panel.or-fm-tab-active, .or-fm-own-class-panel.or-fm-tab-active { display:flex; }
       .or-fm-fms-badge { display:inline-block; min-width:105px; padding:4px 8px; border-radius:4px; font-weight:700; }
       .or-fm-fms-2 { background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; }
       .or-fm-fms-6 { background:#ffebee; color:#b71c1c; border:1px solid #ef9a9a; }
       .or-fm-fms-other { background:#eceff1; color:#455a64; border:1px solid #b0bec5; }
       .or-fm-status-actions { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+      .or-fm-own-class-badge { display:inline-block; min-width:92px; padding:4px 8px; border-radius:4px; font-weight:700; font-size:12px; }
+      .or-fm-own-class-on { background:#c8e6c9; color:#1b5e20; }
+      .or-fm-own-class-off { background:#eceff1; color:#455a64; }
+      .or-fm-own-class-unknown { background:#fff3e0; color:#e65100; }
       .or-fm-toolbar { display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px; border-bottom:1px solid #ddd; background:#f7f7f7; align-items:center; }
       .or-fm-toolbar input[type="text"], .or-fm-toolbar input[type="number"], .or-fm-toolbar select { min-height:32px; border:1px solid #bbb; border-radius:4px; padding:5px 8px; background:#fff; color:#222; }
       .or-fm-search { min-width:250px; flex:1 1 280px; }
@@ -3388,6 +3905,7 @@
           <button type="button" class="or-fm-tab or-fm-tab-selected" id="${APP_ID}-tab-names">Nazwy</button>
           <button type="button" class="or-fm-tab" id="${APP_ID}-tab-crew">Załoga</button>
           <button type="button" class="or-fm-tab" id="${APP_ID}-tab-status">Stan</button>
+          <button type="button" class="or-fm-tab" id="${APP_ID}-tab-own-class">Klasa</button>
         </div>
 
         <div class="or-fm-toolbar or-fm-name-section">
@@ -3626,6 +4144,60 @@
           </div>
           <div id="${APP_ID}-vehicle-status-message" class="or-fm-status or-fm-status-info">Gotowy do zmiany stanu pojazdów.</div>
         </div>
+
+        <div class="or-fm-own-class-panel" id="${APP_ID}-own-class-panel">
+          <div class="or-fm-toolbar">
+            <input id="${APP_ID}-own-class-search" class="or-fm-search" type="text" placeholder="Szukaj: nazwa, typ, jednostka, ID...">
+            <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-own-class-building-prev" title="Poprzednia jednostka">‹</button>
+            <select id="${APP_ID}-own-class-building-filter"><option value="">Wszystkie jednostki</option></select>
+            <button type="button" class="or-fm-btn or-fm-btn-small" id="${APP_ID}-own-class-building-next" title="Następna jednostka">›</button>
+            <select id="${APP_ID}-own-class-type-filter"><option value="">Wszystkie typy</option></select>
+            <select id="${APP_ID}-own-class-filter" title="Filtr ustawienia klasy własnej">
+              <option value="">Wszystkie ustawienia</option>
+              <option value="on">Tylko włączone</option>
+              <option value="off">Tylko wyłączone</option>
+              <option value="unknown">Nieodczytane / błędy</option>
+            </select>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-own-class-refresh">↻ Odśwież ustawienia</button>
+          </div>
+          <div class="or-fm-toolbar">
+            <button type="button" class="or-fm-btn" id="${APP_ID}-own-class-select-page">Zaznacz stronę</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-own-class-select-filtered">Zaznacz filtrowane</button>
+            <button type="button" class="or-fm-btn" id="${APP_ID}-own-class-clear-selection">Wyczyść zaznaczenie</button>
+            <span style="width:1px;height:24px;background:#ccc"></span>
+            <select id="${APP_ID}-own-class-bulk-target" title="Ustawienie docelowe dla zaznaczonych pojazdów">
+              <option value="on">Włącz — tylko klasa własna</option>
+              <option value="off">Wyłącz — także klasa pierwotna</option>
+            </select>
+            <button type="button" class="or-fm-btn or-fm-btn-primary" id="${APP_ID}-own-class-apply-selected">Ustaw dla zaznaczonych</button>
+          </div>
+          <div class="or-fm-help-wrap">
+            <div class="or-fm-help-toggle" style="cursor:default">
+              <span>🏷️ <b>Klasa:</b> ta karta zmienia wyłącznie opcję <b>„Wysyłaj tylko w ramach klasy własnej pojazdu”</b>. Włączona = pojazd jest wysyłany tylko jako jego klasa własna. Wyłączona = może być wysyłany również jako klasa pierwotna. Nazwa samej klasy własnej nie jest tutaj zmieniana.</span>
+            </div>
+          </div>
+          <div class="or-fm-body">
+            <div class="or-fm-table-wrap">
+              <table class="or-fm-table">
+                <thead><tr>
+                  <th style="width:36px">✓</th>
+                  <th>ID</th>
+                  <th>Jednostka</th>
+                  <th>Typ</th>
+                  <th>Pojazd</th>
+                  <th>Tylko klasa własna</th>
+                  <th>Zmiana</th>
+                </tr></thead>
+                <tbody id="${APP_ID}-own-class-tbody"><tr><td colspan="7" class="or-fm-empty">Otwórz kartę Klasa, aby odczytać ustawienia pojazdów.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="or-fm-footer">
+            <div class="or-fm-summary" id="${APP_ID}-own-class-summary">Nie wczytano danych.</div>
+            <div class="or-fm-pager" id="${APP_ID}-own-class-pager"></div>
+          </div>
+          <div id="${APP_ID}-own-class-message" class="or-fm-status or-fm-status-info">Ustawienia zostaną odczytane po otwarciu karty Klasa.</div>
+        </div>
         <div id="${APP_ID}-status" class="or-fm-status or-fm-status-info">Gotowy.</div>
         <div id="${APP_ID}-confirm"></div>
       </div>`;
@@ -3634,6 +4206,7 @@
     document.getElementById(`${APP_ID}-tab-names`).addEventListener('click', () => switchManagerTab('names'));
     document.getElementById(`${APP_ID}-tab-crew`).addEventListener('click', () => switchManagerTab('crew'));
     document.getElementById(`${APP_ID}-tab-status`).addEventListener('click', () => switchManagerTab('vehicle_status'));
+    document.getElementById(`${APP_ID}-tab-own-class`).addEventListener('click', () => switchManagerTab('vehicle_class'));
 
     const crewSearch = document.getElementById(`${APP_ID}-crew-search`);
     let crewSearchTimer = null;
@@ -3745,6 +4318,60 @@
     });
     document.getElementById(`${APP_ID}-status-apply-selected`).addEventListener('click', () => {
       setSelectedVehicleFmsStatus();
+    });
+
+    const ownClassSearch = document.getElementById(`${APP_ID}-own-class-search`);
+    let ownClassSearchTimer = null;
+    ownClassSearch.addEventListener('input', () => {
+      clearTimeout(ownClassSearchTimer);
+      ownClassSearchTimer = setTimeout(() => {
+        state.ownClassQuery = ownClassSearch.value;
+        state.ownClassPage = 1;
+        renderOwnClassTable();
+      }, 120);
+    });
+    document.getElementById(`${APP_ID}-own-class-building-filter`).addEventListener('change', event => {
+      applyOwnClassBuildingFilter(event.target.value);
+    });
+    document.getElementById(`${APP_ID}-own-class-building-prev`).addEventListener('click', () => {
+      changeOwnClassBuildingFilterByStep(-1);
+    });
+    document.getElementById(`${APP_ID}-own-class-building-next`).addEventListener('click', () => {
+      changeOwnClassBuildingFilterByStep(1);
+    });
+    document.getElementById(`${APP_ID}-own-class-type-filter`).addEventListener('change', event => {
+      state.ownClassTypeId = event.target.value;
+      state.ownClassPage = 1;
+      renderOwnClassTable();
+    });
+    document.getElementById(`${APP_ID}-own-class-filter`).addEventListener('change', event => {
+      state.ownClassFilter = event.target.value;
+      state.ownClassPage = 1;
+      renderOwnClassTable();
+    });
+    document.getElementById(`${APP_ID}-own-class-refresh`).addEventListener('click', () => {
+      state.ownClassLoadGeneration += 1;
+      state.ownClassDetails.clear();
+      state.ownClassLoading = false;
+      setOwnClassMessage('Odświeżam ustawienia klasy pojazdów…', 'info');
+      renderOwnClassTable();
+    });
+    document.getElementById(`${APP_ID}-own-class-select-page`).addEventListener('click', () => {
+      const filtered = ownClassFilteredVehicles();
+      const start = (state.ownClassPage - 1) * OWN_CLASS_PAGE_SIZE;
+      filtered.slice(start, start + OWN_CLASS_PAGE_SIZE).forEach(vehicle => state.ownClassSelected.add(String(vehicle.id)));
+      renderOwnClassTable({ skipEnsure: true });
+    });
+    document.getElementById(`${APP_ID}-own-class-select-filtered`).addEventListener('click', () => {
+      ownClassFilteredVehicles().forEach(vehicle => state.ownClassSelected.add(String(vehicle.id)));
+      renderOwnClassTable({ skipEnsure: true });
+    });
+    document.getElementById(`${APP_ID}-own-class-clear-selection`).addEventListener('click', () => {
+      state.ownClassSelected.clear();
+      renderOwnClassTable({ skipEnsure: true });
+    });
+    document.getElementById(`${APP_ID}-own-class-apply-selected`).addEventListener('click', () => {
+      setSelectedOwnClassSetting();
     });
 
     button.addEventListener('click', async () => {
