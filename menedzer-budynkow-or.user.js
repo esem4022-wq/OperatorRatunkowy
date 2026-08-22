@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      0.12.0
-// @description  Zarzadzanie budynkami: nazwy, specjalizacje, pojazdy i obsada w OperatorRatunkowy.pl
+// @version      3.01
+// @description  Zarzadzanie budynkami: nazwy, specjalizacje, obsada, pojazdy i rozbudowa w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
 // @homepageURL   https://github.com/esem4022-wq/OperatorRatunkowy
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 0.12.0
+ * Wersja 3.01
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -24,6 +24,7 @@
  * - wyszukiwanie i filtrowanie po typie budynku,
  * - osobna zakladka Specjalizacje z lista rozbudow/specjalizacji dla kazdego budynku,
  * - osobna zakladka Obsada i pojazdy: liczba pojazdow, pojemnosc, personel, cel, bilans i rekrutacja,
+ * - osobna zakladka Rozbudowa: rodzaj budynku, wariant, obecny i maksymalny poziom oraz maksymalna pojemnosc pojazdow,
  * - filtry obsady: brakuje zalogi / za duzo zalogi,
  * - edycja docelowej liczby pracownikow i sterowanie rekrutacja bezposrednio z tabeli,
  * - mozliwosc ukrycia kolumny Typ budynku w zakladce Obsada i pojazdy,
@@ -69,6 +70,7 @@
     page: 1,
     specializationPage: 1,
     staffingPage: 1,
+    developmentPage: 1,
     activeTab: 'rename',
     query: '',
     typeId: '',
@@ -227,7 +229,14 @@
     );
   }
 
-  function getParkingCapacity(rawBuilding, catalog) {
+  function getMaxBuildingLevel(rawBuilding, catalog) {
+    const typeId = String(valueOf(rawBuilding, ['building_type', 'building_type_id', 'type'], ''));
+    const entry = getCatalogEntry(catalog, typeId);
+    if (!entry || entry.maxLevel === undefined || entry.maxLevel === null) return null;
+    return Math.max(0, Math.trunc(numberValue(entry.maxLevel, 0)));
+  }
+
+  function getParkingCapacityAtLevel(rawBuilding, catalog, targetLevel) {
     const typeId = String(valueOf(rawBuilding, ['building_type', 'building_type_id', 'type'], ''));
     const entry = getCatalogEntry(catalog, typeId);
 
@@ -235,7 +244,7 @@
       return null;
     }
 
-    const level = Math.max(0, numberValue(valueOf(rawBuilding, ['level'], 0), 0));
+    const level = Math.max(0, Math.trunc(numberValue(targetLevel, 0)));
     const start = Math.max(0, numberValue(entry.startParkingLots, 0));
     const perLevel = Math.max(0, numberValue(entry.parkingLotsPerLevel, 1));
 
@@ -249,7 +258,8 @@
         : [];
 
     for (const extension of extensions) {
-      // Rozbudowa daje miejsca dopiero, gdy jest ukonczona/dostepna.
+      // Liczymy tylko posiadane, ukonczone rozbudowy. Przy maksymalnym poziomie
+      // ich bonus per poziom jest przeliczany dla poziomu maksymalnego.
       if (!boolValue(valueOf(extension, ['available'], true), true)) continue;
 
       const extensionTypeId = String(valueOf(extension, ['type_id', 'typeId', 'id'], ''));
@@ -258,14 +268,23 @@
 
       capacity += Math.max(0, numberValue(meta.givesParkingLots, 0));
 
-      // Nie wszystkie wersje gry korzystaja z tego pola, ale jesli katalog je
-      // zawiera, uwzgledniamy je zgodnie z definicja LSSM.
       if (meta.givesParkingLotsPerLevel !== undefined && meta.givesParkingLotsPerLevel !== null) {
         capacity += Math.max(0, numberValue(meta.givesParkingLotsPerLevel, 0)) * level;
       }
     }
 
     return Math.max(0, Math.round(capacity));
+  }
+
+  function getParkingCapacity(rawBuilding, catalog) {
+    const level = Math.max(0, numberValue(valueOf(rawBuilding, ['level'], 0), 0));
+    return getParkingCapacityAtLevel(rawBuilding, catalog, level);
+  }
+
+  function getMaxParkingCapacity(rawBuilding, catalog) {
+    const maxLevel = getMaxBuildingLevel(rawBuilding, catalog);
+    if (maxLevel === null) return null;
+    return getParkingCapacityAtLevel(rawBuilding, catalog, maxLevel);
   }
 
   function recruitmentText(building) {
@@ -490,9 +509,11 @@
         longitude,
         extensions,
         level: Math.max(0, numberValue(valueOf(b, ['level'], 0), 0)),
+        maxLevel: getMaxBuildingLevel(b, catalog),
         smallBuilding: boolValue(valueOf(b, ['small_building'], false), false),
         vehicleCount: buildingVehicles.length,
         maxVehicles: getParkingCapacity(b, catalog),
+        maxVehiclesAtMaxLevel: getMaxParkingCapacity(b, catalog),
         vehicleCrewTarget,
         personnelCurrent,
         personnelTarget,
@@ -541,6 +562,7 @@
       state.page = 1;
       state.specializationPage = 1;
       state.staffingPage = 1;
+      state.developmentPage = 1;
       rebuildFilterOptions();
       renderCurrentTab();
       setStatus(`Wczytano ${state.buildings.length} budynkow i ${state.vehicles.length} pojazdow.`, 'ok');
@@ -621,6 +643,7 @@
   function renderCurrentTab() {
     if (state.activeTab === 'specializations') renderSpecializationsTable();
     else if (state.activeTab === 'staffing') renderStaffingTable();
+    else if (state.activeTab === 'development') renderDevelopmentTable();
     else renderTable();
   }
 
@@ -906,11 +929,73 @@
     });
   }
 
+  function renderDevelopmentTable() {
+    const tbody = document.getElementById(`${APP_ID}-development-tbody`);
+    const summary = document.getElementById(`${APP_ID}-development-summary`);
+    const pager = document.getElementById(`${APP_ID}-development-pager`);
+    if (!tbody || !summary || !pager) return;
+
+    const filtered = filteredBuildings();
+    const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    state.developmentPage = Math.max(1, Math.min(state.developmentPage, pages));
+
+    const start = (state.developmentPage - 1) * PAGE_SIZE;
+    const current = filtered.slice(start, start + PAGE_SIZE);
+
+    tbody.innerHTML = current.map(building => {
+      const maxLevelText = building.maxLevel === null ? '—' : building.maxLevel;
+      const maxVehiclesText = building.maxVehiclesAtMaxLevel === null ? '—' : building.maxVehiclesAtMaxLevel;
+      const variant = building.smallBuilding ? 'Maly' : 'Standardowy';
+      const levelState = building.maxLevel === null
+        ? ''
+        : building.level >= building.maxLevel
+          ? '<span class="or-bm-badge or-bm-badge-active">MAX</span>'
+          : `<span class="or-bm-muted">zostalo ${Math.max(0, building.maxLevel - building.level)} poziomow</span>`;
+
+      return `
+        <tr data-id="${esc(building.id)}">
+          <td class="or-bm-id"><a href="/buildings/${esc(building.id)}" target="_blank" rel="noopener">${esc(building.id)}</a></td>
+          <td><a href="/buildings/${esc(building.id)}" target="_blank" rel="noopener"><b>${esc(building.name)}</b></a></td>
+          <td><b>${esc(building.typeName)}</b></td>
+          <td class="or-bm-center">${esc(variant)}</td>
+          <td class="or-bm-center"><b>${building.level}</b></td>
+          <td class="or-bm-center"><b>${maxLevelText}</b><div class="or-bm-count-detail">${levelState}</div></td>
+          <td class="or-bm-center"><b>${maxVehiclesText}</b></td>
+        </tr>`;
+    }).join('') || `<tr><td colspan="7" class="or-bm-empty">Brak budynkow dla wybranych filtrow.</td></tr>`;
+
+    const withKnownMaxLevel = filtered.filter(building => building.maxLevel !== null).length;
+    const atMaxLevel = filtered.filter(building => building.maxLevel !== null && building.level >= building.maxLevel).length;
+    const withVehicleCapacity = filtered.filter(building => building.maxVehiclesAtMaxLevel !== null).length;
+
+    summary.innerHTML =
+      `Budynki: <b>${filtered.length}</b> / ${state.buildings.length} | ` +
+      `Znany maks. poziom: <b>${withKnownMaxLevel}</b> | ` +
+      `Juz na MAX: <b>${atMaxLevel}</b> | ` +
+      `Znana maks. pojemnosc pojazdow: <b>${withVehicleCapacity}</b>`;
+
+    pager.innerHTML = `
+      <button type="button" class="or-bm-btn or-bm-btn-small" id="${APP_ID}-dev-prev" ${state.developmentPage <= 1 ? 'disabled' : ''}>‹ Poprzednia</button>
+      <span>Strona ${state.developmentPage} z ${pages}</span>
+      <button type="button" class="or-bm-btn or-bm-btn-small" id="${APP_ID}-dev-next" ${state.developmentPage >= pages ? 'disabled' : ''}>Nastepna ›</button>`;
+
+    document.getElementById(`${APP_ID}-dev-prev`)?.addEventListener('click', () => {
+      state.developmentPage--;
+      renderDevelopmentTable();
+    });
+
+    document.getElementById(`${APP_ID}-dev-next`)?.addEventListener('click', () => {
+      state.developmentPage++;
+      renderDevelopmentTable();
+    });
+  }
+
   function setActiveTab(tab) {
-    state.activeTab = ['rename', 'specializations', 'staffing'].includes(tab) ? tab : 'rename';
+    state.activeTab = ['rename', 'specializations', 'staffing', 'development'].includes(tab) ? tab : 'rename';
     state.page = 1;
     state.specializationPage = 1;
     state.staffingPage = 1;
+    state.developmentPage = 1;
 
     const renameToolbar = document.getElementById(`${APP_ID}-rename-toolbar`);
     const renameHelp = document.getElementById(`${APP_ID}-rename-help`);
@@ -919,10 +1004,13 @@
     const specializationPanel = document.getElementById(`${APP_ID}-specialization-panel`);
     const staffingToolbar = document.getElementById(`${APP_ID}-staffing-toolbar`);
     const staffingPanel = document.getElementById(`${APP_ID}-staffing-panel`);
+    const developmentToolbar = document.getElementById(`${APP_ID}-development-toolbar`);
+    const developmentPanel = document.getElementById(`${APP_ID}-development-panel`);
 
     const isRename = state.activeTab === 'rename';
     const isSpecializations = state.activeTab === 'specializations';
     const isStaffing = state.activeTab === 'staffing';
+    const isDevelopment = state.activeTab === 'development';
 
     if (renameToolbar) renameToolbar.style.display = isRename ? 'flex' : 'none';
     if (renameHelp) renameHelp.style.display = isRename ? 'block' : 'none';
@@ -931,6 +1019,8 @@
     if (specializationPanel) specializationPanel.style.display = isSpecializations ? 'flex' : 'none';
     if (staffingToolbar) staffingToolbar.style.display = isStaffing ? 'flex' : 'none';
     if (staffingPanel) staffingPanel.style.display = isStaffing ? 'flex' : 'none';
+    if (developmentToolbar) developmentToolbar.style.display = isDevelopment ? 'flex' : 'none';
+    if (developmentPanel) developmentPanel.style.display = isDevelopment ? 'flex' : 'none';
 
     document.querySelectorAll(`#${APP_ID}-modal .or-bm-tab`).forEach(button => {
       button.classList.toggle('or-bm-tab-active', button.dataset.tab === state.activeTab);
@@ -1514,7 +1604,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v0.12.0</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v3.01</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1522,6 +1612,7 @@
           <button type="button" class="or-bm-tab or-bm-tab-active" data-tab="rename">✏️ Edycja nazw</button>
           <button type="button" class="or-bm-tab" data-tab="specializations">🧩 Specjalizacje</button>
           <button type="button" class="or-bm-tab" data-tab="staffing">👥 Obsada i pojazdy</button>
+          <button type="button" class="or-bm-tab" data-tab="development">🏗️ Rozbudowa</button>
         </div>
 
         <div class="or-bm-toolbar">
@@ -1681,6 +1772,38 @@
           </div>
         </div>
 
+        <div class="or-bm-toolbar" id="${APP_ID}-development-toolbar" style="display:none">
+          <span class="or-bm-staffing-note">
+            Maks. poziom pochodzi z katalogu typu budynku. Maks. pojazdow = pojemnosc przy maksymalnym poziomie
+            z uwzglednieniem posiadanych, ukonczonych rozbudow dodajacych miejsca parkingowe.
+          </span>
+        </div>
+
+        <div class="or-bm-body" id="${APP_ID}-development-panel" style="display:none">
+          <div class="or-bm-table-wrap">
+            <table class="or-bm-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Budynek</th>
+                  <th>Rodzaj budynku</th>
+                  <th>Wariant</th>
+                  <th>Obecny poziom</th>
+                  <th>Maks. poziom</th>
+                  <th>Maks. pojazdow<br>przy maks. rozbudowie</th>
+                </tr>
+              </thead>
+              <tbody id="${APP_ID}-development-tbody">
+                <tr><td colspan="7" class="or-bm-empty">Otworz menedzer, aby pobrac dane.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="or-bm-footer">
+            <div class="or-bm-summary" id="${APP_ID}-development-summary">Nie wczytano danych.</div>
+            <div class="or-bm-pager" id="${APP_ID}-development-pager"></div>
+          </div>
+        </div>
+
         <div id="${APP_ID}-status" class="or-bm-status or-bm-status-info">Gotowy.</div>
         <div id="${APP_ID}-confirm"></div>
       </div>`;
@@ -1743,6 +1866,7 @@
         state.page = 1;
         state.specializationPage = 1;
         state.staffingPage = 1;
+        state.developmentPage = 1;
         renderCurrentTab();
       }, 120);
     });
@@ -1752,6 +1876,7 @@
       state.page = 1;
       state.specializationPage = 1;
       state.staffingPage = 1;
+      state.developmentPage = 1;
       renderCurrentTab();
     });
 
@@ -1806,5 +1931,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 0.12.0 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 3.01 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();
