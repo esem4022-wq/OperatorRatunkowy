@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      3.01
+// @version      3.02
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, obsada, pojazdy i rozbudowa w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 3.01
+ * Wersja 3.02
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -1604,7 +1604,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v3.01</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v3.02</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1931,5 +1931,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 3.01 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 3.02 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
 })();

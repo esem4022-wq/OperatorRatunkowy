@@ -1,0 +1,131 @@
+MENEDŻER BUDYNKÓW OR
+====================
+
+Plik skryptu:
+  menedzer-budynkow-or.user.js
+
+Repozytorium GitHub:
+  https://github.com/esem4022-wq/OperatorRatunkowy
+
+Aktualizacje Tampermonkey:
+  @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
+  @updateURL    https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-budynkow-or.user.js
+  @downloadURL  https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-budynkow-or.user.js
+
+WAŻNE
+-----
+Do repozytorium GitHub wgrywaj plik pod stałą nazwą:
+  menedzer-budynkow-or.user.js
+
+Numer wersji znajduje się w nagłówku userscriptu (@version) oraz w nazwie archiwum ZIP.
+
+
+HISTORIA WERSJI
+===============
+
+v3.02
+-----
+- Dodano do pakietu plik „CZYTAJ_TO - Menedżer budynków OR.txt”.
+- Plik CZYTAJ_TO pełni od tej wersji rolę trwałej historii zmian; w kolejnych wersjach należy dopisywać nowe sekcje bez usuwania starszych wpisów.
+- Zweryfikowano obsługę aktualizacji z GitHuba dla stałej nazwy pliku menedzer-budynkow-or.user.js.
+- Zachowano wszystkie funkcje z v3.01.
+
+v3.01
+-----
+- Dodano zakładkę „Rozbudowa”.
+- Dodano podgląd rodzaju budynku.
+- Dodano informację o wariancie budynku: standardowy / mały.
+- Dodano obecny poziom budynku.
+- Dodano maksymalny poziom rozbudowy.
+- Dodano informację, ile poziomów pozostało do maksimum.
+- Dodano wyliczenie maksymalnej liczby pojazdów po pełnej rozbudowie.
+- W obliczeniach pojemności uwzględniane są posiadane ukończone rozbudowy dodające miejsca parkingowe.
+- Jeżeli katalog nie udostępnia potrzebnych danych, wyświetlany jest znak „—” zamiast wartości szacowanej.
+
+v3.00
+-----
+- Ujednolicono numerację projektu z pozostałymi menedżerami Operator Ratunkowy do serii 3.xx.
+- Wersja bazowa dla dalszego rozwoju Menedżera budynków OR.
+
+v0.12
+-----
+- Przycisk Menedżera budynków jest wyświetlany tylko na stronie głównej OperatorRatunkowy.pl.
+- Przycisk nie pojawia się na podstronach, w ekranach budynków ani w iframe.
+
+v0.11
+-----
+- W zakładce „Obsada i pojazdy” dodano możliwość ukrycia kolumny „Typ budynku”.
+- Ustawienie widoczności kolumny jest zapamiętywane.
+- Dodano edycję „Pracownicy docelowo” bezpośrednio w tabeli.
+- Dodano sterowanie rekrutacją z listy rozwijanej.
+- Dostępne opcje rekrutacji obejmują wyłączenie, 1 dzień, 2 dni, 3 dni oraz tryb automatyczny.
+- Zmieniono nazwę kolumny „Max pojazdów na obecnym poziomie” na „Max pojazdów”.
+- Zmieniono nazwę kolumny „Potrzeba dla pojazdów (max załogi)” na „Potrzeba załogi”.
+
+v0.10
+-----
+- Dodano filtry „Brakuje załogi” i „Za dużo załogi”.
+- Filtry porównują obecną liczbę pracowników z zapotrzebowaniem wynikającym z maksymalnych obsad pojazdów.
+
+v0.09
+-----
+- Poprawiono stałą nazwę pliku na menedzer-budynkow-or.user.js.
+- Poprawiono adresy aktualizacji GitHub do właściwej nazwy pliku.
+
+v0.08
+-----
+- Dodano obsługę aktualizacji skryptu przez GitHub.
+- Dodano @homepageURL, @updateURL i @downloadURL.
+
+v0.07
+-----
+- W kolumnie „Max pojazdów” dodano zielone oznaczenie, gdy obecna liczba pojazdów jest mniejsza od dostępnego maksimum.
+- Zachowano czerwone oznaczenie przekroczenia maksymalnej pojemności.
+
+v0.06
+-----
+- Dodano kolory w kolumnie „Potrzeba załogi”:
+  niebieski = pracowników jest za dużo,
+  zielony = liczba pracowników jest odpowiednia,
+  żółty = pracowników jest za mało.
+
+v0.05
+-----
+- Dodano zakładkę „Obsada i pojazdy”.
+- Dodano liczbę pojazdów w budynku.
+- Dodano maksymalną liczbę pojazdów dla obecnego poziomu.
+- Dodano obecną liczbę pracowników.
+- Dodano docelową liczbę pracowników.
+- Dodano zapotrzebowanie na załogę wynikające z pojazdów.
+- Dodano bilans pracowników + / -.
+- Dodano informację o rekrutacji.
+- Zapotrzebowanie uwzględnia maksymalną załogę każdego pojazdu i max_personnel_override.
+- Przycisk Menedżera budynków ustawiono obok Menedżera pojazdów.
+
+v0.04
+-----
+- Dodano zakładkę „Specjalizacje”.
+- Przy każdym budynku wyświetlane są aktywne, wyłączone oraz będące w budowie / niedostępne specjalizacje.
+- Dodano filtrowanie po specjalizacji.
+- Dodano filtr budynków z i bez specjalizacji.
+
+v0.03
+-----
+- Naprawiono zapis nazw budynków.
+- Zmieniono mechanizm zapisu na właściwe pole #building_name i formularz #edit_building_ID.
+- Poprawiono diagnostykę błędów zapisu.
+
+v0.02
+-----
+- Dodano pole {stara:poza[]} oraz alias {nazwa:poza[]}.
+- Pole usuwa fragmenty znajdujące się w nawiasach [] i pozostawia resztę nazwy.
+
+v0.01
+-----
+- Pierwsza wersja Menedżera budynków OR.
+- Lista budynków w jednej tabeli.
+- Wyszukiwanie i filtrowanie po typie budynku.
+- Masowa zmiana nazw.
+- Szablony nazw i numeracja {n}, {n:02}, {n:03}.
+- Obsługa fragmentów nazwy, w tym tekstu między [].
+- Podgląd zmian przed zapisem.
