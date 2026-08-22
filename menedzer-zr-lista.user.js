@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.03
+// @version      3.04
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.03';
+    const VERSION = '3.04';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -591,6 +591,16 @@
             btn.disabled = busy || azrCategoryId == null;
         });
 
+        const deleteAll = document.getElementById('orzr-missing-azr-delete-all');
+        if (deleteAll) {
+            const deletedRows = deletedMode ? getDeletedFromAZRRows() : [];
+            deleteAll.hidden = !deletedMode;
+            deleteAll.disabled = busy || azrCategoryId == null || deletedRows.length === 0;
+            deleteAll.textContent = state.deleting
+                ? 'Usuwanie…'
+                : `🗑 Usuń wszystkie znalezione (${deletedRows.length})`;
+        }
+
         const sync = document.getElementById('orzr-missing-azr-sync-vehicles');
         if (sync) {
             sync.hidden = deletedMode;
@@ -761,6 +771,92 @@
         } finally {
             state.deleting = false;
             if (button && document.contains(button)) button.textContent = oldText || '🗑 Usuń z AZR';
+            updateMissingAZRButtons();
+            updateStats();
+        }
+    }
+
+
+    async function deleteAllAZROrphans() {
+        if (state.deleting || state.copying || state.azrVehicleSyncing) return;
+        const azrCategoryId = getAZRCategoryId();
+        if (azrCategoryId == null) {
+            setStatus('Nie znaleziono kategorii o dokładnej nazwie „AZR”.', 'danger');
+            return;
+        }
+
+        let rows = getDeletedFromAZRRows();
+        if (!rows.length) {
+            setStatus('Nie znaleziono ZR do usunięcia z AZR.', 'success');
+            return;
+        }
+
+        if (!confirm(`Usunąć z AZR wszystkie znalezione osierocone ZR (${rows.length})?
+
+Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy nadal nie ma odpowiednika poza AZR — także w „Bez kategorii”. Tej operacji nie można cofnąć.`)) return;
+
+        const button = document.getElementById('orzr-missing-azr-delete-all');
+        state.deleting = true;
+        updateMissingAZRButtons();
+
+        let removed = 0;
+        let skipped = 0;
+        let failed = 0;
+        const errors = [];
+
+        try {
+            setStatus('Odświeżam listę przed zbiorczym usuwaniem z AZR…', 'info');
+            state.aaos = await fetchAAOListNormalized();
+            rows = getDeletedFromAZRRows();
+            const ids = rows.map(aao => aao.id);
+
+            if (!ids.length) {
+                renderMissingAZRTable();
+                setStatus('Po ponownym sprawdzeniu nie ma ZR do usunięcia z AZR.', 'success');
+                return;
+            }
+
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i];
+                const current = state.aaos.find(aao => aao.id === id);
+                const stillOrphan = current && getDeletedFromAZRRows().some(aao => aao.id === id);
+
+                if (!stillOrphan) {
+                    skipped++;
+                    continue;
+                }
+
+                if (button && document.contains(button)) {
+                    button.textContent = `Usuwam ${i + 1}/${ids.length}…`;
+                }
+                setStatus(`Usuwam ${i + 1}/${ids.length}: „${current.caption}” z AZR…`, 'info');
+
+                try {
+                    // deleteViaNativeEditor zwraca świeżą listę API po potwierdzonym usunięciu.
+                    // Dzięki temu przy następnym elemencie kontrolujemy już aktualny stan,
+                    // również z uwzględnieniem kategorii „Bez kategorii”.
+                    state.aaos = await deleteViaNativeEditor(id);
+                    state.dirty.delete(id);
+                    state.copyTargets.delete(id);
+                    removed++;
+                } catch (e) {
+                    failed++;
+                    errors.push(`ID ${id}${current?.caption ? ` „${current.caption}”` : ''}: ${e.message || e}`);
+                    try {
+                        state.aaos = await fetchAAOListNormalized();
+                    } catch (_) {}
+                }
+            }
+
+            renderMissingAZRTable();
+            const left = getDeletedFromAZRRows().length;
+            const summary = `Zbiorcze usuwanie zakończone. Usunięto: ${removed} • pominięto po ponownej kontroli: ${skipped} • błędy: ${failed} • pozostało do usunięcia: ${left}.`;
+            setStatus(errors.length ? `${summary} ${errors.slice(0, 3).join(' | ')}${errors.length > 3 ? '…' : ''}` : summary, failed ? 'warning' : 'success');
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd zbiorczego usuwania ZR z AZR: ${e.message || e}`, 'danger');
+        } finally {
+            state.deleting = false;
             updateMissingAZRButtons();
             updateStats();
         }
@@ -2221,7 +2317,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-missing-azr-table th:nth-child(5),#orzr-missing-azr-table td:nth-child(5){width:260px}
 .orzr-missing-name{overflow-wrap:anywhere}
 .orzr-missing-note{margin-top:3px;font-size:11px;color:#777}
-#orzr-missing-azr-copy-all,#orzr-missing-azr-search-deleted{white-space:nowrap}
+#orzr-missing-azr-copy-all,#orzr-missing-azr-search-deleted,#orzr-missing-azr-delete-all{white-space:nowrap}
 .orzr-missing-azr-info{font-size:12px;color:#555}
 #orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
 #orzr-azr-update-errors[hidden]{display:none}
@@ -2351,8 +2447,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button id="orzr-missing-azr-copy-all" type="button" class="btn btn-success">⧉ Kopiuj wszystkie do AZR (0)</button>
         <button id="orzr-missing-azr-sync-vehicles" type="button" class="btn btn-primary">🔄 Sprawdź i aktualizuj pojazdy AZR</button>
         <button id="orzr-missing-azr-search-deleted" type="button" class="btn btn-danger">🗑 Szukaj usuniętych</button>
+        <button id="orzr-missing-azr-delete-all" type="button" class="btn btn-danger" hidden>🗑 Usuń wszystkie znalezione (0)</button>
         <button id="orzr-missing-azr-refresh" type="button" class="btn btn-default">↻ Sprawdź ponownie</button>
-        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. „Szukaj usuniętych” pokazuje ZR pozostawione w AZR, których nie ma już w żadnej innej kategorii. Każda nowa kopia do AZR jest zawsze ustawiana w kolumnie 1. Synchronizacja porównuje wyłącznie pojazdy i ich liczby.</span>
+        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. „Szukaj usuniętych” pokazuje ZR pozostawione w AZR, których nie ma już w żadnej innej kategorii; w tym trybie można też użyć „Usuń wszystkie znalezione”. Każda nowa kopia do AZR jest zawsze ustawiana w kolumnie 1. Synchronizacja porównuje wyłącznie pojazdy i ich liczby.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -2452,6 +2549,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         document.getElementById('orzr-missing-azr-copy-all').addEventListener('click', copyAllMissingToAZR);
         document.getElementById('orzr-missing-azr-sync-vehicles').addEventListener('click', syncAZRVehicleRequirements);
         document.getElementById('orzr-missing-azr-search-deleted').addEventListener('click', searchDeletedInAZR);
+        document.getElementById('orzr-missing-azr-delete-all').addEventListener('click', deleteAllAZROrphans);
         document.getElementById('orzr-missing-azr-refresh').addEventListener('click', async () => {
             if (state.copying || state.azrVehicleSyncing) return;
             try {

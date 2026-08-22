@@ -15,6 +15,15 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v3.04 — 22.08.2026
+------------------
+- W trybie „Szukaj usuniętych” w zakładce „Brakuje w AZR” dodano przycisk „Usuń wszystkie znalezione”.
+- Przycisk jest widoczny tylko w widoku usuniętych i pokazuje liczbę aktualnie znalezionych ZR do usunięcia.
+- Przed zbiorczym usuwaniem wymagane jest potwierdzenie, a lista ZR jest ponownie pobierana z gry.
+- Przed usunięciem każdej pozycji skrypt ponownie sprawdza, czy ZR nadal jest osierocone. Przy tej kontroli uwzględniana jest również kategoria „Bez kategorii”.
+- Zbiorcze usuwanie pokazuje postęp oraz podsumowanie: liczba usuniętych, pominiętych po ponownej kontroli, błędów i pozycji pozostałych do usunięcia.
+- Nadal można usuwać pojedyncze ZR przyciskiem „Usuń z AZR”.
+
 v3.03 — 22.08.2026
 ------------------
 - Korekta funkcji „Szukaj usuniętych” w zakładce „Brakuje w AZR”.
