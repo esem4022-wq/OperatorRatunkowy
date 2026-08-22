@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.01
+Wersja: 3.02
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -35,6 +35,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.02
+- poprawiono specjalną regułę `1 OPI` -> ZR `Radiowóz`: skrypt sprawdza teraz bezpośrednio widoczną żółtą kartę misji i sekcję `Pojazdy`, niezależnie od mission_help,
+- reguła `Radiowóz` uruchamia się tylko wtedy, gdy w widocznej sekcji `Pojazdy` znajduje się dokładnie jedno wymaganie: `1 OPI`,
+- wyszukiwanie docelowej ZR nadal odbywa się wyłącznie w własnej kategorii `AZR`,
+- pozostałe reguły i opóźnienie auto-zaznaczania 0,5 s pozostają bez zmian,
+- adresy GitHub pozostają bez katalogu userscripts/.
+
 v3.01
 - poprawiono regułę `1 OPI` -> ZR `Radiowóz`: skrypt sprawdza teraz także bezpośrednio widoczną sekcję `Pojazdy`, więc różnice w opisie zwracanym przez mission_help nie blokują reguły,
 - rozpoznawanie `OPI` toleruje techniczne warianty opisu, ale nadal wymaga dokładnie jednego pojazdu tego typu,

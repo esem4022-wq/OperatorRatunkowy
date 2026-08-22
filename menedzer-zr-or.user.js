@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.01
+// @version      3.02
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.01';
+    const VERSION = '3.02';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -2044,6 +2044,47 @@
         );
     }
 
+    function getVisibleOnlyOPIRequirement() {
+        // v3.02: bezpośredni odczyt z widocznej żółtej karty misji.
+        // Nie zależy od mission_help ani od poprawnego rozpoznania nazwy misji.
+        // Reguła ma zadziałać tylko dla sekcji Pojazdy zawierającej dokładnie: 1 OPI.
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!el || !el.isConnected) continue;
+
+            let hidden = false;
+            let node = el;
+            while (node && node !== document.body) {
+                const cs = getComputedStyle(node);
+                if (cs.display === 'none' || cs.visibility === 'hidden') {
+                    hidden = true;
+                    break;
+                }
+                node = node.parentElement;
+            }
+            if (hidden) continue;
+
+            const raw = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || raw.length > 5000) continue;
+            if (!/(^|\n)\s*Pojazdy\s*(\n|$)/i.test(raw) && !/\bPojazdy\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            const vehicles = extractVehiclesFromCardText(raw)
+                .filter(v => Number(v?.count) > 0);
+
+            if (vehicles.length !== 1 || !isSingleOPIRequirement(vehicles[0])) continue;
+
+            // Preferujemy najmniejszy kontener - najczęściej jest to dokładna żółta karta.
+            candidates.push({ vehicle: vehicles[0], len: raw.length });
+        }
+
+        candidates.sort((a, b) => a.len - b.len);
+        return candidates[0]?.vehicle || null;
+    }
+
     function isSingleOPIRequirement(vehicle) {
         if (!vehicle || Number(vehicle.count) !== 1) return false;
 
@@ -2081,6 +2122,11 @@
         // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
         if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
         if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) return 'A TK';
+
+        // v3.02: jeśli na aktualnie widocznej karcie jedynym wymaganiem jest
+        // dokładnie 1 OPI, wybierz ZR Radiowóz od razu. Ten test omija różnice
+        // w mission_help i działa bezpośrednio na tym, co użytkownik widzi.
+        if (getVisibleOnlyOPIRequirement()) return 'Radiowóz';
 
         let vehicles = [];
         let maxPatients = 0;
