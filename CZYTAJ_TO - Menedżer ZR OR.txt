@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.07
+Wersja: 3.08
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -36,6 +36,14 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.08
+- naprawiono przycisk `EDYTUJ ZR`: przed otwarciem edytora skrypt ponownie odczytuje i zapisuje wymagania z aktualnie otwartej misji,
+- edytor otrzymuje w adresie znacznik `orzr_edit_from_mission=1` oraz nazwę źródłowej misji,
+- po wejściu do edytora zapisany capture jest weryfikowany względem nazwy źródłowej misji; dane poprzedniej misji są odrzucane zamiast wyświetlane,
+- po aktualizacji zastosowano nowy klucz capture, aby stary zapamiętany stan z wcześniejszych wersji nie mógł wejść do pierwszej edycji,
+- analogiczny znacznik nazwy dodano także przy `UTWÓRZ ZR`, co dodatkowo zabezpiecza przed użyciem nieaktualnego capture,
+- zachowano wyszukiwanie `EDYTUJ ZR` poza kategoriami `AZR` i `Bez kategorii` oraz wszystkie dotychczasowe reguły auto-zaznaczania.
+
 v3.07
 - dodano przycisk `✎ EDYTUJ ZR` obok `UTWÓRZ ZR`,
 - przycisk wyszukuje pasującą ZR po nazwie bieżącej misji i otwiera `/aaos/<ID>/edit`,

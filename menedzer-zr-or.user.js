@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.07
+// @version      3.08
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.07';
-    const CAPTURE_KEY = 'or_zr_capture_v043';
+    const VERSION = '3.08';
+    const CAPTURE_KEY = 'or_zr_capture_v308';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -3254,13 +3254,28 @@
         return null;
     }
 
-    async function openMatchingAAOEditor() {
-        const missionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame();
+    async function openMatchingAAOEditor(currentCapture = null) {
+        const liveMissionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame();
+        const capturedMissionName = currentCapture?.name || '';
+        const missionName = liveMissionName || capturedMissionName;
         const cleanMissionName = stripFalseAlarmSuffix(missionName) || sanitizeMissionName(missionName);
 
         if (!exactMissionNameKey(cleanMissionName)) {
             alert('Menedżer ZR: nie udało się odczytać nazwy aktualnej misji.');
             return false;
+        }
+
+        // EDYTUJ ZR musi przenieść do edytora wymagania BIEŻĄCEJ misji,
+        // a nie poprzednio zapamiętanej. Jeśli capture podał inną/pustą nazwę,
+        // wymuszamy nazwę odczytaną bezpośrednio z aktualnego okna misji.
+        if (currentCapture) {
+            const captureKey = exactMissionNameKey(stripFalseAlarmSuffix(currentCapture.name) || sanitizeMissionName(currentCapture.name));
+            const liveKey = exactMissionNameKey(cleanMissionName);
+            if (!captureKey || captureKey !== liveKey) {
+                currentCapture.name = cleanMissionName;
+            }
+            state.capture = currentCapture;
+            saveJSON(CAPTURE_KEY, currentCapture);
         }
 
         const targetNames = await editTargetNameCandidates(cleanMissionName);
@@ -3284,6 +3299,8 @@
         }
 
         const url = new URL(`/aaos/${id}/edit`, location.origin);
+        url.searchParams.set('orzr_edit_from_mission', '1');
+        url.searchParams.set('orzr_mission_name', cleanMissionName);
         try {
             GM_openInTab(url.href, { active: true, insert: true });
         } catch {
@@ -3435,6 +3452,7 @@
 
             const url = new URL('/aaos/new', location.origin);
             url.searchParams.set('orzr_from_mission', '1');
+            if (data?.name) url.searchParams.set('orzr_mission_name', data.name);
 
             try {
                 GM_openInTab(url.href, { active: true, insert: true });
@@ -3452,7 +3470,10 @@
             edit.textContent = 'SZUKAM…';
 
             try {
-                await openMatchingAAOEditor();
+                // Zapisz aktualną misję tuż przed przejściem do edycji.
+                // Dzięki temu panel edytora nie może odziedziczyć wymagań poprzedniej misji.
+                const currentCapture = await captureMission();
+                await openMatchingAAOEditor(currentCapture);
             } catch (error) {
                 console.warn(TAG, 'Nie udało się otworzyć ZR do edycji:', error);
                 alert('Menedżer ZR: ' + (error?.message || String(error)));
@@ -3839,6 +3860,29 @@
 
         collectFields();
 
+        // Nie pokazuj wymagań z poprzedniej misji. Przy przejściu z przycisku
+        // UTWÓRZ/EDYTUJ przekazujemy nazwę źródłowej misji w URL i sprawdzamy,
+        // czy zapisany capture rzeczywiście dotyczy tej samej misji.
+        const editorParams = new URLSearchParams(location.search);
+        const fromMissionContext =
+            editorParams.get('orzr_from_mission') === '1' ||
+            editorParams.get('orzr_edit_from_mission') === '1';
+        const expectedMissionName = sanitizeMissionName(editorParams.get('orzr_mission_name') || '');
+
+        if (fromMissionContext && expectedMissionName) {
+            const expectedKey = exactMissionNameKey(stripFalseAlarmSuffix(expectedMissionName) || expectedMissionName);
+            const capturedName = stripFalseAlarmSuffix(state.capture?.name || '') || sanitizeMissionName(state.capture?.name || '');
+            const capturedKey = exactMissionNameKey(capturedName);
+
+            if (!state.capture || !capturedKey || capturedKey !== expectedKey) {
+                console.warn(TAG, 'Odrzucono nieaktualne wymagania z poprzedniej misji.', {
+                    expectedMissionName,
+                    capturedName
+                });
+                state.capture = null;
+            }
+        }
+
         const form = document.querySelector('form');
         if (!form) return;
 
@@ -3849,7 +3893,7 @@
         panel.innerHTML = `
             <div class="panel-heading">
                 <strong>Menedżer ZR v${VERSION}</strong>
-                <span style="margin-left:12px;">${state.capture ? state.capture.name : 'Brak zapisanej misji'}</span>
+                <span style="margin-left:12px;">${state.capture ? state.capture.name : (fromMissionContext ? 'Brak aktualnych danych misji' : 'Brak zapisanej misji')}</span>
                 ${state.capture?.maxPatients ? `<span style="margin-left:12px;" class="label label-info">Maks. pacjentów: ${state.capture.maxPatients}</span>` : ''}
             </div>
             <div class="panel-body">
