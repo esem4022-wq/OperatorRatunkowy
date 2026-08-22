@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.06
+// @version      3.07
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.06';
+    const VERSION = '3.07';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -3165,6 +3165,135 @@
     }
 
     // ------------------------------------------------------------------
+    // RĘCZNE PRZEJŚCIE DO EDYCJI ISTNIEJĄCEGO ZR
+    // ------------------------------------------------------------------
+
+    function aaoCategoryValue(aao) {
+        return aao?.aao_category_id ?? aao?.category_id ?? aao?.aaoCategoryId ?? null;
+    }
+
+    function isUncategorizedAAO(aao) {
+        const value = aaoCategoryValue(aao);
+        return value === null || value === undefined || value === '' || String(value) === '0';
+    }
+
+    async function editTargetNameCandidates(missionName) {
+        const cleanMissionName = stripFalseAlarmSuffix(missionName) || sanitizeMissionName(missionName);
+        const missionKey = exactMissionNameKey(cleanMissionName);
+        if (!missionKey) return [];
+
+        // Te dwie reguły nazwane są celowymi aliasami używanymi także przez
+        // auto-zaznaczanie. Dla edycji otwieramy właśnie używaną ZR.
+        if (missionKey === exactMissionNameKey('Transport pacjenta')) {
+            return ['Ambulans T'];
+        }
+        if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) {
+            return ['A TK'];
+        }
+
+        const candidates = [cleanMissionName];
+
+        // Dla ogólnych skrótów (Ambulans/Radiowóz/Straż) najpierw próbujemy
+        // znaleźć ZR o pełnej nazwie misji poza AZR. Dopiero gdy jej nie ma,
+        // można otworzyć gotową ZR skrótową.
+        try {
+            const special = visibleSpecialAutoSelectTarget() || await autoSelectTargetName(missionName);
+            if (special && exactMissionNameKey(special) !== missionKey) {
+                candidates.push(special);
+            }
+        } catch (error) {
+            console.warn(TAG, 'Nie udało się ustalić dodatkowej nazwy ZR do edycji:', error);
+        }
+
+        return [...new Set(candidates.map(sanitizeMissionName).filter(Boolean))];
+    }
+
+    async function findEditableAAOOutsideAZR(targetNames) {
+        const names = Array.isArray(targetNames) ? targetNames : [targetNames];
+        const wantedGroups = names
+            .map(name => ({
+                name,
+                keys: new Set(zrNameCandidates(name).map(exactMissionNameKey).filter(Boolean))
+            }))
+            .filter(group => group.keys.size);
+
+        if (!wantedGroups.length) return null;
+
+        const [aaos, azrCategoryId] = await Promise.all([
+            loadAAOsForAutoSelect(true),
+            loadAZRCategoryId(false)
+        ]);
+
+        // Jeśli nie umiemy jednoznacznie zidentyfikować AZR, nie ryzykujemy
+        // otwarcia technicznej kopii zamiast właściwej ZR użytkownika.
+        if (azrCategoryId == null || azrCategoryId === '') {
+            throw new Error('Nie udało się rozpoznać własnej kategorii AZR.');
+        }
+
+        const list = Array.isArray(aaos) ? aaos : [];
+
+        for (const group of wantedGroups) {
+            const matches = list.filter(aao => {
+                if (!aao || isUncategorizedAAO(aao)) return false;
+
+                const categoryId = aaoCategoryValue(aao);
+                if (String(categoryId ?? '') === String(azrCategoryId)) return false;
+
+                const caption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
+                return group.keys.has(exactMissionNameKey(caption));
+            });
+
+            if (matches.length) {
+                if (matches.length > 1) {
+                    log(`EDYTUJ ZR: znaleziono ${matches.length} pasujące ZR „${group.name}” poza AZR/Bez kategorii; otwieram pierwszą.`);
+                }
+                return matches[0];
+            }
+        }
+
+        return null;
+    }
+
+    async function openMatchingAAOEditor() {
+        const missionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame();
+        const cleanMissionName = stripFalseAlarmSuffix(missionName) || sanitizeMissionName(missionName);
+
+        if (!exactMissionNameKey(cleanMissionName)) {
+            alert('Menedżer ZR: nie udało się odczytać nazwy aktualnej misji.');
+            return false;
+        }
+
+        const targetNames = await editTargetNameCandidates(cleanMissionName);
+        const aao = await findEditableAAOOutsideAZR(targetNames);
+
+        if (!aao) {
+            alert(
+                'Menedżer ZR: nie znaleziono pasującej ZR do edycji.\n\n' +
+                'Przeszukano wszystkie kategorie z wyjątkiem:\n' +
+                '- AZR\n' +
+                '- Bez kategorii\n\n' +
+                'Misja: ' + cleanMissionName
+            );
+            return false;
+        }
+
+        const id = aao?.id ?? aao?.aao_id;
+        if (id == null || id === '') {
+            alert('Menedżer ZR: znaleziono ZR, ale nie udało się odczytać jej ID.');
+            return false;
+        }
+
+        const url = new URL(`/aaos/${id}/edit`, location.origin);
+        try {
+            GM_openInTab(url.href, { active: true, insert: true });
+        } catch {
+            window.open(url.href, '_blank');
+        }
+
+        return true;
+    }
+
+    // ------------------------------------------------------------------
     // PRZYCISKI W NAGŁÓWKU
     // ------------------------------------------------------------------
 
@@ -3246,6 +3375,27 @@
             'cursor:pointer !important'
         ].join(';');
 
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.textContent = '✎ EDYTUJ ZR';
+        edit.title = 'Znajdź ZR dla tej misji poza AZR i Bez kategorii i otwórz jej pełną edycję';
+        edit.style.cssText = [
+            'display:inline-block !important',
+            'visibility:visible !important',
+            'opacity:1 !important',
+            'height:34px !important',
+            'padding:0 14px !important',
+            'border:1px solid #2e6da4 !important',
+            'border-radius:4px !important',
+            'background:#337ab7 !important',
+            'background-image:none !important',
+            'color:#ffffff !important',
+            'font:700 13px/32px Arial,sans-serif !important',
+            'text-shadow:none !important',
+            'box-shadow:0 1px 3px rgba(0,0,0,.35) !important',
+            'cursor:pointer !important'
+        ].join(';');
+
         const save = document.createElement('button');
         save.type = 'button';
         save.textContent = '💾';
@@ -3293,6 +3443,27 @@
             }
         });
 
+        edit.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const oldText = edit.textContent;
+            edit.disabled = true;
+            edit.textContent = 'SZUKAM…';
+
+            try {
+                await openMatchingAAOEditor();
+            } catch (error) {
+                console.warn(TAG, 'Nie udało się otworzyć ZR do edycji:', error);
+                alert('Menedżer ZR: ' + (error?.message || String(error)));
+            } finally {
+                if (document.contains(edit)) {
+                    edit.disabled = false;
+                    edit.textContent = oldText;
+                }
+            }
+        });
+
         save.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -3305,7 +3476,7 @@
             }, 1400);
         });
 
-        wrap.append(create, save);
+        wrap.append(create, edit, save);
         header.appendChild(wrap);
 
         log('Dodano przyciski do nagłówka misji.', header);

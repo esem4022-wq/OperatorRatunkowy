@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.06
+Wersja: 3.07
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -32,9 +32,18 @@ NAJWAŻNIEJSZE FUNKCJE
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
 - automatyczne zaznaczenie istniejącej ZR, gdy jej nazwa jest identyczna z nazwą misji,
+- przycisk `EDYTUJ ZR` wyszukuje ZR dla bieżącej misji we wszystkich kategoriach poza `AZR` i `Bez kategorii`, a następnie otwiera jej pełną edycję.
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.07
+- dodano przycisk `✎ EDYTUJ ZR` obok `UTWÓRZ ZR`,
+- przycisk wyszukuje pasującą ZR po nazwie bieżącej misji i otwiera `/aaos/<ID>/edit`,
+- podczas wyszukiwania do edycji pomijana jest własna kategoria `AZR` oraz pozycje `Bez kategorii`,
+- dla reguł specjalnych obsługiwane są także używane ZR `Ambulans T`, `A TK`, `Ambulans`, `Radiowóz` i `Straż`; pełna ZR o nazwie misji ma pierwszeństwo przed ogólnymi skrótami,
+- jeśli nie znaleziono pasującej ZR poza AZR/Bez kategorii, skrypt pokazuje komunikat i niczego nie otwiera,
+- zachowano GitHub bez katalogu userscripts/.
+
 v3.06
 - naprawiono dublowanie wymagań pojazdów przy tworzeniu ZR: lista pojazdów z widocznej żółtej karty ma pierwszeństwo przed pomocniczymi tabelami `mission_help`,
 - tekstowy fallback `mission_help` nie dopisuje już drugiego zestawu wierszy `Wymagane ...`, jeśli tabela strukturalna zwróciła pojazdy,
