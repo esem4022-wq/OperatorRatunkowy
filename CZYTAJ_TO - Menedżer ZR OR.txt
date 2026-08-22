@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.04
+Wersja: 3.06
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -35,6 +35,21 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.06
+- naprawiono dublowanie wymagań pojazdów przy tworzeniu ZR: lista pojazdów z widocznej żółtej karty ma pierwszeństwo przed pomocniczymi tabelami `mission_help`,
+- tekstowy fallback `mission_help` nie dopisuje już drugiego zestawu wierszy `Wymagane ...`, jeśli tabela strukturalna zwróciła pojazdy,
+- poprawiono fałszywe auto-zaznaczanie ZR `Ambulans`: snapshot preferuje pełną kartę zawierającą sekcję `Pojazdy`, a nie mniejszy fragment `Pacjenci`,
+- jeśli w `AZR` istnieje ZR o dokładnej nazwie aktualnej misji, ma ona pierwszeństwo przed ogólnymi skrótami `Ambulans`, `Radiowóz` i `Straż`,
+- reguły nazwane `Transport pacjenta` -> `Ambulans T` oraz `Transport krytyczny...` -> `A TK` zachowują najwyższy priorytet,
+- zachowano opóźnienie 0,5 s, wyszukiwanie wyłącznie w `AZR`, blokadę auto-wyboru przy trwającej misji i GitHub bez katalogu userscripts/.
+
+v3.05
+- przebudowano regułę `1 OPI` -> ZR `Radiowóz`, aby działała niezależnie od momentu załadowania nazwy misji i mission_help,
+- dodano bezpośredni ścisły odczyt widocznej sekcji `Pojazdy`: dokładnie `1 OPI` natychmiast ustawia cel `Radiowóz`,
+- specjalne reguły są teraz sprawdzane przed wymaganiem poprawnej nazwy misji,
+- identyfikacja bieżącej misji preferuje `mission_id`, dzięki czemu retry nie blokuje kolejnych misji,
+- zachowano opóźnienie 0,5 s, wyszukiwanie wyłącznie w kategorii `AZR`, blokadę dla trwającej misji i pozostałe reguły specjalne.
+
 v3.04
 - naprawiono regułę `Ambulans` dla układu `Pojazdy -> 1 Ambulans` + `Pacjenci -> Dokładnie 1 pacjent`,
 - specjalne reguły `Ambulans`, `Radiowóz` i `Straż` korzystają teraz z jednego snapshotu aktualnie widocznej żółtej karty,

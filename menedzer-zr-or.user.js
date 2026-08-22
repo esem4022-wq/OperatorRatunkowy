@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.04
+// @version      3.06
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.04';
+    const VERSION = '3.06';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -1467,9 +1467,14 @@
             .trim();
 
         if (bodyText) {
-            const textVehicles = extractVehiclesFromCardText(bodyText);
-            for (const item of textVehicles) {
-                addVehicle(out.vehicles, out.byName, item.label, item.count, item.chance);
+            // v3.06: fallback tekstowy dla POJAZDÓW uruchamiamy tylko wtedy,
+            // gdy tabele strukturalne nie zwróciły żadnego pojazdu. W przeciwnym
+            // razie help potrafił dodać drugi zestaw wierszy typu `Wymagane ...`.
+            if (!out.vehicles.length) {
+                const textVehicles = extractVehiclesFromCardText(bodyText);
+                for (const item of textVehicles) {
+                    addVehicle(out.vehicles, out.byName, item.label, item.count, item.chance);
+                }
             }
 
             out.water = Math.max(out.water, extractResourceFromText(bodyText, 'water') || 0);
@@ -1696,9 +1701,14 @@
             const cardText = findCurrentMissionCardText(name);
 
             if (cardText && /\bPojazdy\b/i.test(cardText)) {
-                if (!vehicles.length) {
-                    vehicles = extractVehiclesFromCardText(cardText);
-                }
+                const visibleVehicles = extractVehiclesFromCardText(cardText)
+                    .filter(v => Number(v?.count) > 0);
+
+                // v3.06: jeżeli widoczna karta ma listę pojazdów, jest ona
+                // źródłem nadrzędnym nad mission_help. Zapobiega to dublowaniu
+                // i wierszom technicznym `Wymagane ...` z dodatkowych tabel helpa.
+                if (visibleVehicles.length) vehicles = visibleVehicles;
+
                 if (!water) water = extractResourceFromText(cardText, 'water') || 0;
                 if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
                 if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
@@ -2044,6 +2054,52 @@
         );
     }
 
+    function hasVisibleOnlyOneOPIRaw() {
+        // v3.05: najprostsza, niezależna ścieżka dla dokładnego układu:
+        // Pojazdy -> 1 OPI. Nie wymaga nazwy misji ani mission_help.
+        // Dzięki temu reguła Radiowóz działa nawet gdy tytuł/karta ładuje się
+        // w innej kolejności niż pozostałe dane.
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!el || !el.isConnected) continue;
+
+            let hidden = false;
+            let node = el;
+            while (node && node !== document.body) {
+                const cs = getComputedStyle(node);
+                if (cs.display === 'none' || cs.visibility === 'hidden') {
+                    hidden = true;
+                    break;
+                }
+                node = node.parentElement;
+            }
+            if (hidden) continue;
+
+            const raw = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || raw.length > 6000) continue;
+            if (!/\bPojazdy\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            const segment = getVehiclesTextSegmentFromCardText(raw);
+            if (!segment) continue;
+
+            const compact = segment
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            // Akceptujemy dokładnie jedną pozycję: "1 OPI".
+            if (!/^1\s+OPI\s*$/i.test(compact)) continue;
+
+            candidates.push(raw.length);
+        }
+
+        return candidates.length > 0;
+    }
+
     function getVisibleOnlyOPIRequirement() {
         // v3.02: bezpośredni odczyt z widocznej żółtej karty misji.
         // Nie zależy od mission_help ani od poprawnego rozpoznania nazwy misji.
@@ -2223,8 +2279,14 @@
             });
         }
 
-        candidates.sort((a, b) => a.len - b.len);
-        return candidates[0] || null;
+        // v3.06: gdy na ekranie istnieje sekcja `Pojazdy`, snapshot musi
+        // pochodzić z kontenera, który ją zawiera. Wcześniej najmniejszy kontener
+        // `Pacjenci` mógł wygrać i błędnie uruchomić skrót `Ambulans`, mimo że
+        // misja wymagała też OPI/SLOp/samochodu pożarniczego.
+        const withVehiclesSection = candidates.filter(c => /\bPojazdy\b/i.test(c.raw));
+        const pool = withVehiclesSection.length ? withVehiclesSection : candidates;
+        pool.sort((a, b) => a.len - b.len);
+        return pool[0] || null;
     }
 
     function specialAutoSelectTargetFromSnapshot(snapshot) {
@@ -2327,7 +2389,9 @@
         // dla reguły „Straż”, żeby nie pominąć pacjentów/wody/piany.
         cardText = findCurrentMissionCardText(missionName) || '';
         if (cardText) {
-            if (!vehicles.length) vehicles = extractVehiclesFromCardText(cardText);
+            const visibleVehicles = extractVehiclesFromCardText(cardText)
+                .filter(v => Number(v?.count) > 0);
+            if (visibleVehicles.length) vehicles = visibleVehicles;
             if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
             if (!water) water = extractResourceFromText(cardText, 'water') || 0;
             if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
@@ -2875,13 +2939,64 @@
         return true;
     }
 
+    function currentMissionIdentityForAutoSelect(missionName = '', specialTarget = '') {
+        // Preferujemy ID konkretnej instancji misji, żeby specjalna reguła mogła
+        // zadziałać nawet wtedy, gdy nazwa misji nie jest jeszcze dostępna.
+        const helpUrl = getExactCurrentMissionHelpUrl();
+        if (helpUrl) {
+            try {
+                const url = new URL(helpUrl, location.origin);
+                const missionId = url.searchParams.get('mission_id');
+                if (missionId) return `id:${missionId}`;
+            } catch {}
+        }
+
+        const info = document.querySelector('#mission_general_info');
+        if (info) {
+            const attrs = [
+                info.getAttribute('data-mission-id'),
+                info.getAttribute('mission_id'),
+                info.getAttribute('data-id'),
+                info.dataset?.missionId
+            ].filter(Boolean);
+            if (attrs.length) return `id:${attrs[0]}`;
+        }
+
+        const nameKey = exactMissionNameKey(missionName);
+        if (nameKey) return `name:${nameKey}`;
+
+        // Ostateczny fallback tylko dla specjalnej reguły. Łączymy z adresem
+        // aktualnego okna, aby nie blokować kolejnych misji o tym samym skrócie.
+        const specialKey = exactMissionNameKey(specialTarget);
+        if (specialKey) return `special:${specialKey}:${location.pathname}:${location.hash}`;
+
+        return '';
+    }
+
+    function visibleSpecialAutoSelectTarget() {
+        // Najpierw bezpośredni, ścisły test 1 OPI -> Radiowóz.
+        if (hasVisibleOnlyOneOPIRaw()) return 'Radiowóz';
+
+        const snapshot = getVisibleMissionRequirementSnapshot();
+        const fromSnapshot = specialAutoSelectTargetFromSnapshot(snapshot);
+        if (fromSnapshot) return fromSnapshot;
+
+        if (getVisibleOnlyOPIRequirement()) return 'Radiowóz';
+        if (getVisibleSingleAmbulancePatientRequirement()) return 'Ambulans';
+        return null;
+    }
+
     async function autoSelectMatchingAAO() {
         if (isAAOEditor() || state.autoSelectBusy) return;
 
+        // v3.05: specjalne reguły czytamy zanim wymagamy poprawnej nazwy misji.
+        // Jest to kluczowe dla misji, w których karta "1 OPI" pojawia się wcześniej
+        // niż data-mission-title / pozostałe elementy nagłówka.
+        const earlySpecialTarget = visibleSpecialAutoSelectTarget();
         const missionName = currentMissionNameForAutoSelect();
-        if (!missionName) return;
+        if (!missionName && !earlySpecialTarget) return;
 
-        const missionKey = exactMissionNameKey(missionName);
+        const missionKey = currentMissionIdentityForAutoSelect(missionName, earlySpecialTarget);
         if (!missionKey) return;
 
         // Dokładnie 0,5 sekundy po wykryciu nowej misji.
@@ -2916,12 +3031,25 @@
             // Nie kończymy wtedy auto-wyboru po nazwie misji, bo moglibyśmy
             // przegapić regułę `Ambulans`/`Radiowóz` i oznaczyć próbę jako zakończoną.
             const visibleSnapshot = getVisibleMissionRequirementSnapshot();
-            if (!visibleSnapshot && state.autoSelectAttempts <= 8) {
+            const liveSpecialTarget = visibleSpecialAutoSelectTarget() || earlySpecialTarget;
+
+            // Jeżeli mamy ścisły skrót (np. 1 OPI), nie czekamy na pełny snapshot
+            // ani nazwę misji. W przeciwnym wypadku zachowujemy dotychczasowe retry.
+            if (!visibleSnapshot && !liveSpecialTarget && state.autoSelectAttempts <= 8) {
                 scheduleAutoSelectRetry(150);
                 return;
             }
 
-            const targetName = await autoSelectTargetName(missionName);
+            const matchMissionName = stripFalseAlarmSuffix(missionName) || missionName;
+            const missionNameKey = exactMissionNameKey(matchMissionName);
+            const namedSpecialTarget =
+                missionNameKey === exactMissionNameKey('Transport pacjenta')
+                    ? 'Ambulans T'
+                    : (missionNameKey.startsWith(exactMissionNameKey('Transport krytyczny')) ? 'A TK' : null);
+
+            // Reguły wynikające z NAZWY misji mają najwyższy priorytet.
+            // Skróty Ambulans/Radiowóz/Straż są tylko fallbackiem.
+            let targetName = namedSpecialTarget || liveSpecialTarget || await autoSelectTargetName(missionName);
             if (!exactMissionNameKey(targetName)) return;
 
             // Własna kategoria jest identyfikowana przede wszystkim po zakładce
@@ -2941,9 +3069,29 @@
             const domCategoryId = categoryIdFromControl(control);
             const categoryId = domCategoryId ?? apiCategoryId;
 
-            // Najpierw wymagamy potwierdzenia przez API, że docelowa ZR naprawdę
-            // należy do własnej kategorii AZR. Nie ma globalnego fallbacku po nazwie.
-            let apiAAO = await apiAAOForAZR(targetName, categoryId);
+            // v3.06: jeśli skrót ogólny (Ambulans/Radiowóz/Straż) zadziałał,
+            // najpierw sprawdzamy, czy w AZR istnieje ZR o DOKŁADNEJ nazwie misji.
+            // Jeśli istnieje, zawsze ma pierwszeństwo. Skrót jest używany dopiero,
+            // gdy takiej ZR nie ma. Reguły nazwane Transport pacjenta/krytyczny
+            // pozostają celowymi wyjątkami i mają wyższy priorytet.
+            let apiAAO = null;
+            const genericShortcut = ['Ambulans', 'Radiowóz', 'Straż'].includes(targetName);
+
+            if (!namedSpecialTarget && genericShortcut && exactMissionNameKey(matchMissionName)) {
+                apiAAO = await apiAAOForAZR(matchMissionName, categoryId);
+                if (!apiAAO && (state.autoSelectAttempts === 1 || state.autoSelectAttempts === 3)) {
+                    await loadAAOsForAutoSelect(true);
+                    apiAAO = await apiAAOForAZR(matchMissionName, categoryId);
+                }
+
+                if (apiAAO) {
+                    log(`Auto-wybór: istnieje dokładna ZR misji „${matchMissionName}” w AZR - ma pierwszeństwo przed skrótem „${targetName}”.`);
+                    targetName = matchMissionName;
+                }
+            }
+
+            // Potwierdź docelową ZR w AZR. Nie ma globalnego fallbacku po nazwie.
+            if (!apiAAO) apiAAO = await apiAAOForAZR(targetName, categoryId);
             if (!apiAAO && (state.autoSelectAttempts === 1 || state.autoSelectAttempts === 3)) {
                 await loadAAOsForAutoSelect(true);
                 apiAAO = await apiAAOForAZR(targetName, categoryId);
