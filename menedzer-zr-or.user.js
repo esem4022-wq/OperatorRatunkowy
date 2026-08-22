@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.02
+// @version      3.03
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.02';
+    const VERSION = '3.03';
     const CAPTURE_KEY = 'or_zr_capture_v043';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -2085,6 +2085,59 @@
         return candidates[0]?.vehicle || null;
     }
 
+    function getVisibleSingleAmbulancePatientRequirement() {
+        // v3.03: bezpośredni odczyt wariantu widocznego na karcie:
+        // Pojazdy -> 1 Ambulans, Pacjenci -> Dokładnie 1 pacjent.
+        // Ten skrót nie zależy od mission_help, które dla części misji zwraca
+        // dodatkowe/techniczne wymagania i blokowało auto-wybór ZR „Ambulans”.
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!el || !el.isConnected) continue;
+
+            let hidden = false;
+            let node = el;
+            while (node && node !== document.body) {
+                const cs = getComputedStyle(node);
+                if (cs.display === 'none' || cs.visibility === 'hidden') {
+                    hidden = true;
+                    break;
+                }
+                node = node.parentElement;
+            }
+            if (hidden) continue;
+
+            const raw = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+
+            if (!raw || raw.length > 5000) continue;
+            if (!/(^|\n)\s*Pojazdy\s*(\n|$)/i.test(raw) && !/\bPojazdy\b/i.test(raw)) continue;
+            if (!/\bPacjenci\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            const maxPatients = extractMaxPatientsFromText(raw) || 0;
+            if (maxPatients !== 1) continue;
+
+            const water = extractResourceFromText(raw, 'water') || 0;
+            const foam = extractResourceFromText(raw, 'foam') || 0;
+            if (water > 0 || foam > 0) continue;
+
+            const vehicles = extractVehiclesFromCardText(raw)
+                .filter(v => Number(v?.count) > 0);
+
+            if (
+                vehicles.length !== 1 ||
+                !isSinglePlainAmbulanceRequirement(vehicles[0])
+            ) continue;
+
+            candidates.push({ len: raw.length });
+        }
+
+        candidates.sort((a, b) => a.len - b.len);
+        return candidates.length > 0;
+    }
+
     function isSingleOPIRequirement(vehicle) {
         if (!vehicle || Number(vehicle.count) !== 1) return false;
 
@@ -2122,6 +2175,10 @@
         // Są sprawdzane przed analizą wymagań i dotyczą tylko auto-zaznaczania.
         if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
         if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) return 'A TK';
+
+        // v3.03: dokładnie 1 pacjent + jedyny pojazd `1 Ambulans`
+        // ma natychmiast wybrać gotową ZR `Ambulans` z AZR.
+        if (getVisibleSingleAmbulancePatientRequirement()) return 'Ambulans';
 
         // v3.02: jeśli na aktualnie widocznej karcie jedynym wymaganiem jest
         // dokładnie 1 OPI, wybierz ZR Radiowóz od razu. Ten test omija różnice
