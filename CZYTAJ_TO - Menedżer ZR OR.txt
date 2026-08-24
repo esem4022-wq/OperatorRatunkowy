@@ -1,309 +1,44 @@
-MENEDŻER ZR OR
-Wersja: 3.10
-Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
+Menedżer ZR OR
+Wersja 3.11
 
-ZAWARTOŚĆ ZIP
-- menedzer-zr-or.user.js  – skrypt Tampermonkey
-- CZYTAJ_TO - Menedżer ZR OR.txt – informacje o wersji
+Plik skryptu:
+menedzer-zr-or.user.js
 
-INSTALACJA
-1. Otwórz Tampermonkey.
-2. Zainstaluj plik menedzer-zr-or.user.js.
-3. Odśwież stronę OperatorRatunkowy.pl.
+Repozytorium GitHub:
+https://github.com/esem4022-wq/OperatorRatunkowy
 
-GITHUB / AKTUALIZACJE
-Repozytorium: esem4022-wq/OperatorRatunkowy
-Stała nazwa pliku w repozytorium: menedzer-zr-or.user.js
-Skrypt zawiera @homepageURL, @updateURL i @downloadURL do automatycznych aktualizacji przez Tampermonkey.
+Aktualizacja Tampermonkey:
+https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-zr-or.user.js
 
-NAJWAŻNIEJSZE FUNKCJE
-- po otwarciu misji pierwszym krokiem jest przeszukanie kategorii `AZR`; dopóki sprawdzanie trwa, przyciski `UTWÓRZ ZR` i zapisu są ukryte,
-- jeżeli pasująca ZR istnieje w `AZR`, skrypt zaznacza ją i pozostawia tylko `EDYTUJ ZR`; nie uruchamia automatycznie capture ani logiki tworzenia/zapisu,
-- kategoria `AZR` może być ukryta: identyfikacja ZR odbywa się przez API kategorii i listę AAO, a zaznaczenie jest wykonywane bez konieczności pozostawienia widoku na AZR,
-- jeżeli pasującej ZR nie ma w `AZR`, dopiero wtedy pojawiają się `UTWÓRZ ZR` i zapis wymagań,
-- przycisk tworzenia ZR tylko na ekranie otwartej misji,
-- odczyt nazwy misji i wymaganych pojazdów,
-- odczyt wody i piany,
-- maksymalna liczba pacjentów = taka sama liczba Ambulansów S lub P podczas tworzenia ZR,
-- auto-zaznaczanie istniejącej ZR przeszukuje wyłącznie kategorię `AZR`; ZR z innych kategorii nie są brane pod uwagę nawet przy identycznej nazwie,
-- dla długich nazw misji skrypt poprawnie odczytuje tytuł łamany na kilka linii; przy tworzeniu nazwa ZR jest ograniczana do limitu 60 znaków gry,
-- dokładnie 1 pacjent bez innych wymaganych pojazdów albo z jedynym wymaganiem `1 Ambulans`: auto-zaznacz ZR o nazwie `Ambulans` z kategorii `AZR`,
-- jeśli jedynym wymaganiem w sekcji pojazdów jest dokładnie `1 OPI`: auto-zaznacz ZR `Radiowóz` z kategorii `AZR`,
-- ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
-- misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
-- misja, której nazwa zaczyna się od `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
-- jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`,
-- zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
-- czyszczenie nazwy ZR z dodatkowych informacji typu POI,
-- automatyczne zaznaczenie istniejącej ZR po nazwie misji, z pierwszeństwem ścisłych skrótów `Ambulans`, `Radiowóz` i `Straż` tylko w ich jednoznacznych przypadkach,
-- przycisk `EDYTUJ ZR` wyszukuje ZR dla bieżącej misji we wszystkich kategoriach poza `AZR` i `Bez kategorii`, a następnie otwiera jej pełną edycję.
-- przycisk przejścia do tworzenia/edycji ZR.
+OPIS
+Menedżer ZR OR działa na ekranie misji OperatorRatunkowy.pl. Automatycznie wyszukuje pasującą ZR w kategorii AZR, obsługuje reguły specjalne oraz pozwala utworzyć lub przejść do edycji ZR.
+
+NAJWAŻNIEJSZE ZASADY
+- auto-zaznaczanie przeszukuje wyłącznie kategorię AZR,
+- wielkość liter w nazwie nie ma znaczenia,
+- końcowy dopisek „(możliwy alarm fałszywy)” jest pomijany przy dopasowaniu,
+- Transport pacjenta -> Ambulans T,
+- nazwa zaczynająca się od Transport krytyczny -> A TK,
+- dokładnie 1 pacjent bez innych wymagań albo z jedynym 1 Ambulans -> Ambulans,
+- jedyne wymaganie 1 OPI -> Radiowóz,
+- jedyne wymaganie 1 samochód/wóz pożarniczy i nic więcej -> Straż,
+- przy trwającej misji ZR nie jest automatycznie zaznaczana,
+- EDYTUJ ZR pomija AZR i Bez kategorii.
 
 HISTORIA WERSJI
+
+v3.11
+- usunięto pętlę wielokrotnego zaznaczania tej samej ZR,
+- po skutecznym zaznaczeniu zapamiętywane są ID misji i ID ZR; kolejne zmiany DOM nie klikają ponownie,
+- komunikat „Zaznaczono ZR” nie powinien już migać,
+- usunięto podwójne wywołanie auto-zaznaczania przy tworzeniu przycisków nagłówka,
+- przyspieszono pierwszą próbę auto-zaznaczenia,
+- dodano awaryjne zaznaczanie z danych API, gdy AZR jest ukryta i jej przycisk nie jest wyrenderowany,
+- po wyczerpaniu prób skrypt kończy obsługę danej misji zamiast pracować w nieskończonej pętli.
+
 v3.10
-- przebudowano kolejność działania: po otwarciu misji pierwszym zadaniem skryptu jest sprawdzenie kategorii `AZR`, zanim zostanie udostępnione tworzenie lub zapisywanie ZR,
-- podczas sprawdzania AZR przyciski `UTWÓRZ ZR` i `💾` są ukryte; `EDYTUJ ZR` pozostaje dostępny,
-- jeżeli pasująca ZR istnieje w AZR, `UTWÓRZ ZR` i zapis pozostają ukryte, co zapobiega tworzeniu technicznych duplikatów,
-- obsłużono ukrytą kategorię AZR: kategoria i docelowa ZR są identyfikowane przez `/api/v1/aao_categories` oraz `/api/v1/aaos`, bez wymagania widocznej zakładki,
-- zaznaczenie jest wykonywane bezpośrednio po ID `aao_<ID>` także w nieaktywnej/ukrytej kategorii; przy leniwym renderowaniu skrypt tymczasowo aktywuje AZR bez pokazywania przeskoku i przywraca poprzednią kategorię,
-- jeśli AZR zawiera pasującą ZR, nawet chwilowy brak przycisku w DOM nie odblokowuje tworzenia nowej ZR; skrypt ponawia próbę zaznaczenia,
-- jeśli nie znaleziono pasującej ZR w AZR, dopiero wtedy przywracana jest kategoria `Pożary` i udostępniane są przyciski tworzenia/zapisu,
-- zachowano reguły specjalne, blokadę auto-zaznaczania dla trwającej misji, `EDYTUJ ZR` poza AZR/Bez kategorii oraz GitHub bez katalogu userscripts/.
+- AZR jest sprawdzana jako pierwszy krok po otwarciu misji,
+- jeśli ZR istnieje w AZR, UTWÓRZ/ZAPISZ są ukrywane, pozostaje EDYTUJ ZR,
+- próba obsługi ukrytej kategorii AZR po ID/API.
 
-v3.09
-- naprawiono auto-zaznaczanie ZR `Straż`,
-- reguła `Straż` ma teraz pierwszeństwo przed pełną ZR o nazwie misji, ale wyłącznie w ścisłym przypadku: jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy, bez pacjentów, wody, piany i innych pojazdów,
-- dodano niezależny bezpośredni odczyt widocznej żółtej karty dla przypadku `1 samochód pożarniczy -> Straż`,
-- analogicznie zachowano pierwszeństwo ścisłych skrótów `Ambulans` i `Radiowóz`; pełna ZR po nazwie misji jest używana, gdy warunki skrótu nie są spełnione,
-- zachowano poprawki v3.08 dla `EDYTUJ ZR`, wyszukiwanie wyłącznie w `AZR`, opóźnienie 0,5 s i blokadę auto-wyboru przy trwającej misji.
-
-v3.08
-- naprawiono przycisk `EDYTUJ ZR`: przed otwarciem edytora skrypt ponownie odczytuje i zapisuje wymagania z aktualnie otwartej misji,
-- edytor otrzymuje w adresie znacznik `orzr_edit_from_mission=1` oraz nazwę źródłowej misji,
-- po wejściu do edytora zapisany capture jest weryfikowany względem nazwy źródłowej misji; dane poprzedniej misji są odrzucane zamiast wyświetlane,
-- po aktualizacji zastosowano nowy klucz capture, aby stary zapamiętany stan z wcześniejszych wersji nie mógł wejść do pierwszej edycji,
-- analogiczny znacznik nazwy dodano także przy `UTWÓRZ ZR`, co dodatkowo zabezpiecza przed użyciem nieaktualnego capture,
-- zachowano wyszukiwanie `EDYTUJ ZR` poza kategoriami `AZR` i `Bez kategorii` oraz wszystkie dotychczasowe reguły auto-zaznaczania.
-
-v3.07
-- dodano przycisk `✎ EDYTUJ ZR` obok `UTWÓRZ ZR`,
-- przycisk wyszukuje pasującą ZR po nazwie bieżącej misji i otwiera `/aaos/<ID>/edit`,
-- podczas wyszukiwania do edycji pomijana jest własna kategoria `AZR` oraz pozycje `Bez kategorii`,
-- dla reguł specjalnych obsługiwane są także używane ZR `Ambulans T`, `A TK`, `Ambulans`, `Radiowóz` i `Straż`; pełna ZR o nazwie misji ma pierwszeństwo przed ogólnymi skrótami,
-- jeśli nie znaleziono pasującej ZR poza AZR/Bez kategorii, skrypt pokazuje komunikat i niczego nie otwiera,
-- zachowano GitHub bez katalogu userscripts/.
-
-v3.06
-- naprawiono dublowanie wymagań pojazdów przy tworzeniu ZR: lista pojazdów z widocznej żółtej karty ma pierwszeństwo przed pomocniczymi tabelami `mission_help`,
-- tekstowy fallback `mission_help` nie dopisuje już drugiego zestawu wierszy `Wymagane ...`, jeśli tabela strukturalna zwróciła pojazdy,
-- poprawiono fałszywe auto-zaznaczanie ZR `Ambulans`: snapshot preferuje pełną kartę zawierającą sekcję `Pojazdy`, a nie mniejszy fragment `Pacjenci`,
-- jeśli w `AZR` istnieje ZR o dokładnej nazwie aktualnej misji, ma ona pierwszeństwo przed ogólnymi skrótami `Ambulans`, `Radiowóz` i `Straż`,
-- reguły nazwane `Transport pacjenta` -> `Ambulans T` oraz `Transport krytyczny...` -> `A TK` zachowują najwyższy priorytet,
-- zachowano opóźnienie 0,5 s, wyszukiwanie wyłącznie w `AZR`, blokadę auto-wyboru przy trwającej misji i GitHub bez katalogu userscripts/.
-
-v3.05
-- przebudowano regułę `1 OPI` -> ZR `Radiowóz`, aby działała niezależnie od momentu załadowania nazwy misji i mission_help,
-- dodano bezpośredni ścisły odczyt widocznej sekcji `Pojazdy`: dokładnie `1 OPI` natychmiast ustawia cel `Radiowóz`,
-- specjalne reguły są teraz sprawdzane przed wymaganiem poprawnej nazwy misji,
-- identyfikacja bieżącej misji preferuje `mission_id`, dzięki czemu retry nie blokuje kolejnych misji,
-- zachowano opóźnienie 0,5 s, wyszukiwanie wyłącznie w kategorii `AZR`, blokadę dla trwającej misji i pozostałe reguły specjalne.
-
-v3.04
-- naprawiono regułę `Ambulans` dla układu `Pojazdy -> 1 Ambulans` + `Pacjenci -> Dokładnie 1 pacjent`,
-- specjalne reguły `Ambulans`, `Radiowóz` i `Straż` korzystają teraz z jednego snapshotu aktualnie widocznej żółtej karty,
-- przy opóźnieniu 0,5 s skrypt nie uznaje już braku zwykłej ZR za wynik końcowy, jeśli karta wymagań jeszcze się renderuje; ponawia odczyt co 150 ms,
-- dzięki temu reguła `Ambulans` nie jest pomijana przez wyścig ładowania DOM / mission_help,
-- wyszukiwanie docelowej ZR pozostaje wyłącznie w kategorii `AZR`, a pozostałe reguły i adresy GitHub pozostają bez zmian.
-
-v3.03
-- poprawiono auto-zaznaczanie ZR `Ambulans` dla układu widocznego na karcie misji: `Pojazdy -> 1 Ambulans` oraz `Pacjenci -> Dokładnie 1 pacjent`,
-- reguła jest teraz sprawdzana bezpośrednio na widocznej żółtej karcie i nie zależy od danych mission_help,
-- skrót `Ambulans` działa tylko wtedy, gdy nie ma innych wymaganych pojazdów oraz nie ma wymaganej wody ani piany,
-- pozostałe reguły auto-zaznaczania, wyszukiwanie wyłącznie w `AZR` i opóźnienie 0,5 s pozostają bez zmian,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v3.02
-- poprawiono specjalną regułę `1 OPI` -> ZR `Radiowóz`: skrypt sprawdza teraz bezpośrednio widoczną żółtą kartę misji i sekcję `Pojazdy`, niezależnie od mission_help,
-- reguła `Radiowóz` uruchamia się tylko wtedy, gdy w widocznej sekcji `Pojazdy` znajduje się dokładnie jedno wymaganie: `1 OPI`,
-- wyszukiwanie docelowej ZR nadal odbywa się wyłącznie w własnej kategorii `AZR`,
-- pozostałe reguły i opóźnienie auto-zaznaczania 0,5 s pozostają bez zmian,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v3.01
-- poprawiono regułę `1 OPI` -> ZR `Radiowóz`: skrypt sprawdza teraz także bezpośrednio widoczną sekcję `Pojazdy`, więc różnice w opisie zwracanym przez mission_help nie blokują reguły,
-- rozpoznawanie `OPI` toleruje techniczne warianty opisu, ale nadal wymaga dokładnie jednego pojazdu tego typu,
-- doprecyzowano regułę `Ambulans`: dokładnie 1 pacjent bez innych pojazdów albo z jedynym wymaganiem `1 Ambulans` -> zaznacz ZR `Ambulans`; woda, piana lub inny pojazd wyłączają tę regułę,
-- numeracja projektu została ujednolicona do gałęzi 3.xx; ta poprawka jest wydana jako 3.01,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.44
-- poprawiono auto-zaznaczanie dla misji z technicznym dopiskiem `(możliwy alarm fałszywy)` na końcu nazwy,
-- przy wyszukiwaniu ZR w kategorii `AZR` dopisek jest pomijany, np. `Płonąca maszyna (możliwy alarm fałszywy)` szuka ZR `Płonąca maszyna`,
-- inne nawiasy będące prawidłową częścią nazwy misji nie są usuwane,
-- pozostałe reguły auto-zaznaczania i tworzenia ZR pozostają bez zmian.
-
-v0.43
-- dodano specjalną regułę auto-zaznaczania: jeśli jedynym wymaganiem w sekcji `Pojazdy` jest dokładnie `1 OPI`, skrypt wybiera ZR `Radiowóz` z kategorii `AZR`,
-- reguła dotyczy wyłącznie auto-zaznaczania gotowej ZR; tworzenie ZR pozostaje bez zmian,
-- zachowano wyszukiwanie wyłącznie w `AZR`, opóźnienie 0,5 s oraz pozostałe reguły specjalne.
-
-v0.42
-- auto-zaznaczanie przeszukuje wyłącznie ZR faktycznie należące do własnej kategorii `AZR`; usunięto globalne wyszukiwanie po wszystkich kategoriach,
-- ID docelowej ZR jest najpierw potwierdzane przez API dla kategorii `AZR`, a po przełączeniu kategorii klikany jest tylko ten konkretny przycisk,
-- jeśli ZR nie istnieje w `AZR`, skrypt wraca do kategorii `Pożary` i nie próbuje szukać jej w innych kategoriach,
-- poprawiono długie, wielowierszowe nazwy misji; nie powinny już kończyć jako `Misja bez nazwy`,
-- przy nazwach dłuższych niż 60 znaków pole nowej ZR otrzymuje pierwsze 60 znaków, zgodnie z limitem gry,
-- reguła `Transport krytyczny` działa po początku nazwy, więc obsługuje również dodatkową treść w nawiasach,
-- opóźnienie automatycznego zaznaczania zmniejszono z 1 s do 0,5 s.
-
-v0.41
-- doprecyzowano regułę `Straż`: działa wyłącznie wtedy, gdy jedynym wymaganiem misji jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, inne pojazdy, woda lub piana wyłączają skrót i skrypt szuka normalnej ZR po nazwie misji,
-- dodano regułę: `Transport pacjenta` -> ZR `Ambulans T` w kategorii `AZR`,
-- dodano regułę: `Transport krytyczny` -> ZR `A TK` w kategorii `AZR`,
-- jeśli skrypt nie znajdzie docelowej ZR w `AZR`, czyści filtr i wraca do pierwszej kategorii `Pożary`,
-- zachowano dokładne porównywanie nazw bez rozróżniania wielkości liter, 1-sekundowe opóźnienie, blokadę przy trwającej misji, fioletowe oznaczenie i GitHub bez `userscripts/`.
-
-v0.40
-- auto-zaznaczanie: własna kategoria `AZR` jest teraz zawsze uruchamiana natywnym kliknięciem; `tab('show')` jest tylko dodatkowym wsparciem,
-- po przełączeniu na `AZR` skrypt czeka na faktyczne aktywowanie/załadowanie kategorii i obsługuje przyciski `aao_btn`,
-- przy bardzo długiej jednej kolumnie AZR skrypt wykorzystuje także wbudowaną wyszukiwarkę ZR i następnie czyści filtr,
-- nazwa misji do auto-wyboru jest pobierana w pierwszej kolejności z `#mission_general_info[data-mission-title]`, czyli z dokładnego tytułu gry,
-- poprawiono wykrywanie trwającej misji: blokadę powodują tylko rzeczywiście wysłane/jadące/obecne pojazdy; paski wody/piany i stare alerty nie blokują już świeżej misji,
-- zachowano 1-sekundowe opóźnienie, kategorię tylko `AZR`, reguły `Ambulans`/`Straż`, fioletowe oznaczenie i GitHub bez `userscripts/`.
-
-v0.39
-- poprawiono właściwą klasę przycisków ZR: oprócz starszego `.aao` skrypt obsługuje teraz używane w Operatorze/LSS `.aao_btn`,
-- nazwa ZR jest porównywana przede wszystkim z widocznym tekstem przycisku, a nie z atrybutem `title`,
-- własna zakładka `AZR` jest aktywowana przez Bootstrap `tab('show')`, następnie skrypt czeka do 2,2 s na wyrenderowanie jej zawartości,
-- po aktywowaniu `AZR` ZR jest szukana równolegle po dokładnej nazwie i po ID `#aao_<ID>` pobranym z API,
-- usunięto wymóg klasy `.aao`, który powodował pomijanie prawidłowych przycisków ZR w kategorii własnej,
-- zachowano 1-sekundowe opóźnienie, reguły `Ambulans`/`Straż`, fioletowe oznaczenie oraz blokadę przy trwającej misji,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.38
-- naprawiono auto-zaznaczanie ZR w własnej kategorii `AZR`,
-- skrypt rozpoznaje własne kategorie tak jak Operator: po zakładkach `a[href*="aao_category_"]`,
-- przed wyszukaniem ZR skrypt rzeczywiście aktywuje zakładkę `AZR` mechanizmem Bootstrap/jQuery `tab('show')`; dopiero potem przeszukuje jej zawartość,
-- usunięto błędne założenie z v0.37, że przyciski ZR z niewyświetlanej własnej kategorii są zawsze dostępne w DOM,
-- API kategorii pozostaje jako pomocniczy fallback, ale o wyborze decyduje aktywna własna zakładka `AZR`,
-- wyszukiwanie nadal jest dokładne po nazwie, bez rozróżniania wielkości liter,
-- zachowano reguły `Ambulans` i `Straż`, 1-sekundowe opóźnienie, fioletową ramkę/status oraz blokadę auto-zaznaczania przy trwającej misji,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.37
-- poprawiono auto-zaznaczanie dla `AZR` będącej własną kategorią użytkownika,
-- skrypt znajduje ID własnej kategorii `AZR` przez API kategorii, zamiast próbować rozpoznawać ją jako systemową zakładkę w interfejsie misji,
-- pasująca ZR jest wyszukiwana wyłącznie w ZR przypisanych do kategorii `AZR`,
-- po znalezieniu ZR skrypt używa jej ID i klika przycisk bezpośrednio, również gdy `AZR` nie jest aktualnie wyświetlana,
-- nie ma już potrzeby przełączania interfejsu na kategorię `AZR`, co przyspiesza wybór i omija różnice w renderowaniu własnych kategorii,
-- zachowano reguły `Ambulans` i `Straż`, 1-sekundowe opóźnienie, fioletowe oznaczenie oraz blokadę auto-zaznaczania przy trwającej misji,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.36
-- przebudowano auto-zaznaczanie ZR w kategorii `AZR`: skrypt nie zależy już od identyfikatora kategorii z API,
-- kategoria `AZR` jest odnajdywana bezpośrednio w interfejsie po dokładnej nazwie, następnie aktywowana i tylko jej zawartość jest przeszukiwana,
-- wyszukiwanie działa również dla ZR znajdujących się niżej w jednej długiej kolumnie, poza aktualnym viewportem,
-- zachowano porównywanie nazw bez rozróżniania wielkości liter,
-- dodano specjalną regułę: jeśli jedynym wymaganym pojazdem jest 1 samochód/pojazd strażacki, auto-zaznacz ZR `Straż` w `AZR`,
-- dokładnie 1 pacjent bez innych wymaganych pojazdów nadal auto-zaznacza ZR `Ambulans` w `AZR`,
-- opóźnienie auto-zaznaczania pozostaje ustawione na 1 sekundę,
-- auto-zaznaczanie nadal jest blokowane dla misji już trwającej,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.35
-- automatyczne zaznaczanie ZR przeszukuje wyłącznie kategorię o dokładnej nazwie `AZR`; ZR z pozostałych kategorii są ignorowane,
-- przed zaznaczeniem skrypt przełącza interfejs Operatora na kategorię `AZR`,
-- wyszukiwanie w `AZR` pozostaje dokładne po nazwie i nie rozróżnia wielkości liter,
-- specjalny przypadek: dokładnie 1 pacjent i brak innych wymaganych pojazdów powoduje auto-zaznaczenie ZR `Ambulans` z kategorii `AZR`,
-- cofnięto błędną zmianę z v0.34: podczas tworzenia ZR pojedynczy pacjent ponownie używa pola `Ambulans S lub P`; reguła `Ambulans` dotyczy tylko automatycznego zaznaczania gotowej ZR,
-- opóźnienie auto-zaznaczania pozostaje ustawione na 1 sekundę,
-- auto-zaznaczanie nadal jest blokowane dla misji już trwającej,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.34
-- komunikat „Misja zaktualizowana! Odśwież!” jest odrzucany jako nazwa misji i usuwany także wtedy, gdy występuje w tym samym kontenerze co właściwy tytuł,
-- poprawiono automatyczne zaznaczanie ZR w pierwszej, już wyświetlanej kategorii: wyszukiwanie dokładnego ID/nazwy obejmuje również elementy renderowane obok #mission-aao-group,
-- jeśli grupa ZR nie zdążyła się jeszcze załadować, skrypt ponawia próbę zamiast kończyć auto-wybór,
-- opóźnienie automatycznego zaznaczania ZR zmniejszono do 1 sekundy,
-- nowa reguła pacjentów: dokładnie 1 pacjent i brak innych wymaganych pojazdów = 1 Ambulans P; w pozostałych przypadkach pozostaje Ambulans S lub P,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.33
-- poprawiono pobieranie nazwy misji: teksty czasu typu „24 minuty temu”, „godzinę temu”, „Dziś o…” nie mogą być nazwą ZR,
-- nazwa jest teraz pobierana w pierwszej kolejności z tytułu żółtej karty aktualnej misji, a dopiero później z ciemnego nagłówka,
-- tworzenie ZR i automatyczne zaznaczanie istniejącej ZR korzystają z tego samego, oczyszczonego źródła nazwy,
-- poprawka eliminuje tworzenie ZR o nazwie będącej czasem od otwarcia/utworzenia misji,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.32
-- usunięto fałszywe wymagania pochodzące z tabel informacyjnych mission_help, np. „Inne informacje Wartość Maks.”,
-- tekstowy parser sekcji Pojazdy kończy odczyt przed sekcjami „Inne informacje” i „Wartość Maks.”,
-- poprawiono mapowanie wymagań łączonych: „wozy strażackie lub pojazdy ratownictwa technicznego” nie jest już błędnie przypisywane do „SH lub SD”,
-- genericzne „pojazdy ratownictwa technicznego” nie dostają już sztucznie aliasów SH/SD,
-- poprawiono wykrywanie nazwy misji: własny przycisk „UTWÓRZ ZR” i status Menedżera nie mogą zostać uznane za tytuł misji,
-- poprawiono automatyczne zaznaczanie ZR: lista ZR z API jest odświeżana przy zmianie misji i nie pozostaje stale w cache,
-- dodano ponawianie auto-wyboru przez kilka sekund, wyszukiwanie ZR również po dokładnej nazwie oraz przełączanie ukrytej zakładki kategorii,
-- zachowano blokadę automatycznego wyboru dla misji już trwających, fioletową ramkę i komunikat „Zaznaczono ZR”,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.31
-- przebudowano źródło wymagań: skrypt w pierwszej kolejności korzysta z ukrytego `#mission_help` aktualnej misji,
-- `#mission_help` wskazuje dokładny typ bieżącej misji i jej `mission_id`, więc nie jest mylony z linkiem z sekcji „Może się rozwinąć w…”,
-- poprawiono odczyt pojazdów dla misji „Samopodpalenie” i podobnych: wymagania z helpa są parsowane strukturalnie z tabeli, z tekstowym fallbackiem,
-- poprawiono wodę i pianę: liczba musi znajdować się bezpośrednio przy nazwie zasobu; eliminuje to błędne wartości typu 25 zamiast 8000,
-- auto-zaznaczanie ZR ma 0,5 s opóźnienia po otwarciu misji,
-- wykrywanie trwającej misji nie zależy już od tego, czy tabela pojazdów jest aktualnie widoczna w viewportcie,
-- tuż przed automatycznym kliknięciem ZR wykonywana jest ponowna kontrola, czy misja już trwa,
-- zachowano fioletową ramkę i informację „Zaznaczono ZR” tylko dla faktycznego auto-wyboru,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.30
-- przebudowano odczyt wymagań: skrypt nie zależy już od struktury HTML żółtej karty,
-- bieżąca karta jest odnajdywana w widocznym tekście strony po nazwie aktualnej misji i najbliższym nagłówku „Pojazdy”,
-- sekcja Pojazdy jest wycinana jako tekst i parsowana niezależnie od div/span oraz obecności nowych linii,
-- poprawiono misje takie jak „Pożar hali z transformatorem” i „Samopodpalenie”, gdzie poprzednie wersje nie znajdowały sekcji Pojazdy lub odczytywały tylko ambulans,
-- woda i piana zapisane jako „8000 Woda” / „6200 Piana gaśnicza” są pobierane z tej samej karty,
-- zachowano zakaz pobierania danych z „Może się rozwinąć w…”,
-- automatyczny wybór ZR nadal nie działa dla misji już rozpoczętej,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.29
-- przebudowano wyszukiwanie żółtej karty: punktem zaczepienia jest widoczny nagłówek „Pojazdy”, więc tytuł i lista pojazdów nie muszą być w tym samym podkontenerze HTML,
-- usunięto zbyt rygorystyczne odrzucanie poprawnych kart, które powodowało komunikat o braku bezpiecznego odczytu,
-- dodano awaryjny odczyt sekcji „Pojazdy” z najmniejszych elementów DOM; misje z pacjentami nie powinny już kończyć się wyłącznie na Ambulansie S/P,
-- zachowano zakaz pobierania wymagań z sekcji „Może się rozwinąć w…”,
-- automatyczne zaznaczanie istniejącej ZR jest wyłączone, jeżeli misja już trwa / pojazdy zostały wysłane,
-- informacja „Zaznaczono ZR” i fioletowa ramka są pokazywane tylko przy automatycznym wyborze przed rozpoczęciem misji,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.28
-- poprawiono wybór żółtej karty: skrypt najpierw szuka dokładnej nazwy bieżącej misji i najbliższego kontenera z sekcją „Pojazdy”,
-- usunięto fałszywe komunikaty o braku powiązania karty dla części poprawnie wyświetlanych misji,
-- dodano parser zachowujący linie sekcji „Pojazdy”; wymagane pojazdy nie znikają już w misjach zawierających sekcję „Pacjenci”,
-- pozostawiono parser płaskiego tekstu jako fallback,
-- po automatycznym wybraniu istniejącej ZR w górnym nagłówku pojawia się fioletowa informacja „Zaznaczono ZR: …”,
-- zachowano fioletową ramkę automatycznie zaznaczonej ZR,
-- adresy GitHub pozostają bez katalogu userscripts/.
-
-v0.27
-- poprawiono wykrywanie żółtej karty wymagań w misjach, w których jej element wewnętrzny nie zawierał nazwy misji,
-- skrypt potrafi teraz rozszerzyć znaleziony fragment do właściwego kontenera karty zamiast odrzucać misję,
-- nawet gdy znaleziony kontener obejmuje większą część strony, parser wycina tylko tekst bieżącej karty do sekcji „Dostępne jednostki”,
-- odczyt pojazdów, wody, piany i pacjentów korzysta z wyizolowanego tekstu aktualnej misji,
-- dodano obsługę zapisu zasobów w formacie „6200 Piana gaśnicza” oraz „8000 Woda”,
-- zachowano zabezpieczenie przed pobieraniem wymagań z „Może się rozwinąć w…”.
-
-v0.26
-- naprawiono pobieranie wymagań z niewłaściwej misji,
-- skrypt nie używa już linków z sekcji „Może się rozwinąć w…” jako źródła wymagań bieżącej misji,
-- wymagania są odczytywane wyłącznie z żółtej karty aktualnie otwartej misji,
-- dodano kontrolę zgodności nazwy żółtej karty z nazwą misji w nagłówku,
-- „Dokładnie X pacjentów” jest traktowane jako maksymalnie X pacjentów,
-- odczyt wody, piany i pacjentów nie przeszukuje już całej strony,
-- zachowano adresy GitHub bez katalogu userscripts/.
-
-v0.25
-- poprawiono automatyczne zaznaczanie ZR w pierwszej wyświetlanej kategorii,
-- dodano obsługę przycisków ZR zapisanych jako id="aao_<ID>" oraz aao_id/data-aao-id,
-- poprawiono @updateURL i @downloadURL: plik GitHub jest bezpośrednio w głównym katalogu repozytorium, bez userscripts/.
-
-v0.24
-- automatycznie wybrana ZR jest oznaczana FIOLETOWĄ ramką zamiast zielonej,
-- dodano plik CZYTAJ_TO do paczki ZIP.
-
-v0.23
-- dodano automatyczne wyszukiwanie i zaznaczanie istniejącej ZR o dokładnie takiej samej nazwie jak misja,
-- automatycznie wybrana ZR była wyróżniana ramką.
-
-v0.22
-- poprawiono pobieranie nazwy misji,
-- odcinane są dodatkowe fragmenty typu POI, Pojazdy, Pacjenci, Woda i Piana.
-
-v0.21
-- dodano obsługę aktualizacji skryptu przez GitHub.
-
-v0.20
-- zabezpieczono parser przed pobieraniem listy „Dostępne jednostki” jako wymagań ZR.
-
-v0.19
-- poprawiono odczyt maksymalnej liczby pacjentów i ustawianie Ambulansów S/P.
+Wcześniejsze wersje rozwijały m.in. tworzenie ZR z wymagań misji, obsługę pacjentów, wody i piany, specjalne reguły auto-wyboru, kategorię AZR, fioletową ramkę oraz przycisk EDYTUJ ZR.
