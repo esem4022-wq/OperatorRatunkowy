@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.08
+Wersja: 3.10
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -17,6 +17,10 @@ Stała nazwa pliku w repozytorium: menedzer-zr-or.user.js
 Skrypt zawiera @homepageURL, @updateURL i @downloadURL do automatycznych aktualizacji przez Tampermonkey.
 
 NAJWAŻNIEJSZE FUNKCJE
+- po otwarciu misji pierwszym krokiem jest przeszukanie kategorii `AZR`; dopóki sprawdzanie trwa, przyciski `UTWÓRZ ZR` i zapisu są ukryte,
+- jeżeli pasująca ZR istnieje w `AZR`, skrypt zaznacza ją i pozostawia tylko `EDYTUJ ZR`; nie uruchamia automatycznie capture ani logiki tworzenia/zapisu,
+- kategoria `AZR` może być ukryta: identyfikacja ZR odbywa się przez API kategorii i listę AAO, a zaznaczenie jest wykonywane bez konieczności pozostawienia widoku na AZR,
+- jeżeli pasującej ZR nie ma w `AZR`, dopiero wtedy pojawiają się `UTWÓRZ ZR` i zapis wymagań,
 - przycisk tworzenia ZR tylko na ekranie otwartej misji,
 - odczyt nazwy misji i wymaganych pojazdów,
 - odczyt wody i piany,
@@ -31,11 +35,28 @@ NAJWAŻNIEJSZE FUNKCJE
 - jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`,
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
-- automatyczne zaznaczenie istniejącej ZR, gdy jej nazwa jest identyczna z nazwą misji,
+- automatyczne zaznaczenie istniejącej ZR po nazwie misji, z pierwszeństwem ścisłych skrótów `Ambulans`, `Radiowóz` i `Straż` tylko w ich jednoznacznych przypadkach,
 - przycisk `EDYTUJ ZR` wyszukuje ZR dla bieżącej misji we wszystkich kategoriach poza `AZR` i `Bez kategorii`, a następnie otwiera jej pełną edycję.
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.10
+- przebudowano kolejność działania: po otwarciu misji pierwszym zadaniem skryptu jest sprawdzenie kategorii `AZR`, zanim zostanie udostępnione tworzenie lub zapisywanie ZR,
+- podczas sprawdzania AZR przyciski `UTWÓRZ ZR` i `💾` są ukryte; `EDYTUJ ZR` pozostaje dostępny,
+- jeżeli pasująca ZR istnieje w AZR, `UTWÓRZ ZR` i zapis pozostają ukryte, co zapobiega tworzeniu technicznych duplikatów,
+- obsłużono ukrytą kategorię AZR: kategoria i docelowa ZR są identyfikowane przez `/api/v1/aao_categories` oraz `/api/v1/aaos`, bez wymagania widocznej zakładki,
+- zaznaczenie jest wykonywane bezpośrednio po ID `aao_<ID>` także w nieaktywnej/ukrytej kategorii; przy leniwym renderowaniu skrypt tymczasowo aktywuje AZR bez pokazywania przeskoku i przywraca poprzednią kategorię,
+- jeśli AZR zawiera pasującą ZR, nawet chwilowy brak przycisku w DOM nie odblokowuje tworzenia nowej ZR; skrypt ponawia próbę zaznaczenia,
+- jeśli nie znaleziono pasującej ZR w AZR, dopiero wtedy przywracana jest kategoria `Pożary` i udostępniane są przyciski tworzenia/zapisu,
+- zachowano reguły specjalne, blokadę auto-zaznaczania dla trwającej misji, `EDYTUJ ZR` poza AZR/Bez kategorii oraz GitHub bez katalogu userscripts/.
+
+v3.09
+- naprawiono auto-zaznaczanie ZR `Straż`,
+- reguła `Straż` ma teraz pierwszeństwo przed pełną ZR o nazwie misji, ale wyłącznie w ścisłym przypadku: jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy, bez pacjentów, wody, piany i innych pojazdów,
+- dodano niezależny bezpośredni odczyt widocznej żółtej karty dla przypadku `1 samochód pożarniczy -> Straż`,
+- analogicznie zachowano pierwszeństwo ścisłych skrótów `Ambulans` i `Radiowóz`; pełna ZR po nazwie misji jest używana, gdy warunki skrótu nie są spełnione,
+- zachowano poprawki v3.08 dla `EDYTUJ ZR`, wyszukiwanie wyłącznie w `AZR`, opóźnienie 0,5 s i blokadę auto-wyboru przy trwającej misji.
+
 v3.08
 - naprawiono przycisk `EDYTUJ ZR`: przed otwarciem edytora skrypt ponownie odczytuje i zapisuje wymagania z aktualnie otwartej misji,
 - edytor otrzymuje w adresie znacznik `orzr_edit_from_mission=1` oraz nazwę źródłowej misji,
