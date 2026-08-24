@@ -1,0 +1,39 @@
+MENEDŻER UM OR
+==============
+
+Skrypt dla gry OperatorRatunkowy.pl.
+Repozytorium projektu:
+https://github.com/esem4022-wq/OperatorRatunkowy
+
+Stała nazwa pliku skryptu do umieszczania na GitHubie:
+menedzer-um-or.user.js
+
+Adres aktualizacji Tampermonkey:
+https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-um-or.user.js
+
+
+HISTORIA WERSJI
+===============
+
+Wersja 3.0
+-----------
+- Pierwsza wersja Menedżera UM OR.
+- UM są traktowane jako punkty POI.
+- Lista wymaganych rodzajów UM nie jest wpisana na sztywno.
+- Skrypt pobiera stronę „Potencjalne misje” (/einsaetze) i odczytuje kolumnę „UM”.
+- Wszystkie znalezione rodzaje UM są automatycznie deduplikowane.
+- Dla każdego UM skrypt pokazuje misje, w których ten punkt występuje.
+- Własne UM są pobierane z oficjalnego API gry /api/v2/pois.
+- Jeśli API zwraca numery typów POI, skrypt próbuje mapować je na polskie nazwy przez katalog LSS-Manager.
+- Zakładka „Wymagane UM” pokazuje katalog UM i informację, czy dany typ już istnieje wśród własnych punktów.
+- Zakładka „Moje UM” pokazuje ID, typ, nazwę/opis i współrzędne wszystkich odczytanych punktów.
+- Zakładka „Braki” pokazuje tylko typy wymagane przez potencjalne misje, których nie ma wśród własnych UM.
+- Dodano wyszukiwanie, filtrowanie, sortowanie i eksport CSV.
+- Przycisk Menedżera UM OR jest wyświetlany tylko na stronie głównej gry.
+
+
+UWAGI
+=====
+- Źródłem listy wymaganych UM jest bezpośrednio aktualna strona „Potencjalne misje” gry.
+- Dzięki temu po dodaniu nowych misji lub nowych UM lista nie wymaga ręcznego dopisywania w skrypcie.
+- /api/v2/pois jest używane tylko do odczytu własnych UM. Wersja 3.0 niczego nie usuwa ani nie zmienia w grze.
