@@ -210,3 +210,17 @@ v0.1 — 12.08.2026
 - Szybka edycja nazwy, numeru kolumny i kategorii.
 - Zapis pojedynczego ZR i wszystkich zmienionych ZR.
 - Przycisk przejścia do pełnej edycji ZR.
+
+============================================================
+WERSJA 3.10.2 (TESTOWA)
+============================================================
+- Poprawiono zakładkę „Potencjalne misje”: skrypt nie ogranicza się już do pierwszej pasującej tabeli. Zbiera wszystkie wiersze misji zawierające link /einsaetze/<id> ze wszystkich sekcji/tabel strony i usuwa tylko powtórzenia tego samego wpisu.
+- Pobieranie PM używa odświeżenia bez cache, aby test nie pracował na starej kopii strony.
+- „Sprawdź PM” przeniesiono z „Porządkowanie” do osobnej zakładki „Sprawdź PM”.
+- „Sprawdź PM” pomija kategorie: AZR, Bez kategorii i Zapasowe.
+- Dodano filtry wyników „Sprawdź PM”: wyszukiwanie, status (wszystkie / brak w PM / występuje w PM) oraz kategoria.
+- Dodano checkboxy, zaznaczanie wszystkich aktualnie widocznych wyników i licznik zaznaczonych.
+- Dodano operacje zbiorcze dla zaznaczonych: „Usuń zaznaczone” oraz „Przenieś do Zapasowe”.
+- Przenoszenie do „Zapasowe” zachowuje nazwę i numer kolumny ZR, zmienia wyłącznie kategorię.
+- Zachowano wcześniejsze zmiany z v3.10.1 dotyczące AZR i kategorii Zapasowe.
+
