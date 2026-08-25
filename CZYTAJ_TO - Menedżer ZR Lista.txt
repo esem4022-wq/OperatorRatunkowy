@@ -235,3 +235,13 @@ WERSJA 3.10.3 (TESTOWA)
 - „Sprawdź PM” korzysta z tej samej kompletnej, wielostronicowej listy PM.
 - Zachowano wszystkie funkcje v3.10.2, w tym osobną zakładkę „Sprawdź PM”, filtry, zaznaczanie, usuwanie oraz przenoszenie do „Zapasowe”.
 
+
+
+============================================================
+WERSJA 3.10.4 (TESTOWA)
+============================================================
+- Naprawiono zaniżoną liczbę Potencjalnych misji. Warianty tej samej misji mogą korzystać z tego samego bazowego ID, ale różnić się parametrami adresu (np. additive_overlays). Skrypt nie scala już takich wariantów do jednej pozycji.
+- Dzięki temu liczba wczytanych PM może odpowiadać licznikowi „Łącznie” z wykazu gry (np. 826 zamiast 675).
+- Naprawiono porównywanie nazw w „Sprawdź PM”: porównanie nie rozróżnia wielkości liter, normalizuje spacje i znaki diakrytyczne.
+- Przykład: ZR „Atak hakera na stronę rządową” jest teraz poprawnie rozpoznawane jako odpowiadające PM „Atak Hakera na Stronę Rządową”.
+- Zachowano filtry, zaznaczanie oraz akcje „Usuń zaznaczone” i „Przenieś do Zapasowe”.

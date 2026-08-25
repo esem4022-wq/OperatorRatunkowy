@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.3
+// @version      3.10.4
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.10.3';
+    const VERSION = '3.10.4';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -1542,9 +1542,15 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     }
 
     function potentialMissionIdentity(mission) {
-        const href = String(mission?.href || '');
-        const match = href.match(/^\/einsaetze\/(\d+)/);
-        if (match) return `id:${match[1]}`;
+        const href = String(mission?.href || '').trim();
+
+        // Wykaz Potencjalnych misji zawiera warianty tej samej misji pod tym
+        // samym bazowym ID, ale z innym query stringiem, np.:
+        // /einsaetze/2 oraz /einsaetze/2?additive_overlays=a.
+        // Poprzednio identyfikacja tylko po numerze ID scalała takie warianty
+        // i dlatego z licznika 826 zostawało np. 675 pozycji.
+        if (href) return `href:${href}`;
+
         return `row:${[
             mission?.name || '',
             mission?.um || '',
@@ -1789,9 +1795,17 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     }
 
     function rebuildPMCheckResults() {
-        const pmNames = new Set(state.potentialMissions.map(mission => String(mission.name ?? '')));
+        // Nazwy porównujemy po normalizacji: bez rozróżniania wielkości liter,
+        // zbędnych spacji i różnic w zapisie znaków diakrytycznych.
+        // Dzięki temu np. „Atak hakera na stronę rządową” pasuje do
+        // „Atak Hakera na Stronę Rządową” z wykazu Potencjalnych misji.
+        const pmNames = new Set(
+            state.potentialMissions
+                .map(mission => normalize(mission.name))
+                .filter(Boolean)
+        );
         state.pmCheckResults = pmCheckSourceRows().map(aao => {
-            const found = pmNames.has(String(aao.caption ?? ''));
+            const found = pmNames.has(normalize(aao.caption));
             return { aao, pmFound: found, issue: found ? '✓ Występuje w PM' : '✗ Brak w PM' };
         });
     }
