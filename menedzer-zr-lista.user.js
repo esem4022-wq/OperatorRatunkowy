@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.04
+// @version      3.10.1
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.04';
+    const VERSION = '3.10.1';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -42,7 +42,12 @@
         deleting: false,
         azrVehicleSyncing: false,
         azrUpdateErrors: [],
-        azrListMode: 'missing'
+        azrListMode: 'missing',
+        potentialMissions: [],
+        potentialMissionsLoaded: false,
+        potentialMissionsLoading: false,
+        potentialMissionFilter: '',
+        potentialMissionError: ''
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -122,6 +127,10 @@
     function getCategoryName(id) {
         if (id == null) return 'Bez kategorii';
         return state.categories.get(Number(id)) ?? `Kategoria ${id}`;
+    }
+
+    function isCategoryName(aao, expectedName) {
+        return getCategoryName(aao?.aao_category_id) === expectedName;
     }
 
     function currentRowValues(id) {
@@ -497,7 +506,7 @@
         if (azrCategoryId == null) return [];
 
         // Menedżer ZR OR szuka po dokładnej nazwie, dlatego tutaj również
-        // porównujemy nazwy 1:1. „Bez kategorii” nie bierze udziału w kontroli.
+        // porównujemy nazwy 1:1. „Bez kategorii” i „Zapasowe” nie biorą udziału w kontroli.
         const azrNames = new Set(
             state.aaos
                 .filter(aao => aao.aao_category_id === azrCategoryId)
@@ -508,6 +517,7 @@
             .filter(aao =>
                 aao.aao_category_id != null &&
                 aao.aao_category_id !== azrCategoryId &&
+                !isCategoryName(aao, 'Zapasowe') &&
                 !azrNames.has(String(aao.caption ?? ''))
             )
             .sort((a, b) =>
@@ -544,20 +554,28 @@
         const azrCategoryId = getAZRCategoryId();
         if (azrCategoryId == null) return [];
 
-        // Szukamy ZR, które nadal są w AZR, ale nie mają już odpowiednika
-        // o dokładnie tej samej nazwie nigdzie poza AZR.
-        // Przy wyszukiwaniu usuniętych „Bez kategorii” JEST brane pod uwagę.
-        const sourceNames = new Set(
+        // „Zapasowe” oznacza, że danego ZR nie powinno być w AZR.
+        // Ma pierwszeństwo nawet wtedy, gdy taka sama nazwa istnieje także
+        // w innej zwykłej kategorii. „Bez kategorii” nadal liczy się jako
+        // istniejący odpowiednik i chroni ZR w AZR przed usunięciem,
+        // o ile tej samej nazwy nie ma jednocześnie w „Zapasowe”.
+        const backupNames = new Set(
             state.aaos
-                .filter(aao => aao.aao_category_id !== azrCategoryId)
+                .filter(aao => aao.aao_category_id !== azrCategoryId && isCategoryName(aao, 'Zapasowe'))
+                .map(aao => String(aao.caption ?? ''))
+        );
+        const activeSourceNames = new Set(
+            state.aaos
+                .filter(aao => aao.aao_category_id !== azrCategoryId && !isCategoryName(aao, 'Zapasowe'))
                 .map(aao => String(aao.caption ?? ''))
         );
 
         return state.aaos
-            .filter(aao =>
-                aao.aao_category_id === azrCategoryId &&
-                !sourceNames.has(String(aao.caption ?? ''))
-            )
+            .filter(aao => {
+                if (aao.aao_category_id !== azrCategoryId) return false;
+                const name = String(aao.caption ?? '');
+                return backupNames.has(name) || !activeSourceNames.has(name);
+            })
             .sort((a, b) =>
                 a.caption.localeCompare(b.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
                 a.id - b.id
@@ -638,7 +656,7 @@
                 if (azrCategoryId == null) {
                     empty.textContent = 'Nie znaleziono kategorii o dokładnej nazwie „AZR”. Utwórz ją lub popraw jej nazwę.';
                 } else {
-                    empty.textContent = 'Nie znaleziono ZR do usunięcia z AZR. Każda nazwa w AZR ma odpowiednik poza AZR, również po uwzględnieniu „Bez kategorii”.';
+                    empty.textContent = 'Nie znaleziono ZR do usunięcia z AZR. Każda nazwa w AZR ma aktywny odpowiednik poza AZR i nie występuje w kategorii „Zapasowe”.';
                 }
             }
 
@@ -670,7 +688,7 @@
                 if (azrCategoryId == null) {
                     empty.textContent = 'Nie znaleziono kategorii o dokładnej nazwie „AZR”. Utwórz ją lub popraw jej nazwę.';
                 } else {
-                    empty.textContent = 'W kategorii AZR są już ZR o wszystkich dokładnych nazwach występujących w pozostałych kategoriach. „Bez kategorii” jest pomijane.';
+                    empty.textContent = 'W kategorii AZR są już ZR o wszystkich dokładnych nazwach występujących w aktywnych kategoriach. „Bez kategorii” i „Zapasowe” są pomijane.';
                 }
             }
 
@@ -724,7 +742,7 @@
             const count = getDeletedFromAZRRows().length;
             setStatus(
                 count
-                    ? `Znaleziono ${count} ZR w AZR, których nie ma już nigdzie poza AZR (sprawdzono także „Bez kategorii”).`
+                    ? `Znaleziono ${count} ZR do usunięcia z AZR: bez aktywnego odpowiednika albo oznaczone kategorią „Zapasowe”. „Bez kategorii” jest uwzględniana jako aktywny odpowiednik.`
                     : 'Nie znaleziono ZR do usunięcia z AZR.',
                 count ? 'warning' : 'success'
             );
@@ -740,7 +758,7 @@
         let target = state.aaos.find(aao => aao.id === id);
         if (!target || target.aao_category_id !== azrCategoryId) return;
 
-        if (!confirm(`Usunąć z AZR ZR „${target.caption}” (ID ${target.id})?\n\nSkrypt sprawdzi jeszcze raz, czy poza AZR nadal nie ma ZR o tej nazwie (także w „Bez kategorii”). Tej operacji nie można cofnąć.`)) return;
+        if (!confirm(`Usunąć z AZR ZR „${target.caption}” (ID ${target.id})?\n\nSkrypt sprawdzi jeszcze raz, czy ZR nadal kwalifikuje się do usunięcia: brak aktywnego odpowiednika albo nazwa występuje w „Zapasowe”. „Bez kategorii” nadal chroni przed usunięciem, o ile nazwa nie jest też w „Zapasowe”. Tej operacji nie można cofnąć.`)) return;
 
         state.deleting = true;
         const oldText = button?.textContent;
@@ -754,7 +772,7 @@
             const stillOrphan = target && getDeletedFromAZRRows().some(aao => aao.id === id);
             if (!stillOrphan) {
                 renderMissingAZRTable();
-                setStatus(`ZR ID ${id} nie jest już pozycją do usunięcia z AZR — znaleziono odpowiednik poza AZR (także w „Bez kategorii”) albo ZR już nie istnieje.`, 'warning');
+                setStatus(`ZR ID ${id} nie jest już pozycją do usunięcia z AZR — znaleziono aktywny odpowiednik poza AZR, pozycja zniknęła z „Zapasowe” albo ZR już nie istnieje.`, 'warning');
                 return;
             }
 
@@ -793,7 +811,7 @@
 
         if (!confirm(`Usunąć z AZR wszystkie znalezione osierocone ZR (${rows.length})?
 
-Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy nadal nie ma odpowiednika poza AZR — także w „Bez kategorii”. Tej operacji nie można cofnąć.`)) return;
+Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy nadal kwalifikuje się do usunięcia. „Zapasowe” wymusza usunięcie z AZR, a „Bez kategorii” jest traktowana jako aktywny odpowiednik. Tej operacji nie można cofnąć.`)) return;
 
         const button = document.getElementById('orzr-missing-azr-delete-all');
         state.deleting = true;
@@ -928,7 +946,7 @@ Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy na
             setStatus('Nic nie brakuje w AZR.', 'success');
             return;
         }
-        if (!confirm(`Skopiować do kategorii AZR wszystkie brakujące ZR (${rows.length})?\n\n„Bez kategorii” jest pomijane.`)) return;
+        if (!confirm(`Skopiować do kategorii AZR wszystkie brakujące ZR (${rows.length})?\n\n„Bez kategorii” i „Zapasowe” są pomijane.`)) return;
 
         const button = document.getElementById('orzr-missing-azr-copy-all');
         state.copying = true;
@@ -1443,6 +1461,206 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         }
     }
 
+    function potentialMissionHeaderIndex(headers, aliases) {
+        for (let i = 0; i < headers.length; i++) {
+            const h = normalize(headers[i]);
+            if (aliases.some(alias => h.includes(normalize(alias)))) return i;
+        }
+        return -1;
+    }
+
+    function cleanPotentialMissionCell(cell) {
+        return String(cell?.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function parsePotentialMissionsDocument(doc) {
+        const tables = [...doc.querySelectorAll('table')];
+        const table = tables.find(t => {
+            const text = normalize([...t.querySelectorAll('th')].map(th => th.textContent || '').join(' | '));
+            return text.includes('nazwa misji') && text.includes('wymagania');
+        });
+        if (!table) throw new Error('Nie znaleziono tabeli „Potencjalne misje” na stronie /einsaetze.');
+
+        let headerCells = [...table.querySelectorAll('thead th')];
+        if (!headerCells.length) headerCells = [...table.querySelectorAll('tr th')];
+        const headers = headerCells.map(th => cleanPotentialMissionCell(th));
+        const idxName = potentialMissionHeaderIndex(headers, ['Nazwa misji']);
+        const idxUM = potentialMissionHeaderIndex(headers, ['UM']);
+        const idxCredits = potentialMissionHeaderIndex(headers, ['Średnie kredyty', 'Srednie kredyty']);
+        const idxRequirements = potentialMissionHeaderIndex(headers, ['Wymagania']);
+        const idxType = potentialMissionHeaderIndex(headers, ['Rodzaj misji']);
+
+        let rows = [...table.querySelectorAll('tbody tr')];
+        if (!rows.length) rows = [...table.querySelectorAll('tr')].filter(tr => tr.querySelectorAll('td').length);
+        const missions = [];
+
+        for (const tr of rows) {
+            const cells = [...tr.querySelectorAll('td')];
+            if (!cells.length) continue;
+            const nameCell = idxName >= 0 ? cells[idxName] : cells[1] || cells[0];
+            const links = [...(nameCell?.querySelectorAll('a[href]') || [])];
+            let nameLink = links.find(a => {
+                const txt = cleanPotentialMissionCell(a);
+                return txt && !/^(szczegóły|szczegoly|details)$/i.test(txt);
+            });
+            if (!nameLink) {
+                nameLink = [...tr.querySelectorAll('a[href]')].find(a => {
+                    const txt = cleanPotentialMissionCell(a);
+                    return txt && !/^(szczegóły|szczegoly|details)$/i.test(txt) && /\/einsaetze\//.test(a.getAttribute('href') || '');
+                });
+            }
+            let name = cleanPotentialMissionCell(nameLink || nameCell);
+            if (!name) continue;
+
+            const detailsLink = [...tr.querySelectorAll('a[href]')].find(a => /szczegóły|szczegoly|details/i.test(cleanPotentialMissionCell(a))) || nameLink;
+            missions.push({
+                index: missions.length + 1,
+                name,
+                um: idxUM >= 0 ? cleanPotentialMissionCell(cells[idxUM]) : '',
+                credits: idxCredits >= 0 ? cleanPotentialMissionCell(cells[idxCredits]) : '',
+                requirements: idxRequirements >= 0 ? cleanPotentialMissionCell(cells[idxRequirements]) : '',
+                type: idxType >= 0 ? cleanPotentialMissionCell(cells[idxType]) : '',
+                href: detailsLink?.getAttribute('href') || nameLink?.getAttribute('href') || ''
+            });
+        }
+
+        if (!missions.length) throw new Error('Tabela „Potencjalne misje” została znaleziona, ale nie udało się odczytać nazw misji.');
+        return missions;
+    }
+
+    async function loadPotentialMissions(force = false) {
+        if (state.potentialMissionsLoading) return state.potentialMissions;
+        if (state.potentialMissionsLoaded && !force) return state.potentialMissions;
+
+        state.potentialMissionsLoading = true;
+        state.potentialMissionError = '';
+        updatePotentialMissionControls();
+        try {
+            const response = await fetch('/einsaetze', {
+                credentials: 'same-origin',
+                headers: { Accept: 'text/html,application/xhtml+xml' }
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}: /einsaetze`);
+            const html = await response.text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            state.potentialMissions = parsePotentialMissionsDocument(doc);
+            state.potentialMissionsLoaded = true;
+            state.potentialMissionError = '';
+            return state.potentialMissions;
+        } catch (e) {
+            state.potentialMissionError = String(e?.message || e);
+            state.potentialMissionsLoaded = false;
+            throw e;
+        } finally {
+            state.potentialMissionsLoading = false;
+            updatePotentialMissionControls();
+            if (state.activeTab === 'potential-missions') renderPotentialMissionsTable();
+        }
+    }
+
+    function filteredPotentialMissions() {
+        const q = normalize(state.potentialMissionFilter);
+        const rows = [...state.potentialMissions];
+        const filtered = q ? rows.filter(mission => normalize(
+            `${mission.name} ${mission.um} ${mission.credits} ${mission.requirements} ${mission.type}`
+        ).includes(q)) : rows;
+        return filtered.sort((a, b) =>
+            a.name.localeCompare(b.name, 'pl', { numeric: true, sensitivity: 'base' }) || a.index - b.index
+        );
+    }
+
+    function updatePotentialMissionControls() {
+        const refresh = document.getElementById('orzr-pm-refresh');
+        if (refresh) {
+            refresh.disabled = state.potentialMissionsLoading;
+            refresh.textContent = state.potentialMissionsLoading ? 'Ładowanie…' : '↻ Odśwież Potencjalne misje';
+        }
+        const count = document.getElementById('orzr-pm-count');
+        if (count) count.textContent = state.potentialMissionsLoaded ? state.potentialMissions.length : '—';
+    }
+
+    function renderPotentialMissionsTable() {
+        const tbody = document.getElementById('orzr-pm-body');
+        const empty = document.getElementById('orzr-pm-empty');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        const rows = filteredPotentialMissions();
+
+        if (empty) {
+            empty.hidden = rows.length > 0;
+            if (state.potentialMissionsLoading) empty.textContent = 'Pobieram listę Potencjalnych misji…';
+            else if (state.potentialMissionError) empty.textContent = `Błąd pobierania Potencjalnych misji: ${state.potentialMissionError}`;
+            else if (!state.potentialMissionsLoaded) empty.textContent = 'Lista Potencjalnych misji nie została jeszcze pobrana.';
+            else empty.textContent = 'Brak Potencjalnych misji pasujących do wyszukiwania.';
+        }
+
+        for (const mission of rows) {
+            const tr = document.createElement('tr');
+            const href = mission.href ? new URL(mission.href, location.origin).pathname + new URL(mission.href, location.origin).search : '';
+            tr.innerHTML = `
+                <td>${mission.index}</td>
+                <td class="orzr-pm-name">${escapeHTML(mission.name)}</td>
+                <td>${escapeHTML(mission.um)}</td>
+                <td>${escapeHTML(mission.credits)}</td>
+                <td class="orzr-pm-long">${escapeHTML(mission.requirements)}</td>
+                <td class="orzr-pm-long">${escapeHTML(mission.type)}</td>
+                <td class="orzr-actions">${href ? `<a class="btn btn-default btn-sm" href="${escapeHTML(href)}">Szczegóły</a>` : ''}</td>`;
+            tbody.appendChild(tr);
+        }
+        updatePotentialMissionControls();
+        updateStats();
+    }
+
+    async function checkAAOsAgainstPotentialMissions() {
+        const button = document.getElementById('orzr-check-pm');
+        if (state.potentialMissionsLoading) return;
+        const oldText = button?.textContent;
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Sprawdzam PM…';
+        }
+        try {
+            setStatus('Pobieram listę Potencjalnych misji i porównuję ZR…', 'info');
+            await loadPotentialMissions(false);
+            const pmNames = new Set(state.potentialMissions.map(mission => String(mission.name ?? '')));
+            const sourceRows = state.aaos.filter(aao =>
+                aao.aao_category_id != null && !isCategoryName(aao, 'Zapasowe')
+            );
+            const skipped = state.aaos.length - sourceRows.length;
+            const results = sourceRows.map(aao => {
+                const found = pmNames.has(String(aao.caption ?? ''));
+                return {
+                    aao,
+                    issue: found ? '✓ Występuje w Potencjalnych misjach' : '✗ Brak w Potencjalnych misjach',
+                    pmFound: found
+                };
+            }).sort((a, b) =>
+                Number(a.pmFound) - Number(b.pmFound) ||
+                a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
+                a.aao.id - b.aao.id
+            );
+
+            state.cleanupResults = results;
+            state.cleanupMode = 'pm-check';
+            state.cleanupSelected.clear();
+            renderCleanupTable();
+            const foundCount = results.filter(x => x.pmFound).length;
+            const missingCount = results.length - foundCount;
+            setStatus(
+                `Sprawdź PM: sprawdzono ${results.length} ZR. W PM: ${foundCount} • brak w PM: ${missingCount} • pominięto Bez kategorii i Zapasowe: ${skipped}.`,
+                missingCount ? 'warning' : 'success'
+            );
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd sprawdzania Potencjalnych misji: ${e.message || e}`, 'danger');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.textContent = oldText || 'Sprawdź PM';
+            }
+        }
+    }
+
     function duplicateNameKey(caption) {
         // Przy duplikatach nie usuwamy spacji z końca nazwy — do tego służy
         // osobne wyszukiwanie. Ignorujemy jedynie wielkość liter.
@@ -1744,6 +1962,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             empty.hidden = state.cleanupResults.length > 0;
             if (!state.cleanupMode) empty.textContent = 'Wybierz jedną z operacji porządkowania powyżej.';
             else if (String(state.cleanupMode).startsWith('duplicates:')) empty.textContent = 'Nie znaleziono duplikatów nazw ZR.';
+            else if (state.cleanupMode === 'pm-check') empty.textContent = 'Brak ZR do porównania z Potencjalnymi misjami (Bez kategorii i Zapasowe są pomijane).';
             else empty.textContent = 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.';
         }
 
@@ -1765,7 +1984,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 <td class="orzr-cleanup-name">${name}</td>
                 <td>${Number(aao.column) || 1}</td>
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
-                <td>${escapeHTML(item.issue)}</td>
+                <td class="${state.cleanupMode === 'pm-check' ? (item.pmFound ? 'orzr-pm-found' : 'orzr-pm-missing') : ''}">${escapeHTML(item.issue)}</td>
                 <td class="orzr-actions">
                     <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
                     <button type="button" class="btn btn-danger btn-sm orzr-delete-row" data-id="${aao.id}">🗑 Usuń</button>
@@ -1994,44 +2213,59 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const copyTable = document.getElementById('orzr-copy-table');
         const cleanupTable = document.getElementById('orzr-cleanup-table');
         const missingAZRTable = document.getElementById('orzr-missing-azr-table');
+        const potentialMissionsTable = document.getElementById('orzr-pm-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
         const cleanupTools = document.getElementById('orzr-cleanup-tools');
         const missingAZRTools = document.getElementById('orzr-missing-azr-tools');
+        const potentialMissionsTools = document.getElementById('orzr-pm-tools');
         const azrUpdateErrors = document.getElementById('orzr-azr-update-errors');
         const toolbar = document.getElementById('orzr-toolbar');
         const normalEmpty = document.getElementById('orzr-empty');
         const cleanupEmpty = document.getElementById('orzr-cleanup-empty');
         const missingAZREmpty = document.getElementById('orzr-missing-azr-empty');
+        const potentialMissionsEmpty = document.getElementById('orzr-pm-empty');
         const shownLabel = document.getElementById('orzr-shown-label');
 
         const copying = state.activeTab === 'copy';
         const cleaning = state.activeTab === 'cleanup';
         const missingAZR = state.activeTab === 'missing-azr';
+        const potentialMissions = state.activeTab === 'potential-missions';
         const listing = state.activeTab === 'list';
 
         if (listTable) listTable.hidden = !listing;
         if (copyTable) copyTable.hidden = !copying;
         if (cleanupTable) cleanupTable.hidden = !cleaning;
         if (missingAZRTable) missingAZRTable.hidden = !missingAZR;
+        if (potentialMissionsTable) potentialMissionsTable.hidden = !potentialMissions;
         if (copyBulk) copyBulk.hidden = !copying;
         if (cleanupTools) cleanupTools.hidden = !cleaning;
         if (missingAZRTools) missingAZRTools.hidden = !missingAZR;
+        if (potentialMissionsTools) potentialMissionsTools.hidden = !potentialMissions;
         if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrListMode === 'deleted' || state.azrUpdateErrors.length === 0;
-        if (toolbar) toolbar.hidden = cleaning || missingAZR;
+        if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions;
         if (saveAll) saveAll.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
-        if (normalEmpty && (cleaning || missingAZR)) normalEmpty.hidden = true;
+        if (normalEmpty && (cleaning || missingAZR || potentialMissions)) normalEmpty.hidden = true;
         if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
         if (missingAZREmpty && !missingAZR) missingAZREmpty.hidden = true;
-        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : 'Widocznych';
+        if (potentialMissionsEmpty && !potentialMissions) potentialMissionsEmpty.hidden = true;
+        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : potentialMissions ? 'Potencjalnych misji' : 'Widocznych';
 
         if (copying) renderCopyTable();
         else if (cleaning) renderCleanupTable();
         else if (missingAZR) {
             renderMissingAZRTable();
             renderAZRUpdateErrors();
+        } else if (potentialMissions) {
+            renderPotentialMissionsTable();
+            if (!state.potentialMissionsLoaded && !state.potentialMissionsLoading) {
+                loadPotentialMissions(false).catch(e => {
+                    console.error(TAG, e);
+                    setStatus(`Błąd pobierania Potencjalnych misji: ${e.message || e}`, 'danger');
+                });
+            }
         } else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
@@ -2040,7 +2274,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     }
 
     function setActiveTab(tab) {
-        if (!['list', 'copy', 'cleanup', 'missing-azr'].includes(tab)) return;
+        if (!['list', 'copy', 'cleanup', 'missing-azr', 'potential-missions'].includes(tab)) return;
         state.activeTab = tab;
         setStatus('', 'info');
         renderActiveTable();
@@ -2063,7 +2297,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             ? state.cleanupResults.length
             : state.activeTab === 'missing-azr'
                 ? currentMissingAZRCount()
-                : sortedFilteredAAOs(state.activeTab).length;
+                : state.activeTab === 'potential-missions'
+                    ? filteredPotentialMissions().length
+                    : sortedFilteredAAOs(state.activeTab).length;
         if (changed) changed.textContent = state.dirty.size;
     }
 
@@ -2269,8 +2505,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
-#orzr-cleanup-tools,#orzr-missing-azr-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
-#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden]{display:none}
+#orzr-cleanup-tools,#orzr-missing-azr-tools,#orzr-pm-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden],#orzr-pm-tools[hidden]{display:none}
 #orzr-cleanup-tools .btn{white-space:nowrap}
 .orzr-cleanup-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-right:10px;border-right:1px solid #ddd}
 .orzr-cleanup-group:last-child{border-right:0}
@@ -2286,9 +2522,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-pm-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -2310,7 +2546,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-cleanup-check input{width:18px;height:18px;cursor:pointer}
 .orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
 .orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
-#orzr-cleanup-empty,#orzr-missing-azr-empty{padding:30px;text-align:center;color:#777}
+#orzr-cleanup-empty,#orzr-missing-azr-empty,#orzr-pm-empty{padding:30px;text-align:center;color:#777}
 #orzr-missing-azr-table th:nth-child(1),#orzr-missing-azr-table td:nth-child(1){width:85px}
 #orzr-missing-azr-table th:nth-child(3),#orzr-missing-azr-table td:nth-child(3){width:120px}
 #orzr-missing-azr-table th:nth-child(4),#orzr-missing-azr-table td:nth-child(4){width:320px}
@@ -2319,6 +2555,16 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-missing-note{margin-top:3px;font-size:11px;color:#777}
 #orzr-missing-azr-copy-all,#orzr-missing-azr-search-deleted,#orzr-missing-azr-delete-all{white-space:nowrap}
 .orzr-missing-azr-info{font-size:12px;color:#555}
+#orzr-pm-tools input{min-width:320px;max-width:520px}
+#orzr-pm-table th:nth-child(1),#orzr-pm-table td:nth-child(1){width:60px;text-align:right}
+#orzr-pm-table th:nth-child(2),#orzr-pm-table td:nth-child(2){width:290px}
+#orzr-pm-table th:nth-child(3),#orzr-pm-table td:nth-child(3){width:230px}
+#orzr-pm-table th:nth-child(4),#orzr-pm-table td:nth-child(4){width:120px}
+#orzr-pm-table th:nth-child(7),#orzr-pm-table td:nth-child(7){width:105px}
+.orzr-pm-name{font-weight:600}
+.orzr-pm-long{white-space:normal;overflow-wrap:anywhere}
+.orzr-pm-found{color:#3c763d;font-weight:700}
+.orzr-pm-missing{color:#a94442;font-weight:700}
 #orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
 #orzr-azr-update-errors[hidden]{display:none}
 .orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
@@ -2405,6 +2651,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button type="button" class="orzr-tab orzr-tab-active" data-tab="list">✎ Lista / edycja</button>
         <button type="button" class="orzr-tab" data-tab="copy">⧉ Kopiuj</button>
         <button type="button" class="orzr-tab" data-tab="missing-azr">🔎 Brakuje w AZR</button>
+        <button type="button" class="orzr-tab" data-tab="potential-missions">📋 Potencjalne misje</button>
         <button type="button" class="orzr-tab" data-tab="cleanup">🧹 Porządkowanie</button>
     </div>
     <div id="orzr-toolbar">
@@ -2449,7 +2696,12 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button id="orzr-missing-azr-search-deleted" type="button" class="btn btn-danger">🗑 Szukaj usuniętych</button>
         <button id="orzr-missing-azr-delete-all" type="button" class="btn btn-danger" hidden>🗑 Usuń wszystkie znalezione (0)</button>
         <button id="orzr-missing-azr-refresh" type="button" class="btn btn-default">↻ Sprawdź ponownie</button>
-        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Źródła: wszystkie kategorie poza „AZR” i „Bez kategorii”. „Szukaj usuniętych” pokazuje ZR pozostawione w AZR, których nie ma już w żadnej innej kategorii; w tym trybie można też użyć „Usuń wszystkie znalezione”. Każda nowa kopia do AZR jest zawsze ustawiana w kolumnie 1. Synchronizacja porównuje wyłącznie pojazdy i ich liczby.</span>
+        <span class="orzr-missing-azr-info">Porównanie po dokładnej nazwie ZR. Przy szukaniu brakujących pomijane są „Bez kategorii” i „Zapasowe”. W trybie „Szukaj usuniętych” kategoria „Zapasowe” oznacza, że odpowiadającego ZR nie powinno być w AZR; „Bez kategorii” nadal jest uwzględniana jako aktywny odpowiednik. Każda nowa kopia do AZR jest zawsze ustawiana w kolumnie 1. Synchronizacja porównuje wyłącznie pojazdy i ich liczby.</span>
+    </div>
+    <div id="orzr-pm-tools" hidden>
+        <input id="orzr-pm-search" type="search" class="form-control" placeholder="Szukaj w Potencjalnych misjach…">
+        <button id="orzr-pm-refresh" type="button" class="btn btn-default">↻ Odśwież Potencjalne misje</button>
+        <span class="orzr-missing-azr-info">Źródło: strona gry „Potencjalne misje” (/einsaetze). Wczytanych pozycji: <strong id="orzr-pm-count">—</strong>.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -2464,6 +2716,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         </div>
         <div class="orzr-cleanup-group">
             <button id="orzr-delete-selected" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
+        </div>
+        <div class="orzr-cleanup-group">
+            <button id="orzr-check-pm" type="button" class="btn btn-info">Sprawdź PM</button>
         </div>
         <div class="orzr-cleanup-group">
             <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
@@ -2500,6 +2755,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             </tr></thead>
             <tbody id="orzr-missing-azr-body"></tbody>
         </table>
+        <table id="orzr-pm-table" hidden>
+            <thead><tr><th>#</th><th>Nazwa misji</th><th>UM</th><th>Średnie kredyty</th><th>Wymagania</th><th>Rodzaj misji</th><th>Akcje</th></tr></thead>
+            <tbody id="orzr-pm-body"></tbody>
+        </table>
         <table id="orzr-cleanup-table" hidden>
             <thead><tr>
                 <th><input id="orzr-cleanup-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie wyniki"></th>
@@ -2508,6 +2767,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             <tbody id="orzr-cleanup-body"></tbody>
         </table>
         <div id="orzr-missing-azr-empty" hidden></div>
+        <div id="orzr-pm-empty" hidden></div>
         <div id="orzr-cleanup-empty" hidden>Wybierz jedną z operacji porządkowania powyżej.</div>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
@@ -2565,12 +2825,27 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 setStatus(`Błąd ponownego sprawdzania AZR: ${e.message || e}`, 'danger');
             }
         });
+        document.getElementById('orzr-pm-search').addEventListener('input', e => {
+            state.potentialMissionFilter = e.target.value;
+            renderPotentialMissionsTable();
+        });
+        document.getElementById('orzr-pm-refresh').addEventListener('click', async () => {
+            try {
+                setStatus('Odświeżam Potencjalne misje…', 'info');
+                await loadPotentialMissions(true);
+                setStatus(`Wczytano ${state.potentialMissions.length} pozycji z Potencjalnych misji.`, 'success');
+            } catch (e) {
+                console.error(TAG, e);
+                setStatus(`Błąd pobierania Potencjalnych misji: ${e.message || e}`, 'danger');
+            }
+        });
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));
         document.getElementById('orzr-find-trailing-spaces').addEventListener('click', findTrailingSpaces);
         document.getElementById('orzr-remove-trailing-spaces').addEventListener('click', removeTrailingWhitespaceFromAll);
         document.getElementById('orzr-delete-selected').addEventListener('click', deleteSelectedCleanup);
+        document.getElementById('orzr-check-pm').addEventListener('click', checkAAOsAgainstPotentialMissions);
         document.getElementById('orzr-export-csv').addEventListener('click', exportAllAAOsToCSV);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();

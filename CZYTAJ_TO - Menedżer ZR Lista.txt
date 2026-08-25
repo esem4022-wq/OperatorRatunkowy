@@ -15,6 +15,18 @@ Aktualizacje Tampermonkey:
 HISTORIA WERSJI
 ===============
 
+v3.10.1 — 25.08.2026 — WERSJA TESTOWA
+----------------------------------------
+- Testowy przeskok do gałęzi v3.10; baza funkcjonalna: v3.04.
+- „Brakuje w AZR”: przy wyszukiwaniu brakujących ZR pomijane są teraz zarówno „Bez kategorii”, jak i „Zapasowe”.
+- „Szukaj usuniętych”: kategoria „Zapasowe” jest traktowana jako informacja, że odpowiadającego ZR nie powinno być w AZR. Taka nazwa jest proponowana do usunięcia z AZR nawet wtedy, gdy występuje też w innej zwykłej kategorii.
+- „Bez kategorii” nadal jest uwzględniana przy szukaniu usuniętych jako aktywny odpowiednik, o ile tej samej nazwy nie ma w „Zapasowe”. Ta sama reguła działa przy ponownej kontroli przed usunięciem pojedynczym i zbiorczym.
+- Dodano osobną zakładkę „Potencjalne misje”. Lista jest pobierana bezpośrednio ze strony gry /einsaetze i pokazuje: nazwę misji, UM, średnie kredyty, wymagania, rodzaj misji oraz przejście do szczegółów.
+- W zakładce „Potencjalne misje” dodano wyszukiwanie oraz ręczne odświeżanie listy.
+- W „Porządkowaniu” dodano przycisk „Sprawdź PM”. Porównuje nazwy własnych ZR z listą Potencjalnych misji i pokazuje osobno pozycje występujące w PM oraz brakujące w PM.
+- „Sprawdź PM” pomija ZR z „Bez kategorii” oraz „Zapasowe”.
+- Zachowano obsługę GitHuba, stałą nazwę pliku menedzer-zr-lista.user.js i pełną historię wcześniejszych wersji.
+
 v3.04 — 22.08.2026
 ------------------
 - W trybie „Szukaj usuniętych” w zakładce „Brakuje w AZR” dodano przycisk „Usuń wszystkie znalezione”.
