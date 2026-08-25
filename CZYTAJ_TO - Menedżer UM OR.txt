@@ -15,6 +15,15 @@ https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-um
 HISTORIA WERSJI
 ===============
 
+Wersja 3.01
+------------
+- Poprawiono brak widocznego przycisku Menedżera UM OR na dole strony głównej.
+- Przycisk ma teraz taki sam dolny układ jak pozostałe menedżery.
+- Zwiększono z-index przycisku, aby interfejs gry nie mógł go zasłonić.
+- Menedżer UM OR automatycznie wyszukuje przyciski Załoga OR, Menedżer ZR, Budynki OR i Flota OR.
+- Przycisk UM OR ustawia się po lewej stronie najbardziej wysuniętego w lewo istniejącego menedżera.
+- Dodano ponowne pozycjonowanie po załadowaniu pozostałych skryptów oraz po zmianie rozmiaru okna.
+
 Wersja 3.0
 -----------
 - Pierwsza wersja Menedżera UM OR.

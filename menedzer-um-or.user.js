@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer UM OR
 // @namespace    operatorratunkowy.local.poimanager
-// @version      3.0
+// @version      3.01
 // @description  Katalog i kontrola UM/POI na podstawie Potencjalnych misji oraz własnych punktów UM.
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,9 +16,12 @@
 
 /*
  * Operator Ratunkowy - Menedżer UM OR
- * Wersja 3.0
+ * Wersja 3.01
  *
- * Założenia wersji 3.0:
+ * Założenia wersji 3.01:
+ * - poprawione wyświetlanie przycisku na dole strony głównej,
+ * - przycisk ma wysoki z-index i ustawia się automatycznie po lewej stronie
+ *   istniejących przycisków pozostałych menedżerów,
  * - lista rodzajów UM nie jest wpisana na sztywno,
  * - katalog wymaganych UM jest pobierany z publicznej strony /einsaetze
  *   (Potencjalne misje), z kolumny "UM",
@@ -38,7 +41,7 @@
   const APP_ID = 'or-um-manager-v30';
   const BUTTON_ID = `${APP_ID}-button`;
   const MODAL_ID = `${APP_ID}-modal`;
-  const VERSION = '3.0';
+  const VERSION = '3.01';
   const MISSIONS_URL = '/einsaetze';
   const POIS_API_URL = '/api/v2/pois';
   const POI_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/pois';
@@ -96,25 +99,30 @@
     style.id = `${APP_ID}-style`;
     style.textContent = `
       #${BUTTON_ID} {
-        position: fixed;
-        left: 12px;
-        bottom: 156px;
-        z-index: 1040;
-        border: 1px solid #6c5ce7;
+        position: fixed !important;
+        right: 520px;
+        bottom: 18px;
+        z-index: 2147483000 !important;
+        display: inline-block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        border: 0;
         border-radius: 999px;
-        padding: 8px 13px;
-        background: #fff;
-        color: #2d3436;
-        box-shadow: 0 2px 8px rgba(0,0,0,.22);
-        font-weight: 700;
+        padding: 11px 16px;
+        background: #6c5ce7;
+        color: #fff;
+        box-shadow: 0 4px 16px rgba(0,0,0,.28);
+        font: 700 13px/1.2 Arial,sans-serif;
         cursor: pointer;
+        white-space: nowrap;
       }
-      #${BUTTON_ID}:hover { transform: translateY(-1px); }
+      #${BUTTON_ID}:hover { filter: brightness(1.08); }
 
       #${MODAL_ID} {
         position: fixed;
         inset: 0;
-        z-index: 20000;
+        z-index: 2147483001;
         display: none;
         align-items: center;
         justify-content: center;
@@ -276,10 +284,69 @@
         #${MODAL_ID} { padding: 0; }
         #${MODAL_ID} .or-um-window { width: 100vw; height: 100vh; border-radius: 0; }
         #${MODAL_ID} input { min-width: 180px; }
-        #${BUTTON_ID} { left: 6px; bottom: 140px; }
+        #${BUTTON_ID} { bottom: 18px; }
       }
     `;
     document.head.appendChild(style);
+  }
+
+  function launcherCandidates() {
+    const ids = [
+      'or-crew-manager-v01-button',
+      'orzr-launcher',
+      'or-building-manager-v01-button',
+      'or-fleet-manager-v01-button',
+    ];
+    const byId = ids.map(id => document.getElementById(id)).filter(Boolean);
+    const byText = [...document.querySelectorAll('button')].filter(el => {
+      if (el.id === BUTTON_ID) return false;
+      const text = normalizeText(el.textContent);
+      return /(?:Załoga OR|Menedżer ZR|Budynki OR|Flota OR)/i.test(text);
+    });
+    return [...new Set([...byId, ...byText])].filter(el => {
+      if (!el || el.id === BUTTON_ID) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+  }
+
+  function positionLauncherButton() {
+    const button = document.getElementById(BUTTON_ID);
+    if (!button) return false;
+
+    button.style.bottom = '18px';
+    const candidates = launcherCandidates();
+    if (!candidates.length) {
+      button.style.right = '520px';
+      return false;
+    }
+
+    // UM OR trafia po lewej stronie najbardziej wysuniętego w lewo
+    // przycisku istniejących menedżerów, dzięki czemu nie nachodzi na nie.
+    const leftmost = candidates.reduce((a, b) =>
+      a.getBoundingClientRect().left < b.getBoundingClientRect().left ? a : b
+    );
+    const rect = leftmost.getBoundingClientRect();
+    const gap = 10;
+    const right = Math.max(10, Math.round(window.innerWidth - rect.left + gap));
+    const bottom = Math.max(10, Math.round(window.innerHeight - rect.bottom));
+    button.style.right = `${right}px`;
+    button.style.bottom = `${bottom}px`;
+    return true;
+  }
+
+  function startLauncherPositioning() {
+    positionLauncherButton();
+    [100, 300, 700, 1500, 3000, 5000].forEach(delay => {
+      setTimeout(positionLauncherButton, delay);
+    });
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      positionLauncherButton();
+      if (attempts >= 40) clearInterval(timer);
+    }, 250);
+    window.addEventListener('resize', positionLauncherButton, { passive: true });
   }
 
   function createUi() {
@@ -293,6 +360,7 @@
       button.title = 'Menedżer UM / POI';
       button.addEventListener('click', openManager);
       document.body.appendChild(button);
+      startLauncherPositioning();
     }
 
     const modal = document.createElement('div');
