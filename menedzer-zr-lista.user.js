@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.2
+// @version      3.10.3
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.10.2';
+    const VERSION = '3.10.3';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -1541,11 +1541,31 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         };
     }
 
+    function potentialMissionIdentity(mission) {
+        const href = String(mission?.href || '');
+        const match = href.match(/^\/einsaetze\/(\d+)/);
+        if (match) return `id:${match[1]}`;
+        return `row:${[
+            mission?.name || '',
+            mission?.um || '',
+            mission?.credits || '',
+            mission?.requirements || '',
+            mission?.type || ''
+        ].join('\u241f')}`;
+    }
+
+    function potentialMissionTotalFromDocument(doc) {
+        const text = String(doc?.body?.textContent || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+        const match = text.match(/(?:Łącznie|Lacznie|Razem|Total)\s*:?\s*(\d[\d\s.]*)/i);
+        if (!match) return null;
+        const value = Number(String(match[1]).replace(/[^\d]/g, ''));
+        return Number.isFinite(value) && value > 0 ? value : null;
+    }
+
     function parsePotentialMissionsDocument(doc) {
-        // v3.10.2: strona może zawierać więcej niż jedną tabelę/sekcję misji.
-        // Poprzednia wersja czytała tylko pierwszą pasującą tabelę, co dawało
-        // niepełną listę. Teraz zbieramy wszystkie wiersze zawierające linki
-        // /einsaetze/<id>, a następnie usuwamy wyłącznie duplikaty tego samego ID.
+        // Czytamy tylko właściwą tabelę/tabele „Potencjalne misje”.
+        // Globalny fallback z v3.10.2 potrafił doliczyć linki /einsaetze/
+        // spoza listy i dlatego przy 10 pozycjach na stronie skrypt widział np. 12.
         const missions = [];
         const seen = new Set();
         const processedRows = new Set();
@@ -1556,9 +1576,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             processedRows.add(tr);
             const mission = parsePotentialMissionRow(tr, headers);
             if (!mission) return;
-            const key = mission.href
-                ? mission.href
-                : [mission.name, mission.um, mission.credits, mission.requirements, mission.type].join('\u241f');
+            const key = potentialMissionIdentity(mission);
             if (seen.has(key)) return;
             seen.add(key);
             missions.push(mission);
@@ -1570,21 +1588,28 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             if (!headerCells.length) headerCells = [...table.querySelectorAll('tr th')];
             const headers = headerCells.map(th => cleanPotentialMissionCell(th));
             const hasMissionHeader = headers.some(h => normalize(h).includes('nazwa misji'));
-            const missionLinkCount = table.querySelectorAll('a[href*="/einsaetze/"]').length;
-            if (!hasMissionHeader && missionLinkCount < 2) continue;
-            for (const tr of table.querySelectorAll('tbody tr, tr')) addRow(tr, headers);
+            if (!hasMissionHeader) continue;
+
+            const bodyRows = [...table.querySelectorAll('tbody tr')];
+            if (bodyRows.length) {
+                for (const tr of bodyRows) addRow(tr, headers);
+            } else {
+                for (const tr of table.querySelectorAll('tr')) addRow(tr, headers);
+            }
         }
 
-        // Fallback/uzupełnienie: łapiemy również wiersze poza tabelą albo w
-        // dodatkowych responsywnych sekcjach, których nagłówki są nietypowe.
-        for (const a of doc.querySelectorAll('a[href*="/einsaetze/"]')) {
-            if (!potentialMissionHref(a)) continue;
-            const tr = a.closest('tr');
-            if (tr) addRow(tr, []);
+        // Fallback wyłącznie wtedy, gdy nie znaleziono rozpoznawalnej tabeli.
+        // Nie dokładamy nim elementów do poprawnie odczytanej listy.
+        if (!missions.length) {
+            for (const tr of doc.querySelectorAll('tr')) {
+                if (!tr.querySelector('a[href*="/einsaetze/"]')) continue;
+                addRow(tr, []);
+            }
         }
 
-        if (!missions.length) throw new Error('Nie udało się odczytać listy „Potencjalne misje” ze strony /einsaetze.');
-        missions.forEach((mission, index) => { mission.index = index + 1; });
+        if (!missions.length) {
+            throw new Error('Nie udało się odczytać listy „Potencjalne misje” ze strony /einsaetze.');
+        }
         return missions;
     }
 
@@ -1596,19 +1621,83 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         state.potentialMissionError = '';
         updatePotentialMissionControls();
         updatePMCheckControls();
+
         try {
-            // Parametr techniczny zapobiega wykorzystaniu starej kopii strony przez cache.
-            const response = await fetch(`/einsaetze?orzr_pm_full=${Date.now()}`, {
-                credentials: 'same-origin',
-                cache: 'no-store',
-                headers: { Accept: 'text/html,application/xhtml+xml' }
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}: /einsaetze`);
-            const html = await response.text();
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            state.potentialMissions = parsePotentialMissionsDocument(doc);
+            // /einsaetze jest stronicowane. W v3.10.2 pobieraliśmy tylko
+            // bieżącą stronę ustawioną w grze (np. 10 misji). Teraz wymuszamy
+            // większą stronę i pobieramy kolejne strony aż do pełnego wykazu.
+            const perPage = 100;
+            const all = [];
+            const seen = new Set();
+            let expectedTotal = null;
+            let page = 1;
+            const maxPages = 100;
+
+            while (page <= maxPages) {
+                const params = new URLSearchParams({
+                    _: String(Date.now()),
+                    expanded: 'true',
+                    page: String(page),
+                    per_page: String(perPage),
+                    select_dc: '-1',
+                    sort_by: 'default',
+                    sort_dir: 'asc'
+                });
+
+                const response = await fetch(`/einsaetze?${params.toString()}`, {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { Accept: 'text/html,application/xhtml+xml' }
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}: /einsaetze, strona ${page}`);
+
+                const html = await response.text();
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                if (expectedTotal == null) expectedTotal = potentialMissionTotalFromDocument(doc);
+
+                let pageMissions = [];
+                try {
+                    pageMissions = parsePotentialMissionsDocument(doc);
+                } catch (e) {
+                    if (page === 1) throw e;
+                    pageMissions = [];
+                }
+
+                let added = 0;
+                for (const mission of pageMissions) {
+                    const key = potentialMissionIdentity(mission);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    all.push(mission);
+                    added++;
+                }
+
+                setStatus(
+                    `Pobieram Potencjalne misje… strona ${page} • wczytano ${all.length}${expectedTotal ? ` / ${expectedTotal}` : ''}.`,
+                    'info'
+                );
+
+                if (expectedTotal && all.length >= expectedTotal) break;
+                if (!pageMissions.length || added === 0) break;
+
+                page++;
+                await new Promise(resolve => setTimeout(resolve, 120));
+            }
+
+            if (!all.length) throw new Error('Nie udało się pobrać żadnej Potencjalnej misji.');
+
+            all.forEach((mission, index) => { mission.index = index + 1; });
+            state.potentialMissions = all;
             state.potentialMissionsLoaded = true;
             state.potentialMissionError = '';
+
+            if (expectedTotal && all.length < expectedTotal) {
+                setStatus(
+                    `Uwaga: wykaz gry podaje ${expectedTotal} Potencjalnych misji, a skrypt wczytał ${all.length}. Spróbuj ponownie odświeżyć PM.`,
+                    'warning'
+                );
+            }
+
             return state.potentialMissions;
         } catch (e) {
             state.potentialMissionError = String(e?.message || e);

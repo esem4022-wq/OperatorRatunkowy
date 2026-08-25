@@ -224,3 +224,14 @@ WERSJA 3.10.2 (TESTOWA)
 - Przenoszenie do „Zapasowe” zachowuje nazwę i numer kolumny ZR, zmienia wyłącznie kategorię.
 - Zachowano wcześniejsze zmiany z v3.10.1 dotyczące AZR i kategorii Zapasowe.
 
+============================================================
+WERSJA 3.10.3 (TESTOWA)
+============================================================
+- Poprawiono krytyczny błąd pobierania „Potencjalnych misji”: v3.10.2 pobierała tylko aktualną stronę listy ustawioną w grze (np. 10 misji), przez co Menedżer widział zaledwie kilkanaście pozycji zamiast pełnego wykazu.
+- Skrypt wymusza teraz do 100 pozycji na stronę i automatycznie pobiera kolejne strony /einsaetze.
+- Pobieranie kończy się po osiągnięciu wartości „Łącznie” z wykazu gry albo gdy następna strona nie wnosi żadnych nowych ID misji.
+- Dodano krótki odstęp pomiędzy kolejnymi stronami, aby nie wysyłać serii zapytań bez przerwy.
+- Usunięto fałszywe doliczanie linków /einsaetze/ spoza właściwej tabeli. To powodowało m.in. wynik 12 przy ustawieniu „10 misje”.
+- „Sprawdź PM” korzysta z tej samej kompletnej, wielostronicowej listy PM.
+- Zachowano wszystkie funkcje v3.10.2, w tym osobną zakładkę „Sprawdź PM”, filtry, zaznaczanie, usuwanie oraz przenoszenie do „Zapasowe”.
+
