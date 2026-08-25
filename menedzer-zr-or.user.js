@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.11
+// @version      3.12
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.11';
-    const CAPTURE_KEY = 'or_zr_capture_v311';
+    const VERSION = '3.12';
+    const CAPTURE_KEY = 'or_zr_capture_v312';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -102,6 +102,18 @@
         return r.width > 10 && r.height > 10 &&
             r.bottom > 0 && r.right > 0 &&
             r.top < innerHeight && r.left < innerWidth;
+    }
+
+    function isDisplayedInInterface(el) {
+        if (!el || !el.isConnected) return false;
+        let node = el;
+        while (node && node !== document.documentElement) {
+            const cs = getComputedStyle(node);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            if (node.hidden || node.getAttribute?.('aria-hidden') === 'true') return false;
+            node = node.parentElement;
+        }
+        return true;
     }
 
     function parseIntLoose(text) {
@@ -2407,20 +2419,10 @@
         if (missionKey === exactMissionNameKey('Transport pacjenta')) return 'Ambulans T';
         if (missionKey.startsWith(exactMissionNameKey('Transport krytyczny'))) return 'A TK';
 
-        // v3.04: specjalne reguły najpierw z jednego, aktualnego snapshotu
-        // widocznej karty. To eliminuje wyścig ładowania przy 0,5 s.
-        const visibleSnapshot = getVisibleMissionRequirementSnapshot();
-        const visibleSpecialTarget = specialAutoSelectTargetFromSnapshot(visibleSnapshot);
+        // v3.12: skróty są uznawane tylko wtedy, gdy pełna widoczna karta
+        // bieżącej misji jednoznacznie potwierdza ich warunki.
+        const visibleSpecialTarget = visibleSpecialAutoSelectTarget(missionName);
         if (visibleSpecialTarget) return visibleSpecialTarget;
-
-        // v3.03: dokładnie 1 pacjent + jedyny pojazd `1 Ambulans`
-        // ma natychmiast wybrać gotową ZR `Ambulans` z AZR.
-        if (getVisibleSingleAmbulancePatientRequirement()) return 'Ambulans';
-
-        // v3.02: jeśli na aktualnie widocznej karcie jedynym wymaganiem jest
-        // dokładnie 1 OPI, wybierz ZR Radiowóz od razu. Ten test omija różnice
-        // w mission_help i działa bezpośrednio na tym, co użytkownik widzi.
-        if (getVisibleOnlyOPIRequirement()) return 'Radiowóz';
 
         let vehicles = [];
         let maxPatients = 0;
@@ -2453,6 +2455,9 @@
             if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
             if (!water) water = extractResourceFromText(cardText, 'water') || 0;
             if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
+
+            const strictVisibleTarget = strictSpecialAutoSelectTargetFromCardText(cardText);
+            return strictVisibleTarget || matchMissionName;
         }
 
         const requiredVehicles = Array.isArray(vehicles)
@@ -3031,18 +3036,50 @@
         return '';
     }
 
-    function visibleSpecialAutoSelectTarget() {
-        // Bezpośrednie, ścisłe skróty z widocznej karty.
-        if (hasVisibleOnlyOneOPIRaw()) return 'Radiowóz';
-        if (hasVisibleOnlyOneFireVehicleRaw()) return 'Straż';
+    function strictSpecialAutoSelectTargetFromCardText(cardText) {
+        const raw = String(cardText || '').replace(/\u00a0/g, ' ').trim();
+        if (!raw) return null;
 
-        const snapshot = getVisibleMissionRequirementSnapshot();
-        const fromSnapshot = specialAutoSelectTargetFromSnapshot(snapshot);
-        if (fromSnapshot) return fromSnapshot;
+        const vehicles = extractVehiclesFromCardText(raw)
+            .filter(v => Number(v?.count) > 0);
+        const maxPatients = extractMaxPatientsFromText(raw) || 0;
+        const water = extractResourceFromText(raw, 'water') || 0;
+        const foam = extractResourceFromText(raw, 'foam') || 0;
+        const vehicleSegment = getVehiclesTextSegmentFromCardText(raw);
 
-        if (getVisibleOnlyOPIRequirement()) return 'Radiowóz';
-        if (getVisibleSingleAmbulancePatientRequirement()) return 'Ambulans';
+        if (/\bPojazdy\b/i.test(raw) && vehicleSegment && !vehicles.length && /\b\d+\s+\S+/.test(vehicleSegment)) {
+            return null;
+        }
+
+        if (
+            maxPatients === 1 &&
+            water === 0 &&
+            foam === 0 &&
+            (
+                vehicles.length === 0 ||
+                (vehicles.length === 1 && isSinglePlainAmbulanceRequirement(vehicles[0]))
+            )
+        ) return 'Ambulans';
+
+        if (
+            vehicles.length === 1 &&
+            isSingleOPIRequirement(vehicles[0]) &&
+            maxPatients === 0 && water === 0 && foam === 0
+        ) return 'Radiowóz';
+
+        if (
+            vehicles.length === 1 &&
+            isSingleFireVehicleRequirement(vehicles[0]) &&
+            maxPatients === 0 && water === 0 && foam === 0
+        ) return 'Straż';
+
         return null;
+    }
+
+    function visibleSpecialAutoSelectTarget(missionName = '') {
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const cardText = findCurrentMissionCardText(liveName) || '';
+        return strictSpecialAutoSelectTargetFromCardText(cardText);
     }
 
     function setHeaderAZRLookupState(stateName, targetName = '') {
@@ -3123,150 +3160,30 @@
         state.autoSelectCompletedState = '';
     }
 
-    function buildAAOProxyFromApi(apiAAO, targetName) {
-        if (!apiAAO) return null;
-
-        const id = apiAAO?.id ?? apiAAO?.aao_id;
-        if (id == null || id === '') return null;
-
-        // Gdy AZR jest całkowicie ukryta, jej przycisk może w ogóle nie być
-        // renderowany w misji. Wtedy tworzymy niewidoczny odpowiednik przycisku
-        // na podstawie oficjalnego API AAO i uruchamiamy ten sam handler gry.
-        // Jeśli jQuery ma bezpośrednio przypięte eventy do .aao_btn, kopiujemy je
-        // z dowolnego istniejącego przycisku przez clone(true, true).
-        let proxy = null;
-        const template = document.querySelector('a.aao_btn, button.aao_btn, .aao_btn');
-        try {
-            const jq = window.jQuery || window.$;
-            if (template && jq && typeof jq(template).clone === 'function') {
-                proxy = jq(template).clone(true, true)[0];
-            }
-        } catch {}
-
-        if (!proxy) proxy = document.createElement('a');
-
-        // Usuń atrybuty starego ZR, pozostawiając tylko klasę i podstawy.
-        for (const attr of [...proxy.attributes]) {
-            if (attr.name !== 'class') proxy.removeAttribute(attr.name);
-        }
-        proxy.classList.add('aao_btn', 'btn');
-        proxy.id = `aao_${id}`;
-        proxy.href = '#';
-        proxy.textContent = targetName || String(apiAAO.caption || 'AZR');
-        proxy.style.cssText = 'display:none !important;position:absolute !important;left:-10000px !important;top:-10000px !important;';
-
-        // Standardowe klasy pojazdów są w DOM AAO przechowywane jako atrybuty
-        // (np. elw, fustw itd.). API zwraca te same klucze w vehicle_classes.
-        const classes = apiAAO.vehicle_classes && typeof apiAAO.vehicle_classes === 'object'
-            ? apiAAO.vehicle_classes : {};
-        for (const [key, value] of Object.entries(classes)) {
-            if (value == null) continue;
-            try { proxy.setAttribute(String(key), String(value)); } catch {}
-        }
-
-        // Dla typów bezpośrednich ustawiamy kilka zgodnych wariantów nazw.
-        // Różne wersje gry używały różnych reprezentacji tych pól.
-        const types = apiAAO.vehicle_types && typeof apiAAO.vehicle_types === 'object'
-            ? apiAAO.vehicle_types : {};
-        for (const [typeId, value] of Object.entries(types)) {
-            if (value == null) continue;
-            for (const attrName of [
-                `vehicle_type_${typeId}`,
-                `vehicle_type_id_${typeId}`,
-                `vehicle_type_ids[${typeId}]`
-            ]) {
-                try { proxy.setAttribute(attrName, String(value)); } catch {}
-            }
-        }
-
-        const captions = apiAAO.vehicle_type_captions && typeof apiAAO.vehicle_type_captions === 'object'
-            ? apiAAO.vehicle_type_captions : {};
-        for (const [caption, value] of Object.entries(captions)) {
-            if (value == null) continue;
-            try { proxy.setAttribute(`vehicle_type_caption[${caption}]`, String(value)); } catch {}
-        }
-
-        if (apiAAO.reset != null) proxy.setAttribute('reset', apiAAO.reset ? 'true' : 'false');
-        proxy.dataset.orzrProxy = '1';
-        document.body.appendChild(proxy);
-        return proxy;
-    }
-
-    function clickAAOProxyFromApi(apiAAO, targetName) {
-        const proxy = buildAAOProxyFromApi(apiAAO, targetName);
-        if (!proxy) return false;
-        try {
-            proxy.click();
-            return true;
-        } catch (error) {
-            console.warn(TAG, 'Nie udało się kliknąć proxy ZR z API:', error);
-            return false;
-        } finally {
-            setTimeout(() => proxy.remove(), 0);
-        }
-    }
-
-    async function clickAAOFromHiddenAZR(group, aaoId, targetName, categoryId, apiAAO = null) {
-        // Najlepszy wariant: AAO jest już w DOM. Kategoria może być ukryta albo
-        // nieaktywna — kliknięcie po ID nadal uruchamia natywną obsługę gry.
-        let target = findAAOButtonAnywhereById(aaoId);
-        if (target) {
-            if (!isAAOAvailable(target)) return { ok: false, reason: 'unavailable' };
-            ensureAutoSelectStyle();
-            target.classList.add('orzr-auto-selected-aao');
-            target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
-            target.click();
-            return { ok: true, target };
-        }
-
-        // Fallback dla leniwego renderowania kategorii: jeżeli kontrolka AZR
-        // istnieje w DOM (nawet ukryta), aktywujemy ją na moment BEZ pokazywania
-        // użytkownikowi przeskoku, czekamy na wyrenderowanie AAO, klikamy po ID
-        // i przywracamy wcześniejszą kategorię.
-        const control = findAZRCategoryControl(group, categoryId) ||
-                        findAZRCategoryControl(group, null) ||
-                        findAZRControlDirect(group);
-        if (!control) {
-            // AZR może być ukryta tak, że zakładki nie ma w DOM. W takim
-            // przypadku próbujemy uruchomić AAO przez niewidoczny proxy-przycisk
-            // zbudowany z danych API, bez przełączania kategorii użytkownika.
-            if (apiAAO && clickAAOProxyFromApi(apiAAO, targetName)) {
-                return { ok: true, target: null, proxy: true };
-            }
-            return { ok: false, reason: 'not-rendered' };
+    async function clickAAOFromVisibleAZR(group, aaoId, targetName, categoryId, control = null) {
+        const azrControl = control || findAZRCategoryControl(group, categoryId) || findAZRControlDirect(group);
+        if (!azrControl || !isDisplayedInInterface(azrControl)) {
+            return { ok: false, reason: 'azr-hidden' };
         }
 
         const previous = activeAAOCategoryControl(group);
-        const groupEl = document.getElementById('mission-aao-group');
-        const oldVisibility = groupEl?.style.visibility ?? '';
-        if (groupEl) groupEl.style.visibility = 'hidden';
 
         try {
-            showAZRCategory(control);
-            for (let i = 0; i < 14; i++) {
-                await waitMs(50);
-                target = findAAOButtonAnywhereById(aaoId);
-                if (target) break;
-            }
-
-            if (!target) {
-                if (apiAAO && clickAAOProxyFromApi(apiAAO, targetName)) {
-                    return { ok: true, target: null, proxy: true };
-                }
-                return { ok: false, reason: 'not-rendered' };
-            }
+            showAZRCategory(azrControl);
+            const target = await waitForAAOAfterAZRSwitch(group, azrControl, targetName, aaoId);
+            if (!target) return { ok: false, reason: 'not-rendered' };
             if (!isAAOAvailable(target)) return { ok: false, reason: 'unavailable' };
 
             ensureAutoSelectStyle();
             target.classList.add('orzr-auto-selected-aao');
             target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
             target.click();
+            await waitMs(120);
             return { ok: true, target };
         } finally {
-            if (previous && previous !== control) {
+            if (previous && previous !== azrControl && isDisplayedInInterface(previous)) {
                 try { previous.click(); } catch {}
             }
-            if (groupEl) groupEl.style.visibility = oldVisibility;
         }
     }
 
@@ -3320,13 +3237,25 @@
         state.autoSelectBusy = true;
 
         try {
-            // Krok 1: ustalamy nazwę ZR, ale NICZEGO jeszcze nie zapisujemy/capturujemy.
-            const visibleSnapshot = getVisibleMissionRequirementSnapshot();
-            const liveSpecialTarget = visibleSpecialAutoSelectTarget() || earlySpecialTarget;
+            let categoryId = await loadAZRCategoryId(false);
+            if (categoryId == null || categoryId === '') {
+                await loadAZRCategoryId(true);
+                categoryId = state.azrCategoryId;
+            }
 
-            if (!visibleSnapshot && !liveSpecialTarget && state.autoSelectAttempts <= 8) {
-                setHeaderAZRLookupState('checking');
-                scheduleAutoSelectRetry(150);
+            const azrControl = findAZRCategoryControl(group, categoryId) || findAZRControlDirect(group);
+            if (!azrControl || !isDisplayedInInterface(azrControl)) {
+                log('Auto-wybór: kategoria AZR jest ukryta lub niedostępna w interfejsie — auto-zaznaczanie pominięte.');
+                setHeaderAZRLookupState('notfound');
+                removeAutoSelectStatus();
+                markAutoSelectCompleted(missionKey, null, '', group, 'notfound');
+                return;
+            }
+
+            if (categoryId == null || categoryId === '') {
+                log('Auto-wybór: nie znaleziono ID widocznej kategorii AZR.');
+                setHeaderAZRLookupState('notfound');
+                markAutoSelectCompleted(missionKey, null, '', group, 'notfound');
                 return;
             }
 
@@ -3337,7 +3266,24 @@
                     ? 'Ambulans T'
                     : (missionNameKey.startsWith(exactMissionNameKey('Transport krytyczny')) ? 'A TK' : null);
 
-            const targetName = namedSpecialTarget || liveSpecialTarget || await autoSelectTargetName(missionName);
+            let exactMissionAAO = await apiAAOForAZR(matchMissionName, categoryId);
+            if (!exactMissionAAO && state.autoSelectAttempts === 1) {
+                await loadAAOsForAutoSelect(true);
+                exactMissionAAO = await apiAAOForAZR(matchMissionName, categoryId);
+            }
+
+            const liveSpecialTarget = visibleSpecialAutoSelectTarget(missionName) || earlySpecialTarget;
+            let targetName;
+            if (namedSpecialTarget) {
+                targetName = namedSpecialTarget;
+            } else if (liveSpecialTarget) {
+                targetName = liveSpecialTarget;
+            } else if (exactMissionAAO) {
+                targetName = matchMissionName;
+            } else {
+                targetName = await autoSelectTargetName(missionName);
+            }
+
             if (!exactMissionNameKey(targetName)) {
                 if (state.autoSelectAttempts <= 8) {
                     setHeaderAZRLookupState('checking');
@@ -3346,25 +3292,9 @@
                 return;
             }
 
-            // Krok 2: AZR rozpoznajemy wyłącznie po API. Nie wymagamy widocznej
-            // zakładki, dzięki czemu AZR może być ukryta w interfejsie.
-            let categoryId = await loadAZRCategoryId(false);
-            if (categoryId == null || categoryId === '') {
-                if (state.autoSelectAttempts <= 6) {
-                    await loadAZRCategoryId(true);
-                    categoryId = state.azrCategoryId;
-                }
-            }
-
-            if (categoryId == null || categoryId === '') {
-                log('Auto-wybór: nie znaleziono własnej kategorii AZR w API.');
-                setHeaderAZRLookupState('notfound');
-                returnToPozaryCategory(group);
-                markAutoSelectCompleted(missionKey, null, '', group, 'notfound');
-                return;
-            }
-
-            let apiAAO = await apiAAOForAZR(targetName, categoryId);
+            let apiAAO = exactMissionAAO && exactMissionNameKey(targetName) === exactMissionNameKey(matchMissionName)
+                ? exactMissionAAO
+                : await apiAAOForAZR(targetName, categoryId);
             if (!apiAAO && (state.autoSelectAttempts === 1 || state.autoSelectAttempts === 3)) {
                 await loadAAOsForAutoSelect(true);
                 apiAAO = await apiAAOForAZR(targetName, categoryId);
@@ -3409,9 +3339,9 @@
                 return;
             }
 
-            // Krok 3: zaznaczenie bez przełączania użytkownika na AZR. Najpierw
-            // bezpośrednio klikamy #aao_ID, nawet jeśli jest w ukrytym panelu.
-            const clicked = await clickAAOFromHiddenAZR(group, aaoId, targetName, categoryId, apiAAO);
+            // Krok 3: zaznaczamy wyłącznie przez prawdziwy przycisk w widocznej
+            // kategorii AZR, aby natywny handler gry zbudował listę do wysyłki.
+            const clicked = await clickAAOFromVisibleAZR(group, aaoId, targetName, categoryId, azrControl);
 
             if (!clicked.ok) {
                 // Nie tworzymy duplikatu — AZR została potwierdzona przez API.
@@ -3431,7 +3361,7 @@
             markAutoSelectCompleted(missionKey, aaoId, targetName, group, 'found');
             setTimeout(() => setAAOSearch(group, ''), 120);
             showAutoSelectStatus(targetName);
-            log(`Automatycznie wybrano ZR „${targetName}” z AZR bez wymuszania widoczności kategorii.`);
+            log(`Automatycznie wybrano ZR „${targetName}” przez widoczną kategorię AZR.`);
         } catch (error) {
             console.warn(TAG, 'Automatyczny wybór ZR z AZR nie powiódł się:', error);
             if (state.autoSelectAttempts < 8) {
