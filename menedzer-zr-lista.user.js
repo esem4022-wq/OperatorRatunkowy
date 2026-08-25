@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.1
+// @version      3.10.2
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -18,7 +18,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.10.1';
+    const VERSION = '3.10.2';
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -47,7 +47,13 @@
         potentialMissionsLoaded: false,
         potentialMissionsLoading: false,
         potentialMissionFilter: '',
-        potentialMissionError: ''
+        potentialMissionError: '',
+        pmCheckResults: [],
+        pmCheckSelected: new Set(),
+        pmCheckFilter: '',
+        pmCheckStatus: 'all',
+        pmCheckCategory: 'all',
+        pmCheckBusy: false
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -117,7 +123,13 @@
         state.cleanupSelected.clear();
         state.azrUpdateErrors = [];
         state.azrListMode = 'missing';
+        state.pmCheckResults = [];
+        state.pmCheckSelected.clear();
+        state.pmCheckFilter = '';
+        state.pmCheckStatus = 'all';
+        state.pmCheckCategory = 'all';
         populateCategoryFilter();
+        populatePMCheckCategoryFilter();
         renderActiveTable();
         updateStats();
         updateSaveAllButton();
@@ -1473,58 +1485,106 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         return String(cell?.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    function parsePotentialMissionsDocument(doc) {
-        const tables = [...doc.querySelectorAll('table')];
-        const table = tables.find(t => {
-            const text = normalize([...t.querySelectorAll('th')].map(th => th.textContent || '').join(' | '));
-            return text.includes('nazwa misji') && text.includes('wymagania');
-        });
-        if (!table) throw new Error('Nie znaleziono tabeli „Potencjalne misje” na stronie /einsaetze.');
+    function potentialMissionHref(anchor) {
+        if (!anchor) return '';
+        try {
+            const url = new URL(anchor.getAttribute('href') || anchor.href || '', location.origin);
+            return /^\/einsaetze\/\d+/.test(url.pathname) ? `${url.pathname}${url.search}` : '';
+        } catch (_) {
+            return '';
+        }
+    }
 
-        let headerCells = [...table.querySelectorAll('thead th')];
-        if (!headerCells.length) headerCells = [...table.querySelectorAll('tr th')];
-        const headers = headerCells.map(th => cleanPotentialMissionCell(th));
+    function parsePotentialMissionRow(tr, headers = []) {
+        const cells = [...tr.querySelectorAll(':scope > td')];
+        if (!cells.length) return null;
+
+        const missionLinks = [...tr.querySelectorAll('a[href]')].filter(a => potentialMissionHref(a));
+        if (!missionLinks.length) return null;
+
         const idxName = potentialMissionHeaderIndex(headers, ['Nazwa misji']);
         const idxUM = potentialMissionHeaderIndex(headers, ['UM']);
         const idxCredits = potentialMissionHeaderIndex(headers, ['Średnie kredyty', 'Srednie kredyty']);
         const idxRequirements = potentialMissionHeaderIndex(headers, ['Wymagania']);
         const idxType = potentialMissionHeaderIndex(headers, ['Rodzaj misji']);
 
-        let rows = [...table.querySelectorAll('tbody tr')];
-        if (!rows.length) rows = [...table.querySelectorAll('tr')].filter(tr => tr.querySelectorAll('td').length);
-        const missions = [];
-
-        for (const tr of rows) {
-            const cells = [...tr.querySelectorAll('td')];
-            if (!cells.length) continue;
-            const nameCell = idxName >= 0 ? cells[idxName] : cells[1] || cells[0];
-            const links = [...(nameCell?.querySelectorAll('a[href]') || [])];
-            let nameLink = links.find(a => {
+        const nameCell = idxName >= 0 && cells[idxName] ? cells[idxName] : (cells[1] || cells[0]);
+        let nameLink = [...(nameCell?.querySelectorAll('a[href]') || [])].find(a => {
+            const txt = cleanPotentialMissionCell(a);
+            return potentialMissionHref(a) && txt && !/^(szczegóły|szczegoly|details)$/i.test(txt);
+        });
+        if (!nameLink) {
+            nameLink = missionLinks.find(a => {
                 const txt = cleanPotentialMissionCell(a);
                 return txt && !/^(szczegóły|szczegoly|details)$/i.test(txt);
             });
-            if (!nameLink) {
-                nameLink = [...tr.querySelectorAll('a[href]')].find(a => {
-                    const txt = cleanPotentialMissionCell(a);
-                    return txt && !/^(szczegóły|szczegoly|details)$/i.test(txt) && /\/einsaetze\//.test(a.getAttribute('href') || '');
-                });
-            }
-            let name = cleanPotentialMissionCell(nameLink || nameCell);
-            if (!name) continue;
+        }
+        const detailsLink = missionLinks.find(a => /szczegóły|szczegoly|details/i.test(cleanPotentialMissionCell(a))) || nameLink || missionLinks[0];
 
-            const detailsLink = [...tr.querySelectorAll('a[href]')].find(a => /szczegóły|szczegoly|details/i.test(cleanPotentialMissionCell(a))) || nameLink;
-            missions.push({
-                index: missions.length + 1,
-                name,
-                um: idxUM >= 0 ? cleanPotentialMissionCell(cells[idxUM]) : '',
-                credits: idxCredits >= 0 ? cleanPotentialMissionCell(cells[idxCredits]) : '',
-                requirements: idxRequirements >= 0 ? cleanPotentialMissionCell(cells[idxRequirements]) : '',
-                type: idxType >= 0 ? cleanPotentialMissionCell(cells[idxType]) : '',
-                href: detailsLink?.getAttribute('href') || nameLink?.getAttribute('href') || ''
-            });
+        let name = cleanPotentialMissionCell(nameLink || nameCell);
+        if (!name || /^(szczegóły|szczegoly|details)$/i.test(name)) {
+            // Na części wariantów gry nazwa nie jest linkiem. Bierzemy tekst komórki
+            // i usuwamy jedynie etykietę „Szczegóły”.
+            name = cleanPotentialMissionCell(nameCell).replace(/\b(szczegóły|szczegoly|details)\b/ig, '').trim();
+        }
+        if (!name) return null;
+
+        const valueAt = idx => idx >= 0 && cells[idx] ? cleanPotentialMissionCell(cells[idx]) : '';
+        const href = potentialMissionHref(detailsLink) || potentialMissionHref(nameLink) || potentialMissionHref(missionLinks[0]);
+        return {
+            name,
+            um: valueAt(idxUM),
+            credits: valueAt(idxCredits),
+            requirements: valueAt(idxRequirements),
+            type: valueAt(idxType),
+            href
+        };
+    }
+
+    function parsePotentialMissionsDocument(doc) {
+        // v3.10.2: strona może zawierać więcej niż jedną tabelę/sekcję misji.
+        // Poprzednia wersja czytała tylko pierwszą pasującą tabelę, co dawało
+        // niepełną listę. Teraz zbieramy wszystkie wiersze zawierające linki
+        // /einsaetze/<id>, a następnie usuwamy wyłącznie duplikaty tego samego ID.
+        const missions = [];
+        const seen = new Set();
+        const processedRows = new Set();
+        const tables = [...doc.querySelectorAll('table')];
+
+        const addRow = (tr, headers = []) => {
+            if (!tr || processedRows.has(tr)) return;
+            processedRows.add(tr);
+            const mission = parsePotentialMissionRow(tr, headers);
+            if (!mission) return;
+            const key = mission.href
+                ? mission.href
+                : [mission.name, mission.um, mission.credits, mission.requirements, mission.type].join('\u241f');
+            if (seen.has(key)) return;
+            seen.add(key);
+            missions.push(mission);
+        };
+
+        for (const table of tables) {
+            let headerCells = [...table.querySelectorAll('thead tr:last-child th')];
+            if (!headerCells.length) headerCells = [...table.querySelectorAll('thead th')];
+            if (!headerCells.length) headerCells = [...table.querySelectorAll('tr th')];
+            const headers = headerCells.map(th => cleanPotentialMissionCell(th));
+            const hasMissionHeader = headers.some(h => normalize(h).includes('nazwa misji'));
+            const missionLinkCount = table.querySelectorAll('a[href*="/einsaetze/"]').length;
+            if (!hasMissionHeader && missionLinkCount < 2) continue;
+            for (const tr of table.querySelectorAll('tbody tr, tr')) addRow(tr, headers);
         }
 
-        if (!missions.length) throw new Error('Tabela „Potencjalne misje” została znaleziona, ale nie udało się odczytać nazw misji.');
+        // Fallback/uzupełnienie: łapiemy również wiersze poza tabelą albo w
+        // dodatkowych responsywnych sekcjach, których nagłówki są nietypowe.
+        for (const a of doc.querySelectorAll('a[href*="/einsaetze/"]')) {
+            if (!potentialMissionHref(a)) continue;
+            const tr = a.closest('tr');
+            if (tr) addRow(tr, []);
+        }
+
+        if (!missions.length) throw new Error('Nie udało się odczytać listy „Potencjalne misje” ze strony /einsaetze.');
+        missions.forEach((mission, index) => { mission.index = index + 1; });
         return missions;
     }
 
@@ -1535,9 +1595,12 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         state.potentialMissionsLoading = true;
         state.potentialMissionError = '';
         updatePotentialMissionControls();
+        updatePMCheckControls();
         try {
-            const response = await fetch('/einsaetze', {
+            // Parametr techniczny zapobiega wykorzystaniu starej kopii strony przez cache.
+            const response = await fetch(`/einsaetze?orzr_pm_full=${Date.now()}`, {
                 credentials: 'same-origin',
+                cache: 'no-store',
                 headers: { Accept: 'text/html,application/xhtml+xml' }
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}: /einsaetze`);
@@ -1554,7 +1617,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         } finally {
             state.potentialMissionsLoading = false;
             updatePotentialMissionControls();
+            updatePMCheckControls();
             if (state.activeTab === 'potential-missions') renderPotentialMissionsTable();
+            if (state.activeTab === 'pm-check') renderPMCheckTable();
         }
     }
 
@@ -1588,7 +1653,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 
         if (empty) {
             empty.hidden = rows.length > 0;
-            if (state.potentialMissionsLoading) empty.textContent = 'Pobieram listę Potencjalnych misji…';
+            if (state.potentialMissionsLoading) empty.textContent = 'Pobieram pełną listę Potencjalnych misji…';
             else if (state.potentialMissionError) empty.textContent = `Błąd pobierania Potencjalnych misji: ${state.potentialMissionError}`;
             else if (!state.potentialMissionsLoaded) empty.textContent = 'Lista Potencjalnych misji nie została jeszcze pobrana.';
             else empty.textContent = 'Brak Potencjalnych misji pasujących do wyszukiwania.';
@@ -1611,54 +1676,210 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         updateStats();
     }
 
-    async function checkAAOsAgainstPotentialMissions() {
-        const button = document.getElementById('orzr-check-pm');
-        if (state.potentialMissionsLoading) return;
-        const oldText = button?.textContent;
-        if (button) {
-            button.disabled = true;
-            button.textContent = 'Sprawdzam PM…';
-        }
-        try {
-            setStatus('Pobieram listę Potencjalnych misji i porównuję ZR…', 'info');
-            await loadPotentialMissions(false);
-            const pmNames = new Set(state.potentialMissions.map(mission => String(mission.name ?? '')));
-            const sourceRows = state.aaos.filter(aao =>
-                aao.aao_category_id != null && !isCategoryName(aao, 'Zapasowe')
-            );
-            const skipped = state.aaos.length - sourceRows.length;
-            const results = sourceRows.map(aao => {
-                const found = pmNames.has(String(aao.caption ?? ''));
-                return {
-                    aao,
-                    issue: found ? '✓ Występuje w Potencjalnych misjach' : '✗ Brak w Potencjalnych misjach',
-                    pmFound: found
-                };
-            }).sort((a, b) =>
-                Number(a.pmFound) - Number(b.pmFound) ||
-                a.aao.caption.localeCompare(b.aao.caption, 'pl', { numeric: true, sensitivity: 'base' }) ||
-                a.aao.id - b.aao.id
-            );
+    function pmCheckSourceRows() {
+        return state.aaos.filter(aao =>
+            aao.aao_category_id != null &&
+            !isCategoryName(aao, 'AZR') &&
+            !isCategoryName(aao, 'Zapasowe')
+        );
+    }
 
-            state.cleanupResults = results;
-            state.cleanupMode = 'pm-check';
-            state.cleanupSelected.clear();
-            renderCleanupTable();
-            const foundCount = results.filter(x => x.pmFound).length;
-            const missingCount = results.length - foundCount;
-            setStatus(
-                `Sprawdź PM: sprawdzono ${results.length} ZR. W PM: ${foundCount} • brak w PM: ${missingCount} • pominięto Bez kategorii i Zapasowe: ${skipped}.`,
-                missingCount ? 'warning' : 'success'
-            );
-        } catch (e) {
-            console.error(TAG, e);
-            setStatus(`Błąd sprawdzania Potencjalnych misji: ${e.message || e}`, 'danger');
-        } finally {
-            if (button) {
-                button.disabled = false;
-                button.textContent = oldText || 'Sprawdź PM';
-            }
+    function populatePMCheckCategoryFilter() {
+        const select = document.getElementById('orzr-pmcheck-category');
+        if (!select) return;
+        const current = state.pmCheckCategory;
+        const ids = new Set(pmCheckSourceRows().map(aao => Number(aao.aao_category_id)).filter(Number.isFinite));
+        select.innerHTML = '<option value="all">Wszystkie kategorie</option>' +
+            [...ids].sort((a,b) => getCategoryName(a).localeCompare(getCategoryName(b), 'pl', {numeric:true,sensitivity:'base'}))
+                .map(id => `<option value="${id}">${escapeHTML(getCategoryName(id))}</option>`).join('');
+        if (current === 'all' || ids.has(Number(current))) select.value = current;
+        else {
+            state.pmCheckCategory = 'all';
+            select.value = 'all';
         }
+    }
+
+    function rebuildPMCheckResults() {
+        const pmNames = new Set(state.potentialMissions.map(mission => String(mission.name ?? '')));
+        state.pmCheckResults = pmCheckSourceRows().map(aao => {
+            const found = pmNames.has(String(aao.caption ?? ''));
+            return { aao, pmFound: found, issue: found ? '✓ Występuje w PM' : '✗ Brak w PM' };
+        });
+    }
+
+    function filteredPMCheckResults() {
+        const q = normalize(state.pmCheckFilter);
+        return state.pmCheckResults.filter(item => {
+            const aao = item.aao;
+            if (state.pmCheckStatus === 'found' && !item.pmFound) return false;
+            if (state.pmCheckStatus === 'missing' && item.pmFound) return false;
+            if (state.pmCheckCategory !== 'all' && Number(state.pmCheckCategory) !== Number(aao.aao_category_id)) return false;
+            if (q && !normalize(`${aao.id} ${aao.caption} ${aao.column} ${getCategoryName(aao.aao_category_id)} ${item.issue}`).includes(q)) return false;
+            return true;
+        }).sort((a,b) =>
+            Number(a.pmFound) - Number(b.pmFound) ||
+            a.aao.caption.localeCompare(b.aao.caption, 'pl', {numeric:true,sensitivity:'base'}) || a.aao.id-b.aao.id
+        );
+    }
+
+    function pmCheckVisibleIds() {
+        return filteredPMCheckResults().map(item => item.aao.id);
+    }
+
+    function updatePMCheckControls() {
+        const run = document.getElementById('orzr-pmcheck-run');
+        const del = document.getElementById('orzr-pmcheck-delete');
+        const move = document.getElementById('orzr-pmcheck-move-backup');
+        const selectedCount = pmCheckVisibleIds().filter(id => state.pmCheckSelected.has(id)).length;
+        if (run) {
+            run.disabled = state.pmCheckBusy || state.potentialMissionsLoading;
+            run.textContent = state.pmCheckBusy || state.potentialMissionsLoading ? 'Sprawdzam…' : '🔎 Sprawdź PM';
+        }
+        if (del) {
+            del.disabled = state.pmCheckBusy || selectedCount === 0;
+            del.textContent = `🗑 Usuń zaznaczone (${selectedCount})`;
+        }
+        if (move) {
+            move.disabled = state.pmCheckBusy || selectedCount === 0;
+            move.textContent = `📦 Przenieś do Zapasowe (${selectedCount})`;
+        }
+        const count = document.getElementById('orzr-pmcheck-count');
+        if (count) count.textContent = state.pmCheckResults.length;
+        const all = document.getElementById('orzr-pmcheck-select-all');
+        if (all) {
+            const ids = pmCheckVisibleIds();
+            const sel = ids.filter(id => state.pmCheckSelected.has(id)).length;
+            all.checked = ids.length > 0 && sel === ids.length;
+            all.indeterminate = sel > 0 && sel < ids.length;
+        }
+    }
+
+    function bindPMCheckEvents() {
+        document.querySelectorAll('.orzr-pmcheck-select').forEach(cb => cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.id);
+            if (cb.checked) state.pmCheckSelected.add(id); else state.pmCheckSelected.delete(id);
+            updatePMCheckControls();
+        }));
+        const all = document.getElementById('orzr-pmcheck-select-all');
+        if (all) all.onchange = () => {
+            for (const id of pmCheckVisibleIds()) {
+                if (all.checked) state.pmCheckSelected.add(id); else state.pmCheckSelected.delete(id);
+            }
+            renderPMCheckTable();
+        };
+    }
+
+    function renderPMCheckTable() {
+        const tbody = document.getElementById('orzr-pmcheck-body');
+        const empty = document.getElementById('orzr-pmcheck-empty');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        const rows = filteredPMCheckResults();
+        const validIds = new Set(state.pmCheckResults.map(item => item.aao.id));
+        for (const id of [...state.pmCheckSelected]) if (!validIds.has(id)) state.pmCheckSelected.delete(id);
+
+        if (empty) {
+            empty.hidden = rows.length > 0;
+            if (!state.pmCheckResults.length) empty.textContent = 'Kliknij „Sprawdź PM”, aby porównać ZR z pełną listą Potencjalnych misji.';
+            else empty.textContent = 'Brak wyników pasujących do ustawionych filtrów.';
+        }
+
+        for (const item of rows) {
+            const aao = item.aao;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="orzr-cleanup-check"><input type="checkbox" class="orzr-pmcheck-select" data-id="${aao.id}" ${state.pmCheckSelected.has(aao.id) ? 'checked' : ''}></td>
+                <td class="orzr-id">${aao.id}</td>
+                <td>${escapeHTML(aao.caption)}</td>
+                <td>${Number(aao.column)||1}</td>
+                <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
+                <td class="${item.pmFound ? 'orzr-pm-found' : 'orzr-pm-missing'}">${escapeHTML(item.issue)}</td>
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a></td>`;
+            tbody.appendChild(tr);
+        }
+        bindPMCheckEvents();
+        updatePMCheckControls();
+        updateStats();
+    }
+
+    async function checkAAOsAgainstPotentialMissions(forcePM = true) {
+        if (state.pmCheckBusy || state.potentialMissionsLoading) return;
+        state.pmCheckBusy = true;
+        updatePMCheckControls();
+        try {
+            setStatus('Pobieram pełną listę Potencjalnych misji i porównuję ZR…', 'info');
+            await loadPotentialMissions(forcePM);
+            const sourceRows = pmCheckSourceRows();
+            const skipped = state.aaos.length - sourceRows.length;
+            rebuildPMCheckResults();
+            state.pmCheckSelected.clear();
+            populatePMCheckCategoryFilter();
+            renderPMCheckTable();
+            const foundCount = state.pmCheckResults.filter(x=>x.pmFound).length;
+            const missingCount = state.pmCheckResults.length-foundCount;
+            setStatus(`Sprawdź PM: pełna lista PM ${state.potentialMissions.length} pozycji • sprawdzono ZR: ${state.pmCheckResults.length} • w PM: ${foundCount} • brak w PM: ${missingCount} • pominięto AZR, Bez kategorii i Zapasowe: ${skipped}.`, missingCount ? 'warning' : 'success');
+        } catch (e) {
+            console.error(TAG,e);
+            setStatus(`Błąd sprawdzania Potencjalnych misji: ${e.message||e}`, 'danger');
+        } finally {
+            state.pmCheckBusy=false;
+            updatePMCheckControls();
+        }
+    }
+
+    function getZapasoweCategoryId() {
+        for (const [id,name] of state.categories.entries()) if (name === 'Zapasowe') return id;
+        return null;
+    }
+
+    async function deleteSelectedPMCheck() {
+        if (state.pmCheckBusy) return;
+        const ids = pmCheckVisibleIds().filter(id => state.pmCheckSelected.has(id));
+        if (!ids.length) return setStatus('Nie zaznaczono żadnych ZR.', 'warning');
+        if (!confirm(`Usunąć zaznaczone ZR (${ids.length})?\n\nTej operacji nie można cofnąć.`)) return;
+        state.pmCheckBusy=true; updatePMCheckControls();
+        let ok=0, failed=0;
+        try {
+            for (let i=0;i<ids.length;i++) {
+                const id=ids[i], aao=state.aaos.find(x=>x.id===id);
+                setStatus(`Usuwam ${i+1}/${ids.length}: „${aao?.caption ?? `ID ${id}`}”…`, 'info');
+                try {
+                    state.aaos = await deleteViaNativeEditor(id);
+                    state.pmCheckSelected.delete(id); ok++;
+                } catch(e) { console.error(TAG,`Błąd usuwania ZR ${id}`,e); failed++; }
+            }
+            rebuildPMCheckResults();
+            populatePMCheckCategoryFilter(); renderPMCheckTable();
+            setStatus(failed ? `Usunięto ${ok} ZR. Błędy: ${failed}.` : `Usunięto zaznaczone ZR: ${ok}.`, failed?'warning':'success');
+        } finally { state.pmCheckBusy=false; updatePMCheckControls(); }
+    }
+
+    async function moveSelectedPMCheckToZapasowe() {
+        if (state.pmCheckBusy) return;
+        const backupId = getZapasoweCategoryId();
+        if (backupId == null) return setStatus('Nie znaleziono kategorii o dokładnej nazwie „Zapasowe”.', 'danger');
+        const ids = pmCheckVisibleIds().filter(id => state.pmCheckSelected.has(id));
+        if (!ids.length) return setStatus('Nie zaznaczono żadnych ZR.', 'warning');
+        if (!confirm(`Przenieść zaznaczone ZR (${ids.length}) do kategorii „Zapasowe”?`)) return;
+        state.pmCheckBusy=true; updatePMCheckControls();
+        let ok=0, failed=0;
+        try {
+            for (let i=0;i<ids.length;i++) {
+                const id=ids[i], base=state.aaos.find(x=>x.id===id);
+                if (!base) continue;
+                const values={caption:base.caption,column:Number(base.column)||1,aao_category_id:backupId};
+                setStatus(`Przenoszę ${i+1}/${ids.length}: „${base.caption}” → Zapasowe…`, 'info');
+                try {
+                    await saveViaNativeEditor(id,values);
+                    await new Promise(r=>setTimeout(r,150));
+                    if (!await verifySaved(id,values)) throw new Error('Weryfikacja zapisu nie powiodła się.');
+                    Object.assign(base,values); state.pmCheckSelected.delete(id); ok++;
+                } catch(e) { console.error(TAG,`Błąd przenoszenia ZR ${id}`,e); failed++; }
+            }
+            rebuildPMCheckResults();
+            populatePMCheckCategoryFilter(); renderPMCheckTable();
+            setStatus(failed ? `Przeniesiono ${ok} ZR do Zapasowe. Błędy: ${failed}.` : `Przeniesiono do Zapasowe: ${ok} ZR.`, failed?'warning':'success');
+        } finally { state.pmCheckBusy=false; updatePMCheckControls(); }
     }
 
     function duplicateNameKey(caption) {
@@ -1962,7 +2183,6 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             empty.hidden = state.cleanupResults.length > 0;
             if (!state.cleanupMode) empty.textContent = 'Wybierz jedną z operacji porządkowania powyżej.';
             else if (String(state.cleanupMode).startsWith('duplicates:')) empty.textContent = 'Nie znaleziono duplikatów nazw ZR.';
-            else if (state.cleanupMode === 'pm-check') empty.textContent = 'Brak ZR do porównania z Potencjalnymi misjami (Bez kategorii i Zapasowe są pomijane).';
             else empty.textContent = 'Nie znaleziono spacji ani innych białych znaków na końcu nazw ZR.';
         }
 
@@ -1984,7 +2204,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 <td class="orzr-cleanup-name">${name}</td>
                 <td>${Number(aao.column) || 1}</td>
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
-                <td class="${state.cleanupMode === 'pm-check' ? (item.pmFound ? 'orzr-pm-found' : 'orzr-pm-missing') : ''}">${escapeHTML(item.issue)}</td>
+                <td>${escapeHTML(item.issue)}</td>
                 <td class="orzr-actions">
                     <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
                     <button type="button" class="btn btn-danger btn-sm orzr-delete-row" data-id="${aao.id}">🗑 Usuń</button>
@@ -2214,24 +2434,28 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const cleanupTable = document.getElementById('orzr-cleanup-table');
         const missingAZRTable = document.getElementById('orzr-missing-azr-table');
         const potentialMissionsTable = document.getElementById('orzr-pm-table');
+        const pmCheckTable = document.getElementById('orzr-pmcheck-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
         const cleanupTools = document.getElementById('orzr-cleanup-tools');
         const missingAZRTools = document.getElementById('orzr-missing-azr-tools');
         const potentialMissionsTools = document.getElementById('orzr-pm-tools');
+        const pmCheckTools = document.getElementById('orzr-pmcheck-tools');
         const azrUpdateErrors = document.getElementById('orzr-azr-update-errors');
         const toolbar = document.getElementById('orzr-toolbar');
         const normalEmpty = document.getElementById('orzr-empty');
         const cleanupEmpty = document.getElementById('orzr-cleanup-empty');
         const missingAZREmpty = document.getElementById('orzr-missing-azr-empty');
         const potentialMissionsEmpty = document.getElementById('orzr-pm-empty');
+        const pmCheckEmpty = document.getElementById('orzr-pmcheck-empty');
         const shownLabel = document.getElementById('orzr-shown-label');
 
         const copying = state.activeTab === 'copy';
         const cleaning = state.activeTab === 'cleanup';
         const missingAZR = state.activeTab === 'missing-azr';
         const potentialMissions = state.activeTab === 'potential-missions';
+        const pmChecking = state.activeTab === 'pm-check';
         const listing = state.activeTab === 'list';
 
         if (listTable) listTable.hidden = !listing;
@@ -2239,19 +2463,22 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (cleanupTable) cleanupTable.hidden = !cleaning;
         if (missingAZRTable) missingAZRTable.hidden = !missingAZR;
         if (potentialMissionsTable) potentialMissionsTable.hidden = !potentialMissions;
+        if (pmCheckTable) pmCheckTable.hidden = !pmChecking;
         if (copyBulk) copyBulk.hidden = !copying;
         if (cleanupTools) cleanupTools.hidden = !cleaning;
         if (missingAZRTools) missingAZRTools.hidden = !missingAZR;
         if (potentialMissionsTools) potentialMissionsTools.hidden = !potentialMissions;
+        if (pmCheckTools) pmCheckTools.hidden = !pmChecking;
         if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrListMode === 'deleted' || state.azrUpdateErrors.length === 0;
-        if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions;
+        if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions || pmChecking;
         if (saveAll) saveAll.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
-        if (normalEmpty && (cleaning || missingAZR || potentialMissions)) normalEmpty.hidden = true;
+        if (normalEmpty && (cleaning || missingAZR || potentialMissions || pmChecking)) normalEmpty.hidden = true;
         if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
         if (missingAZREmpty && !missingAZR) missingAZREmpty.hidden = true;
         if (potentialMissionsEmpty && !potentialMissions) potentialMissionsEmpty.hidden = true;
-        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : potentialMissions ? 'Potencjalnych misji' : 'Widocznych';
+        if (pmCheckEmpty && !pmChecking) pmCheckEmpty.hidden = true;
+        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : potentialMissions ? 'Potencjalnych misji' : pmChecking ? 'Wyników PM' : 'Widocznych';
 
         if (copying) renderCopyTable();
         else if (cleaning) renderCleanupTable();
@@ -2266,6 +2493,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                     setStatus(`Błąd pobierania Potencjalnych misji: ${e.message || e}`, 'danger');
                 });
             }
+        } else if (pmChecking) {
+            populatePMCheckCategoryFilter();
+            renderPMCheckTable();
         } else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
@@ -2274,7 +2504,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     }
 
     function setActiveTab(tab) {
-        if (!['list', 'copy', 'cleanup', 'missing-azr', 'potential-missions'].includes(tab)) return;
+        if (!['list', 'copy', 'cleanup', 'missing-azr', 'potential-missions', 'pm-check'].includes(tab)) return;
         state.activeTab = tab;
         setStatus('', 'info');
         renderActiveTable();
@@ -2299,7 +2529,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 ? currentMissingAZRCount()
                 : state.activeTab === 'potential-missions'
                     ? filteredPotentialMissions().length
-                    : sortedFilteredAAOs(state.activeTab).length;
+                    : state.activeTab === 'pm-check'
+                        ? filteredPMCheckResults().length
+                        : sortedFilteredAAOs(state.activeTab).length;
         if (changed) changed.textContent = state.dirty.size;
     }
 
@@ -2505,8 +2737,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
-#orzr-cleanup-tools,#orzr-missing-azr-tools,#orzr-pm-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
-#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden],#orzr-pm-tools[hidden]{display:none}
+#orzr-cleanup-tools,#orzr-missing-azr-tools,#orzr-pm-tools,#orzr-pmcheck-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden],#orzr-pm-tools[hidden],#orzr-pmcheck-tools[hidden]{display:none}
 #orzr-cleanup-tools .btn{white-space:nowrap}
 .orzr-cleanup-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-right:10px;border-right:1px solid #ddd}
 .orzr-cleanup-group:last-child{border-right:0}
@@ -2522,9 +2754,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-pm-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-pm-table,#orzr-pmcheck-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-pmcheck-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-pmcheck-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -2546,7 +2778,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-cleanup-check input{width:18px;height:18px;cursor:pointer}
 .orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
 .orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
-#orzr-cleanup-empty,#orzr-missing-azr-empty,#orzr-pm-empty{padding:30px;text-align:center;color:#777}
+#orzr-cleanup-empty,#orzr-missing-azr-empty,#orzr-pm-empty,#orzr-pmcheck-empty{padding:30px;text-align:center;color:#777}
 #orzr-missing-azr-table th:nth-child(1),#orzr-missing-azr-table td:nth-child(1){width:85px}
 #orzr-missing-azr-table th:nth-child(3),#orzr-missing-azr-table td:nth-child(3){width:120px}
 #orzr-missing-azr-table th:nth-child(4),#orzr-missing-azr-table td:nth-child(4){width:320px}
@@ -2565,6 +2797,15 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-pm-long{white-space:normal;overflow-wrap:anywhere}
 .orzr-pm-found{color:#3c763d;font-weight:700}
 .orzr-pm-missing{color:#a94442;font-weight:700}
+#orzr-pmcheck-tools{gap:8px}
+#orzr-pmcheck-tools input[type="search"]{min-width:260px;max-width:420px}
+#orzr-pmcheck-tools select{min-width:190px;max-width:280px}
+#orzr-pmcheck-table th:nth-child(1),#orzr-pmcheck-table td:nth-child(1){width:62px;text-align:center}
+#orzr-pmcheck-table th:nth-child(2),#orzr-pmcheck-table td:nth-child(2){width:85px}
+#orzr-pmcheck-table th:nth-child(4),#orzr-pmcheck-table td:nth-child(4){width:110px}
+#orzr-pmcheck-table th:nth-child(5),#orzr-pmcheck-table td:nth-child(5){width:230px}
+#orzr-pmcheck-table th:nth-child(6),#orzr-pmcheck-table td:nth-child(6){width:190px}
+#orzr-pmcheck-table th:nth-child(7),#orzr-pmcheck-table td:nth-child(7){width:105px}
 #orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
 #orzr-azr-update-errors[hidden]{display:none}
 .orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
@@ -2652,6 +2893,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button type="button" class="orzr-tab" data-tab="copy">⧉ Kopiuj</button>
         <button type="button" class="orzr-tab" data-tab="missing-azr">🔎 Brakuje w AZR</button>
         <button type="button" class="orzr-tab" data-tab="potential-missions">📋 Potencjalne misje</button>
+        <button type="button" class="orzr-tab" data-tab="pm-check">🔎 Sprawdź PM</button>
         <button type="button" class="orzr-tab" data-tab="cleanup">🧹 Porządkowanie</button>
     </div>
     <div id="orzr-toolbar">
@@ -2701,7 +2943,20 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     <div id="orzr-pm-tools" hidden>
         <input id="orzr-pm-search" type="search" class="form-control" placeholder="Szukaj w Potencjalnych misjach…">
         <button id="orzr-pm-refresh" type="button" class="btn btn-default">↻ Odśwież Potencjalne misje</button>
-        <span class="orzr-missing-azr-info">Źródło: strona gry „Potencjalne misje” (/einsaetze). Wczytanych pozycji: <strong id="orzr-pm-count">—</strong>.</span>
+        <span class="orzr-missing-azr-info">Źródło: pełna lista ze strony gry „Potencjalne misje” (/einsaetze; wszystkie znalezione sekcje/tabele). Wczytanych pozycji: <strong id="orzr-pm-count">—</strong>.</span>
+    </div>
+    <div id="orzr-pmcheck-tools" hidden>
+        <button id="orzr-pmcheck-run" type="button" class="btn btn-info">🔎 Sprawdź PM</button>
+        <input id="orzr-pmcheck-search" type="search" class="form-control" placeholder="Szukaj ZR po nazwie, ID lub kategorii…">
+        <select id="orzr-pmcheck-status" class="form-control">
+            <option value="all">Wszystkie wyniki</option>
+            <option value="missing">Tylko brak w PM</option>
+            <option value="found">Tylko występujące w PM</option>
+        </select>
+        <select id="orzr-pmcheck-category" class="form-control"><option value="all">Wszystkie kategorie</option></select>
+        <button id="orzr-pmcheck-delete" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
+        <button id="orzr-pmcheck-move-backup" type="button" class="btn btn-warning" disabled>📦 Przenieś do Zapasowe (0)</button>
+        <span class="orzr-missing-azr-info">Sprawdzanie zawsze pomija „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-pmcheck-count">0</strong>.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -2716,9 +2971,6 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         </div>
         <div class="orzr-cleanup-group">
             <button id="orzr-delete-selected" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
-        </div>
-        <div class="orzr-cleanup-group">
-            <button id="orzr-check-pm" type="button" class="btn btn-info">Sprawdź PM</button>
         </div>
         <div class="orzr-cleanup-group">
             <button id="orzr-export-csv" type="button" class="btn btn-success">Eksportuj wszystkie ZR do CSV</button>
@@ -2759,6 +3011,13 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             <thead><tr><th>#</th><th>Nazwa misji</th><th>UM</th><th>Średnie kredyty</th><th>Wymagania</th><th>Rodzaj misji</th><th>Akcje</th></tr></thead>
             <tbody id="orzr-pm-body"></tbody>
         </table>
+        <table id="orzr-pmcheck-table" hidden>
+            <thead><tr>
+                <th><input id="orzr-pmcheck-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie widoczne wyniki"></th>
+                <th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Status PM</th><th>Akcje</th>
+            </tr></thead>
+            <tbody id="orzr-pmcheck-body"></tbody>
+        </table>
         <table id="orzr-cleanup-table" hidden>
             <thead><tr>
                 <th><input id="orzr-cleanup-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie wyniki"></th>
@@ -2768,6 +3027,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         </table>
         <div id="orzr-missing-azr-empty" hidden></div>
         <div id="orzr-pm-empty" hidden></div>
+        <div id="orzr-pmcheck-empty" hidden>Kliknij „Sprawdź PM”, aby rozpocząć porównanie.</div>
         <div id="orzr-cleanup-empty" hidden>Wybierz jedną z operacji porządkowania powyżej.</div>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
@@ -2839,13 +3099,27 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 setStatus(`Błąd pobierania Potencjalnych misji: ${e.message || e}`, 'danger');
             }
         });
+        document.getElementById('orzr-pmcheck-run').addEventListener('click', () => checkAAOsAgainstPotentialMissions(true));
+        document.getElementById('orzr-pmcheck-search').addEventListener('input', e => {
+            state.pmCheckFilter = e.target.value;
+            renderPMCheckTable();
+        });
+        document.getElementById('orzr-pmcheck-status').addEventListener('change', e => {
+            state.pmCheckStatus = e.target.value;
+            renderPMCheckTable();
+        });
+        document.getElementById('orzr-pmcheck-category').addEventListener('change', e => {
+            state.pmCheckCategory = e.target.value;
+            renderPMCheckTable();
+        });
+        document.getElementById('orzr-pmcheck-delete').addEventListener('click', deleteSelectedPMCheck);
+        document.getElementById('orzr-pmcheck-move-backup').addEventListener('click', moveSelectedPMCheckToZapasowe);
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));
         document.getElementById('orzr-find-trailing-spaces').addEventListener('click', findTrailingSpaces);
         document.getElementById('orzr-remove-trailing-spaces').addEventListener('click', removeTrailingWhitespaceFromAll);
         document.getElementById('orzr-delete-selected').addEventListener('click', deleteSelectedCleanup);
-        document.getElementById('orzr-check-pm').addEventListener('click', checkAAOsAgainstPotentialMissions);
         document.getElementById('orzr-export-csv').addEventListener('click', exportAllAAOsToCSV);
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && overlay.classList.contains('orzr-open')) closeManager();
