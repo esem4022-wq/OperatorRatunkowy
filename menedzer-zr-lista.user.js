@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.4
+// @version      3.10.5
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -11,6 +11,7 @@
 // @match        https://operatorratunkowy.pl/*
 // @match        https://policja.operatorratunkowy.pl/*
 // @grant        GM_registerMenuCommand
+// @grant        GM_info
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -18,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = '3.10.4';
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.5');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -245,7 +246,7 @@
                 <td><select class="form-control input-sm orzr-category" data-id="${aao.id}">${categoryOptions(v.aao_category_id)}</select></td>
                 <td class="orzr-actions">
                     <button type="button" class="btn btn-success btn-sm orzr-save-row" data-id="${aao.id}">💾 Zapisz</button>
-                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
+                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a>
                 </td>`;
             tbody.appendChild(tr);
         }
@@ -682,7 +683,7 @@
                     <td>AZR</td>
                     <td class="orzr-actions">
                         <button type="button" class="btn btn-danger btn-sm orzr-missing-azr-delete" data-id="${aao.id}">🗑 Usuń z AZR</button>
-                        <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja AZR</a>
+                        <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja AZR</a>
                     </td>`;
                 tbody.appendChild(tr);
             }
@@ -721,7 +722,7 @@
                     <td>${escapeHTML(sourceInfo)}</td>
                     <td class="orzr-actions">
                         <button type="button" class="btn btn-primary btn-sm orzr-missing-azr-copy" data-id="${aao.id}">⧉ Kopiuj do AZR</button>
-                        <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
+                        <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a>
                     </td>`;
                 tbody.appendChild(tr);
             }
@@ -1300,7 +1301,7 @@ Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy na
                 <td>${escapeHTML(error.sourceCategory || '')}</td>
                 <td class="orzr-azr-vehicle-diff">${escapeHTML(error.vehicleDiff || 'Nie udało się ustalić różnic pojazdów.')}</td>
                 <td class="orzr-azr-error-message">${escapeHTML(error.message || 'Nieznany błąd')}</td>
-                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${Number(error.targetId) || ''}/edit">✎ Edycja AZR</a></td>`;
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${Number(error.targetId) || ''}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja AZR</a></td>`;
             tbody.appendChild(tr);
         }
     }
@@ -1897,7 +1898,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 <td>${Number(aao.column)||1}</td>
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
                 <td class="${item.pmFound ? 'orzr-pm-found' : 'orzr-pm-missing'}">${escapeHTML(item.issue)}</td>
-                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a></td>`;
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a></td>`;
             tbody.appendChild(tr);
         }
         bindPMCheckEvents();
@@ -2309,7 +2310,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
                 <td>${escapeHTML(item.issue)}</td>
                 <td class="orzr-actions">
-                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit">✎ Edycja</a>
+                    <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a>
                     <button type="button" class="btn btn-danger btn-sm orzr-delete-row" data-id="${aao.id}">🗑 Usuń</button>
                 </td>`;
             tbody.appendChild(tr);
@@ -2816,14 +2817,22 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     z-index:99990;
     border:0;
     border-radius:999px;
-    padding:11px 16px;
+    padding:8px 16px 7px;
     background:#337ab7;
     color:#fff;
-    font:600 13px/1.2 Arial,sans-serif;
+    font:600 13px/1.15 Arial,sans-serif;
     font-weight:700;
     box-shadow:0 4px 16px rgba(0,0,0,.28);
     cursor:pointer;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:2px;
+    white-space:nowrap;
 }
+#orzr-launcher .orzr-launcher-title{display:block}
+#orzr-launcher .orzr-launcher-version{display:block;font-size:9px;line-height:1;opacity:.82;font-weight:600}
 #orzr-launcher:hover{filter:brightness(1.08)}
 #orzr-manager-overlay{position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.55);padding:22px;display:none}
 #orzr-manager-overlay.orzr-open{display:block}
@@ -2974,8 +2983,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             const b = document.createElement('button');
             b.id = 'orzr-launcher';
             b.type = 'button';
-            b.textContent = '📋 Menedżer ZR';
-            b.title = 'Otwórz Menedżer ZR Lista';
+            b.innerHTML = `<span class="orzr-launcher-title">📋 Menedżer ZR</span><span class="orzr-launcher-version">v${escapeHTML(VERSION)}</span>`;
+            b.title = `Otwórz Menedżer ZR Lista — v${VERSION}`;
             b.addEventListener('click', openManager);
             document.body.appendChild(b);
             startLauncherPositioning();

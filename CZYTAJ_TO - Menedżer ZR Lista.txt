@@ -245,3 +245,12 @@ WERSJA 3.10.4 (TESTOWA)
 - Naprawiono porównywanie nazw w „Sprawdź PM”: porównanie nie rozróżnia wielkości liter, normalizuje spacje i znaki diakrytyczne.
 - Przykład: ZR „Atak hakera na stronę rządową” jest teraz poprawnie rozpoznawane jako odpowiadające PM „Atak Hakera na Stronę Rządową”.
 - Zachowano filtry, zaznaczanie oraz akcje „Usuń zaznaczone” i „Przenieś do Zapasowe”.
+
+============================================================
+WERSJA 3.10.5 (TESTOWA)
+============================================================
+- Przyciski „Edycja” / „Edycja AZR” otwierają teraz stronę edycji ZR w nowej karcie lub nowym oknie, bez opuszczania Menedżera ZR Lista.
+- Na przycisku uruchamiającym „Menedżer ZR” dodano na dole mały numer wersji skryptu.
+- Numer wersji na przycisku jest pobierany z metadanych userscriptu przez GM_info, z awaryjną wartością zgodną z @version.
+- Zachowano wszystkie funkcje testowej v3.10.4.
+
