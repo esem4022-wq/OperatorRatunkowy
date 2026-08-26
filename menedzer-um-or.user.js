@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer UM OR
 // @namespace    operatorratunkowy.local.poimanager
-// @version      3.01
+// @version      3.02
 // @description  Katalog i kontrola UM/POI na podstawie Potencjalnych misji oraz własnych punktów UM.
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -11,15 +11,18 @@
 // @match        https://operatorratunkowy.pl/*
 // @match        https://www.operatorratunkowy.pl/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_info
 // ==/UserScript==
 
 /*
  * Operator Ratunkowy - Menedżer UM OR
- * Wersja 3.01
+ * Wersja 3.02
  *
- * Założenia wersji 3.01:
- * - poprawione wyświetlanie przycisku na dole strony głównej,
+ * Założenia wersji 3.02:
+ * - numer wersji jest wyświetlany małą czcionką pod nazwą przycisku, jak w Menedżerze ZR Lista,
+ * - numer wersji jest odczytywany z metadanych userscriptu przez GM_info (z awaryjnym fallbackiem),
+ * - w zakładce „Moje UM” dodano niezależne sortowanie po typie i po nazwie,
+ * - zachowano poprawione wyświetlanie przycisku na dole strony głównej,
  * - przycisk ma wysoki z-index i ustawia się automatycznie po lewej stronie
  *   istniejących przycisków pozostałych menedżerów,
  * - lista rodzajów UM nie jest wpisana na sztywno,
@@ -41,7 +44,7 @@
   const APP_ID = 'or-um-manager-v30';
   const BUTTON_ID = `${APP_ID}-button`;
   const MODAL_ID = `${APP_ID}-modal`;
-  const VERSION = '3.01';
+  const VERSION = '3.02';
   const MISSIONS_URL = '/einsaetze';
   const POIS_API_URL = '/api/v2/pois';
   const POI_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/pois';
@@ -61,7 +64,8 @@
     ownError: '',
     query: '',
     statusFilter: 'all',
-    sort: 'name-asc',
+    requiredSort: 'name-asc',
+    ownSort: 'type-asc',
   };
 
   function esc(value) {
@@ -87,6 +91,16 @@
       .replace(/[\u0300-\u036f]/g, '');
   }
 
+  function getScriptVersion() {
+    try {
+      if (typeof GM_info !== 'undefined') {
+        const value = normalizeText(GM_info?.script?.version);
+        if (value) return value;
+      }
+    } catch (_) {}
+    return VERSION;
+  }
+
   function isMainPage() {
     const path = location.pathname.replace(/\/+$/, '') || '/';
     return path === '/';
@@ -103,7 +117,11 @@
         right: 520px;
         bottom: 18px;
         z-index: 2147483000 !important;
-        display: inline-block !important;
+        display: inline-flex !important;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
         visibility: visible !important;
         opacity: 1 !important;
         pointer-events: auto !important;
@@ -118,6 +136,8 @@
         white-space: nowrap;
       }
       #${BUTTON_ID}:hover { filter: brightness(1.08); }
+      #${BUTTON_ID} .or-um-launcher-title { font: 700 13px/1.15 Arial,sans-serif; }
+      #${BUTTON_ID} .or-um-launcher-version { font: 400 9px/1.05 Arial,sans-serif; opacity: .78; }
 
       #${MODAL_ID} {
         position: fixed;
@@ -356,7 +376,7 @@
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.type = 'button';
-      button.textContent = '📍 UM OR';
+      button.innerHTML = `<span class="or-um-launcher-title">📍 UM OR</span><span class="or-um-launcher-version">v${esc(getScriptVersion())}</span>`;
       button.title = 'Menedżer UM / POI';
       button.addEventListener('click', openManager);
       document.body.appendChild(button);
@@ -368,7 +388,7 @@
     modal.innerHTML = `
       <div class="or-um-window" role="dialog" aria-modal="true" aria-label="Menedżer UM OR">
         <div class="or-um-header">
-          <h2>📍 Menedżer UM OR <span style="font-size:12px;opacity:.75">v${VERSION}</span></h2>
+          <h2>📍 Menedżer UM OR <span style="font-size:12px;opacity:.75">v${esc(getScriptVersion())}</span></h2>
           <button type="button" class="or-um-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -385,12 +405,7 @@
             <option value="present">Mam UM</option>
             <option value="missing">Brak UM</option>
           </select>
-          <select id="${APP_ID}-sort">
-            <option value="name-asc">Nazwa A–Z</option>
-            <option value="name-desc">Nazwa Z–A</option>
-            <option value="count-desc">Najwięcej własnych UM</option>
-            <option value="missions-desc">Najwięcej misji</option>
-          </select>
+          <select id="${APP_ID}-sort"></select>
           <button type="button" class="or-um-btn primary" id="${APP_ID}-reload">↻ Odśwież dane</button>
           <button type="button" class="or-um-btn" id="${APP_ID}-export">Eksport CSV</button>
         </div>
@@ -432,7 +447,8 @@
     });
 
     document.getElementById(`${APP_ID}-sort`).addEventListener('change', event => {
-      state.sort = event.target.value;
+      if (state.activeTab === 'own') state.ownSort = event.target.value;
+      else state.requiredSort = event.target.value;
       render();
     });
 
@@ -681,6 +697,29 @@
     }));
   }
 
+  function updateSortControl() {
+    const select = document.getElementById(`${APP_ID}-sort`);
+    if (!select) return;
+
+    if (state.activeTab === 'own') {
+      select.innerHTML = `
+        <option value="type-asc">Typ A–Z</option>
+        <option value="type-desc">Typ Z–A</option>
+        <option value="own-name-asc">Nazwa A–Z</option>
+        <option value="own-name-desc">Nazwa Z–A</option>
+      `;
+      select.value = state.ownSort;
+    } else {
+      select.innerHTML = `
+        <option value="name-asc">Nazwa A–Z</option>
+        <option value="name-desc">Nazwa Z–A</option>
+        <option value="count-desc">Najwięcej własnych UM</option>
+        <option value="missions-desc">Najwięcej misji</option>
+      `;
+      select.value = state.requiredSort;
+    }
+  }
+
   function applyFilters(rows, tab) {
     const q = normalizeKey(state.query);
     let result = rows.filter(row => {
@@ -695,22 +734,37 @@
       result = result.filter(row => state.statusFilter === 'present' ? row.ownCount > 0 : row.ownCount === 0);
     }
 
+    const sort = tab === 'own' ? state.ownSort : state.requiredSort;
+
     result.sort((a, b) => {
-      if (state.sort === 'name-desc') {
-        const an = tab === 'own' ? (a.type || a.name) : a.name;
-        const bn = tab === 'own' ? (b.type || b.name) : b.name;
-        return bn.localeCompare(an, 'pl');
+      if (tab === 'own') {
+        const aType = normalizeText(a.type || a.typeRaw || '');
+        const bType = normalizeText(b.type || b.typeRaw || '');
+        const aName = normalizeText(a.name || '');
+        const bName = normalizeText(b.name || '');
+
+        if (sort === 'type-desc') {
+          return bType.localeCompare(aType, 'pl') || aName.localeCompare(bName, 'pl');
+        }
+        if (sort === 'own-name-asc') {
+          return aName.localeCompare(bName, 'pl') || aType.localeCompare(bType, 'pl');
+        }
+        if (sort === 'own-name-desc') {
+          return bName.localeCompare(aName, 'pl') || aType.localeCompare(bType, 'pl');
+        }
+        return aType.localeCompare(bType, 'pl') || aName.localeCompare(bName, 'pl');
       }
-      if (state.sort === 'count-desc') {
-        if (tab === 'own') return (b.type || '').localeCompare(a.type || '', 'pl');
+
+      if (sort === 'name-desc') {
+        return b.name.localeCompare(a.name, 'pl');
+      }
+      if (sort === 'count-desc') {
         return (b.ownCount || 0) - (a.ownCount || 0) || a.name.localeCompare(b.name, 'pl');
       }
-      if (state.sort === 'missions-desc' && tab !== 'own') {
+      if (sort === 'missions-desc') {
         return (b.missions?.length || 0) - (a.missions?.length || 0) || a.name.localeCompare(b.name, 'pl');
       }
-      const an = tab === 'own' ? (a.type || a.name) : a.name;
-      const bn = tab === 'own' ? (b.type || b.name) : b.name;
-      return an.localeCompare(bn, 'pl');
+      return a.name.localeCompare(b.name, 'pl');
     });
 
     return result;
@@ -722,6 +776,8 @@
     const errors = document.getElementById(`${APP_ID}-errors`);
     const statusFilter = document.getElementById(`${APP_ID}-status-filter`);
     if (!content || !summary || !errors) return;
+
+    updateSortControl();
 
     const busy = state.loadingRequired || state.loadingOwn;
     const requiredRows = combinedRequiredRows();

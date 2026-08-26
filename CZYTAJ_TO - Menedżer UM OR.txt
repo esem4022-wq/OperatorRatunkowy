@@ -15,6 +15,13 @@ https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-um
 HISTORIA WERSJI
 ===============
 
+Wersja 3.02
+------------
+- Numer wersji na przycisku Menedżera UM OR jest wyświetlany małą czcionką pod nazwą, tak jak w Menedżerze ZR Lista.
+- Numer wersji jest pobierany z metadanych userscriptu przez GM_info; pozostawiono awaryjne użycie wersji zapisanej w skrypcie.
+- W zakładce „Moje UM” dodano osobne sortowanie: Typ A–Z, Typ Z–A, Nazwa A–Z i Nazwa Z–A.
+- Poprawiono wcześniejsze mylące zachowanie, w którym „Nazwa A–Z” w zakładce „Moje UM” faktycznie sortowała przede wszystkim po typie.
+
 Wersja 3.01
 ------------
 - Poprawiono brak widocznego przycisku Menedżera UM OR na dole strony głównej.
