@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.12
+// @version      3.13
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.12';
-    const CAPTURE_KEY = 'or_zr_capture_v312';
+    const VERSION = '3.13';
+    const CAPTURE_KEY = 'or_zr_capture_v313';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -3036,49 +3036,83 @@
         return '';
     }
 
+    function visibleMissionCardTextForSpecialRules(missionName = '') {
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+
+        // v3.13: dla skrótów Ambulans/Radiowóz/Straż najpierw czytamy
+        // rzeczywisty, widoczny blok żółtej karty. Wcześniej tekstowy skan całej
+        // strony potrafił znaleźć fragment Pacjenci bez pełnej sekcji Pojazdy i
+        // błędnie uznać złożoną misję za przypadek `Ambulans`.
+        const block = findMissionInfoBlock();
+        if (block) {
+            const blockText = getMissionCardText(block, liveName)
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (blockText && /\b(?:Pojazdy|Pacjenci)\b/i.test(blockText)) {
+                return blockText;
+            }
+        }
+
+        return findCurrentMissionCardText(liveName) || '';
+    }
+
     function strictSpecialAutoSelectTargetFromCardText(cardText) {
         const raw = String(cardText || '').replace(/\u00a0/g, ' ').trim();
         if (!raw) return null;
 
-        const vehicles = extractVehiclesFromCardText(raw)
-            .filter(v => Number(v?.count) > 0);
         const maxPatients = extractMaxPatientsFromText(raw) || 0;
         const water = extractResourceFromText(raw, 'water') || 0;
         const foam = extractResourceFromText(raw, 'foam') || 0;
-        const vehicleSegment = getVehiclesTextSegmentFromCardText(raw);
+        const hasVehiclesSection = /\bPojazdy\b/i.test(raw);
+        const vehicleSegment = hasVehiclesSection
+            ? getVehiclesTextSegmentFromCardText(raw)
+            : '';
+        const vehicleSegmentKey = normalize(vehicleSegment);
 
-        if (/\bPojazdy\b/i.test(raw) && vehicleSegment && !vehicles.length && /\b\d+\s+\S+/.test(vehicleSegment)) {
-            return null;
-        }
-
+        // v3.13: skróty są celowo rozpoznawane po CAŁYM segmencie Pojazdy,
+        // a nie po częściowo sparsowanej tablicy. Jeśli segment zawiera np.
+        // `2 OPI 1 SLOP/SLRr 1 Samochód pożarniczy ...`, nie ma żadnej drogi,
+        // żeby reguła jednego pacjenta zwróciła `Ambulans`.
         if (
             maxPatients === 1 &&
             water === 0 &&
             foam === 0 &&
             (
-                vehicles.length === 0 ||
-                (vehicles.length === 1 && isSinglePlainAmbulanceRequirement(vehicles[0]))
+                !hasVehiclesSection ||
+                vehicleSegmentKey === '' ||
+                vehicleSegmentKey === '1 ambulans'
             )
-        ) return 'Ambulans';
+        ) {
+            return 'Ambulans';
+        }
 
         if (
-            vehicles.length === 1 &&
-            isSingleOPIRequirement(vehicles[0]) &&
+            vehicleSegmentKey === '1 opi' &&
             maxPatients === 0 && water === 0 && foam === 0
-        ) return 'Radiowóz';
+        ) {
+            return 'Radiowóz';
+        }
+
+        const fireOnlyKeys = new Set([
+            '1 samochod pozarniczy',
+            '1 samochody pozarnicze',
+            '1 pojazd strazacki',
+            '1 woz strazacki',
+            '1 wozy strazackie'
+        ]);
 
         if (
-            vehicles.length === 1 &&
-            isSingleFireVehicleRequirement(vehicles[0]) &&
+            fireOnlyKeys.has(vehicleSegmentKey) &&
             maxPatients === 0 && water === 0 && foam === 0
-        ) return 'Straż';
+        ) {
+            return 'Straż';
+        }
 
         return null;
     }
 
     function visibleSpecialAutoSelectTarget(missionName = '') {
-        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
-        const cardText = findCurrentMissionCardText(liveName) || '';
+        const cardText = visibleMissionCardTextForSpecialRules(missionName);
         return strictSpecialAutoSelectTargetFromCardText(cardText);
     }
 
@@ -3272,7 +3306,22 @@
                 exactMissionAAO = await apiAAOForAZR(matchMissionName, categoryId);
             }
 
-            const liveSpecialTarget = visibleSpecialAutoSelectTarget(missionName) || earlySpecialTarget;
+            let liveSpecialTarget = visibleSpecialAutoSelectTarget(missionName) || earlySpecialTarget;
+
+            // v3.13: dodatkowy bezpiecznik dla najczęstszego fałszywego skrótu.
+            // Gdy w AZR istnieje ZR o dokładnej nazwie misji, `Ambulans` może ją
+            // zastąpić tylko wtedy, gdy pełna widoczna karta naprawdę ma pustą
+            // sekcję Pojazdy albo dokładnie `1 Ambulans`.
+            if (liveSpecialTarget === 'Ambulans' && exactMissionAAO) {
+                const strictCardText = visibleMissionCardTextForSpecialRules(missionName);
+                const strictVehicleSegment = getVehiclesTextSegmentFromCardText(strictCardText);
+                const strictVehicleKey = normalize(strictVehicleSegment);
+                if (strictVehicleKey && strictVehicleKey !== '1 ambulans') {
+                    log('Odrzucono fałszywy skrót Ambulans — pełna karta zawiera inne wymagania pojazdów:', strictVehicleSegment);
+                    liveSpecialTarget = null;
+                }
+            }
+
             let targetName;
             if (namedSpecialTarget) {
                 targetName = namedSpecialTarget;

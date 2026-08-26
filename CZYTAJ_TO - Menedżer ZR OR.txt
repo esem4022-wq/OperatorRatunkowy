@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.12
+Wersja: 3.13
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,14 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.13
+- naprawiono kolejny przypadek fałszywego wyboru ZR `Ambulans` przy misji mającej dokładnie 1 pacjenta, ale również inne wymagane pojazdy,
+- reguły skrótowe `Ambulans`, `Radiowóz` i `Straż` są teraz oceniane przede wszystkim z rzeczywistego widocznego bloku żółtej karty misji, a nie z fragmentu tekstu znalezionego w całej stronie,
+- skrót `Ambulans` jest dopuszczany tylko przy 1 pacjencie i pustej sekcji `Pojazdy` albo dokładnie `1 Ambulans`; każdy inny wpis w sekcji `Pojazdy` blokuje ten skrót,
+- dodano dodatkowy bezpiecznik: jeżeli w AZR istnieje ZR o dokładnej nazwie misji, fałszywy skrót `Ambulans` nie może jej zastąpić, gdy pełna karta pokazuje inne pojazdy,
+- dla przykładu `Wypadek przy pracy z maszyną` z `2 OPI + 1 SLOP/SLRr + 1 Samochód pożarniczy + 1 Samochód ratownictwa technicznego + dokładnie 1 pacjent` wybierana jest ZR po nazwie misji, a nie `Ambulans`,
+- zachowano zasadę widocznego AZR, blokadę wielokrotnego klikania oraz działanie `EDYTUJ ZR` poza AZR/Bez kategorii.
+
 v3.12
 - usunięto obsługę ukrytej kategorii `AZR`; auto-zaznaczanie wymaga teraz prawdziwej, dostępnej w interfejsie zakładki AZR,
 - usunięto awaryjne proxy/API, które potrafiło pokazać status „Zaznaczono ZR”, mimo że lista pojazdów do wysyłki pozostawała pusta,
