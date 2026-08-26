@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.5
+// @version      3.10.6
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.5');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.6');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -54,7 +54,13 @@
         pmCheckFilter: '',
         pmCheckStatus: 'all',
         pmCheckCategory: 'all',
-        pmCheckBusy: false
+        pmCheckBusy: false,
+        zrCheckResults: [],
+        zrCheckFilter: '',
+        zrCheckStatus: 'all',
+        zrCheckCategory: 'all',
+        zrCheckBusy: false,
+        zrCheckInfrastructure: null
     };
 
     const log = (...args) => console.log(TAG, ...args);
@@ -129,6 +135,11 @@
         state.pmCheckFilter = '';
         state.pmCheckStatus = 'all';
         state.pmCheckCategory = 'all';
+        state.zrCheckResults = [];
+        state.zrCheckFilter = '';
+        state.zrCheckStatus = 'all';
+        state.zrCheckCategory = 'all';
+        state.zrCheckInfrastructure = null;
         populateCategoryFilter();
         populatePMCheckCategoryFilter();
         renderActiveTable();
@@ -1716,6 +1727,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             updatePMCheckControls();
             if (state.activeTab === 'potential-missions') renderPotentialMissionsTable();
             if (state.activeTab === 'pm-check') renderPMCheckTable();
+            if (state.activeTab === 'zr-check') renderZRCheckTable();
         }
     }
 
@@ -1984,6 +1996,380 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             populatePMCheckCategoryFilter(); renderPMCheckTable();
             setStatus(failed ? `Przeniesiono ${ok} ZR do Zapasowe. Błędy: ${failed}.` : `Przeniesiono do Zapasowe: ${ok} ZR.`, failed?'warning':'success');
         } finally { state.pmCheckBusy=false; updatePMCheckControls(); }
+    }
+
+
+    function auditValueOf(obj, keys, fallback = null) {
+        for (const key of keys) {
+            if (obj && obj[key] !== undefined && obj[key] !== null) return obj[key];
+        }
+        return fallback;
+    }
+
+    function auditNormalizeResult(data) {
+        const result = data?.result ?? data;
+        if (Array.isArray(result)) return result;
+        if (result && typeof result === 'object') return Object.values(result);
+        return [];
+    }
+
+    async function auditFetchAllPages(firstUrl) {
+        const items = [];
+        let nextUrl = firstUrl;
+        let safety = 0;
+        while (nextUrl && safety < 250) {
+            safety++;
+            const response = await fetch(nextUrl, { credentials: 'same-origin', cache: 'no-store' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}: ${nextUrl}`);
+            const data = await response.json();
+            items.push(...auditNormalizeResult(data));
+            nextUrl = data?.paging?.next_page || null;
+        }
+        if (safety >= 250) throw new Error('Przerwano pobieranie danych infrastruktury: zbyt wiele stron API.');
+        return items;
+    }
+
+    async function auditFetchBuildings() {
+        try {
+            return await auditFetchAllPages('/api/v2/buildings?limit=2000');
+        } catch (v2Error) {
+            console.warn(TAG, 'Sprawdź ZR: /api/v2/buildings niedostępne, używam starszego API.', v2Error);
+            return auditNormalizeResult(await fetchJSON('/api/buildings'));
+        }
+    }
+
+    async function auditFetchPOIs() {
+        try {
+            return await auditFetchAllPages('/api/v2/pois?limit=2000');
+        } catch (v2Error) {
+            console.warn(TAG, 'Sprawdź ZR: /api/v2/pois niedostępne, używam starszego API.', v2Error);
+            try { return auditNormalizeResult(await fetchJSON('/api/pois')); }
+            catch (oldError) {
+                console.warn(TAG, 'Sprawdź ZR: nie udało się pobrać UM/POI.', oldError);
+                return [];
+            }
+        }
+    }
+
+    async function auditFetchBuildingCatalog() {
+        try {
+            const response = await fetch('https://api.lss-manager.de/pl_PL/buildings', { credentials: 'omit', cache: 'force-cache' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            return data && typeof data === 'object' ? data : {};
+        } catch (e) {
+            console.warn(TAG, 'Sprawdź ZR: katalog typów budynków LSSM niedostępny.', e);
+            return {};
+        }
+    }
+
+    function auditCatalogEntry(catalog, typeId) {
+        return catalog?.[typeId] ?? catalog?.[Number(typeId)] ?? null;
+    }
+
+    function auditBool(value, fallback = false) {
+        if (value === undefined || value === null) return fallback;
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value !== 0;
+        const n = normalize(value);
+        if (['1','true','yes','tak'].includes(n)) return true;
+        if (['0','false','no','nie'].includes(n)) return false;
+        return fallback;
+    }
+
+    function auditBuildingTypeName(raw, catalog) {
+        const typeId = String(auditValueOf(raw, ['building_type','building_type_id','type'], ''));
+        const entry = auditCatalogEntry(catalog, typeId);
+        if (typeof entry === 'string') return entry;
+        return String(
+            auditValueOf(entry, ['caption','name','label'], null) ??
+            auditValueOf(raw, ['building_type_caption','type_caption','building_type_name','type_name'], null) ??
+            `Typ ${typeId || '?'}`
+        );
+    }
+
+    function auditExtensionNames(raw, catalog) {
+        const typeId = String(auditValueOf(raw, ['building_type','building_type_id','type'], ''));
+        const buildingEntry = auditCatalogEntry(catalog, typeId);
+        const rawExt = auditValueOf(raw, ['extensions'], []);
+        const list = Array.isArray(rawExt) ? rawExt : (rawExt && typeof rawExt === 'object' ? Object.values(rawExt) : []);
+        return list.filter(ext => {
+            const available = auditBool(auditValueOf(ext, ['available'], true), true);
+            const enabled = auditBool(auditValueOf(ext, ['enabled'], true), true);
+            return available && enabled;
+        }).map((ext, index) => {
+            const extId = String(auditValueOf(ext, ['type_id','typeId','id'], index));
+            const meta = buildingEntry?.extensions?.[extId] ?? buildingEntry?.extensions?.[Number(extId)] ?? null;
+            return String(
+                auditValueOf(ext, ['caption','name','label'], null) ??
+                auditValueOf(meta, ['caption','name','label'], null) ??
+                `Rozbudowa ${extId}`
+            );
+        }).filter(Boolean);
+    }
+
+    async function auditFetchPOITypeOptions() {
+        const catalog = new Map();
+        const urls = ['/pois', '/pois/new', '/poi/new'];
+        for (const url of urls) {
+            try {
+                const response = await fetch(url, { credentials:'same-origin', cache:'no-store', headers:{Accept:'text/html,application/xhtml+xml'} });
+                if (!response.ok) continue;
+                const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+                for (const select of doc.querySelectorAll('select')) {
+                    const idName = normalize(`${select.id} ${select.name}`);
+                    if (!(idName.includes('poi') || idName.includes('um'))) continue;
+                    for (const opt of select.querySelectorAll('option')) {
+                        const value = String(opt.value ?? '').trim();
+                        const label = cleanPotentialMissionCell(opt);
+                        if (value && label && !/^wybierz|choose$/i.test(label)) catalog.set(value, label);
+                    }
+                }
+                if (catalog.size) break;
+            } catch (_) {}
+        }
+        return catalog;
+    }
+
+    function canonicalRequirementName(text) {
+        const n = normalize(text);
+        if (!n) return '';
+        if ((n.includes('straz') && n.includes('pozar'))) return 'straz pozarna';
+        if ((n.includes('pogotow') && n.includes('wod')) || n.includes('wopr')) return 'pogotowie wodne';
+        if (n.includes('pogotow')) return 'pogotowie ratunkowe';
+        if ((n.includes('polic') && n.includes('ruch')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
+        if (n.includes('polic')) return 'policja';
+        if (n.includes('samolot') || n.includes('bambi bucket')) return 'stacja samolotow gasniczych';
+        if (n.includes('robot') && n.includes('cbrne')) return 'robot cbrne';
+        if (n.includes('proszk')) return 'pojazdy proszkowe';
+        return n
+            .replace(/\b(posterunek|posterunki|posterunkow|posterunku|budynek|budynki|budynkow|budynku|stacja|stacje|stacji|rozbudowa|rozbudowy|rozbudow|rozbudowie|wymagane|wymagana|wymagany)\b/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+    }
+
+    function fuzzyRequirementMatch(required, available) {
+        const r = canonicalRequirementName(required);
+        const a = canonicalRequirementName(available);
+        if (!r || !a) return false;
+        if (r === a || r.includes(a) || a.includes(r)) return true;
+        const stop = new Set(['i','oraz','lub','w','na','do','z','po','dla']);
+        const rt = r.split(' ').filter(x => x.length > 2 && !stop.has(x));
+        const at = new Set(a.split(' ').filter(x => x.length > 2 && !stop.has(x)));
+        return rt.length > 0 && rt.every(t => at.has(t));
+    }
+
+    function splitBuildingRequirementClauses(text) {
+        const clean = String(text ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!clean) return [];
+        const semis = clean.split(/\s*[;|]\s*/).filter(Boolean);
+        const out = [];
+        for (const part of semis) {
+            const matches = [...part.matchAll(/(\d+)\s+(.+?)(?=(?:\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż])|$)/g)];
+            if (matches.length > 1) {
+                for (const m of matches) out.push(`${m[1]} ${m[2]}`.trim());
+            } else out.push(part.trim());
+        }
+        return out;
+    }
+
+    function parseBuildingRequirement(text) {
+        const m = String(text ?? '').trim().match(/^(\d+)\s*[×x]?\s*(.+)$/i);
+        if (!m) return null;
+        const count = Number(m[1]);
+        const label = m[2].trim();
+        if (!Number.isFinite(count) || count < 1 || !label) return null;
+        return { count, label, key: canonicalRequirementName(label), extension: /rozbudow/i.test(label) };
+    }
+
+    function buildAuditInfrastructure(buildings, catalog, pois, poiCatalog) {
+        const buildingTypes = [];
+        const extensions = [];
+        for (const b of buildings) {
+            buildingTypes.push(auditBuildingTypeName(b, catalog));
+            extensions.push(...auditExtensionNames(b, catalog));
+        }
+
+        const poiLabels = [];
+        let numericPoiTypes = 0;
+        for (const poi of pois) {
+            const rawType = auditValueOf(poi, ['poi_type','poi_type_id','type_id','type'], '');
+            const directLabel = auditValueOf(poi, ['poi_type_caption','poi_type_name','type_caption','type_name','category_name'], null);
+            let label = directLabel ? String(directLabel) : '';
+            if (!label && rawType !== '' && poiCatalog.has(String(rawType))) label = poiCatalog.get(String(rawType));
+            if (!label && rawType !== '' && !/^\d+$/.test(String(rawType))) label = String(rawType);
+            if (!label) {
+                const fallback = auditValueOf(poi, ['caption','name','description'], '');
+                if (fallback) label = String(fallback);
+            }
+            if (label) poiLabels.push(label); else if (/^\d+$/.test(String(rawType))) numericPoiTypes++;
+        }
+        return { buildings, buildingTypes, extensions, pois, poiLabels, numericPoiTypes };
+    }
+
+    async function loadAuditInfrastructure(force = false) {
+        if (state.zrCheckInfrastructure && !force) return state.zrCheckInfrastructure;
+        const [buildings, catalog, pois, poiCatalog] = await Promise.all([
+            auditFetchBuildings(), auditFetchBuildingCatalog(), auditFetchPOIs(), auditFetchPOITypeOptions()
+        ]);
+        state.zrCheckInfrastructure = buildAuditInfrastructure(buildings, catalog, pois, poiCatalog);
+        return state.zrCheckInfrastructure;
+    }
+
+    function zrCheckSourceRows() {
+        return state.aaos.filter(aao =>
+            aao.aao_category_id != null &&
+            !isCategoryName(aao, 'AZR') &&
+            !isCategoryName(aao, 'Zapasowe')
+        );
+    }
+
+    function populateZRCheckCategoryFilter() {
+        const select = document.getElementById('orzr-zrcheck-category');
+        if (!select) return;
+        const current = state.zrCheckCategory;
+        const ids = new Set(zrCheckSourceRows().map(aao => Number(aao.aao_category_id)).filter(Number.isFinite));
+        select.innerHTML = '<option value="all">Wszystkie kategorie</option>' +
+            [...ids].sort((a,b)=>getCategoryName(a).localeCompare(getCategoryName(b),'pl',{numeric:true,sensitivity:'base'}))
+                .map(id=>`<option value="${id}">${escapeHTML(getCategoryName(id))}</option>`).join('');
+        if (current === 'all' || ids.has(Number(current))) select.value = current;
+        else { state.zrCheckCategory = 'all'; select.value = 'all'; }
+    }
+
+    function evaluateUMRequirements(missions, infra) {
+        const required = [...new Set(missions.map(m => String(m.um || '').trim()).filter(Boolean))];
+        if (!required.length) return { ok:true, text:'✓ OK', detail:'Brak wymaganego UM' };
+        const missing = required.filter(req => !infra.poiLabels.some(label => fuzzyRequirementMatch(req, label)));
+        if (!missing.length) return { ok:true, text:'✓ OK', detail:`UM: ${required.join(', ')}` };
+        if (!infra.poiLabels.length && infra.numericPoiTypes > 0) {
+            return { ok:false, warning:true, text:'⚠ Nie można rozpoznać typów UM', detail:`Wymagane: ${required.join(', ')}` };
+        }
+        return { ok:false, text:`✗ Brak: ${missing.join(', ')}`, detail:`Wymagane: ${required.join(', ')}` };
+    }
+
+    function evaluateBuildingRequirements(missions, infra) {
+        const aggregated = new Map();
+        const unparsed = [];
+        for (const mission of missions) {
+            for (const clause of splitBuildingRequirementClauses(mission.requirements)) {
+                const parsed = parseBuildingRequirement(clause);
+                if (!parsed) { if (clause) unparsed.push(clause); continue; }
+                const key = `${parsed.extension ? 'ext' : 'any'}:${parsed.key}`;
+                const prev = aggregated.get(key);
+                if (!prev || parsed.count > prev.count) aggregated.set(key, parsed);
+            }
+        }
+        if (!aggregated.size && !unparsed.length) return { ok:true, text:'✓ OK', detail:'Brak wymagań budynków' };
+
+        const missing = [];
+        const details = [];
+        for (const req of aggregated.values()) {
+            const pool = req.extension ? infra.extensions : [...infra.buildingTypes, ...infra.extensions];
+            const have = pool.filter(name => fuzzyRequirementMatch(req.label, name)).length;
+            details.push(`${req.count}× ${req.label} (masz ${have})`);
+            if (have < req.count) missing.push(`${req.label}: brakuje ${req.count-have} (masz ${have}/${req.count})`);
+        }
+        for (const raw of unparsed) missing.push(`nie rozpoznano: ${raw}`);
+        return missing.length
+            ? { ok:false, text:`✗ ${missing.join('; ')}`, detail:details.join('; ') }
+            : { ok:true, text:'✓ OK', detail:details.join('; ') };
+    }
+
+    function rebuildZRCheckResults(infra) {
+        const byName = new Map();
+        for (const mission of state.potentialMissions) {
+            const key = normalize(mission.name);
+            if (!key) continue;
+            if (!byName.has(key)) byName.set(key, []);
+            byName.get(key).push(mission);
+        }
+        state.zrCheckResults = zrCheckSourceRows().map(aao => {
+            const missions = byName.get(normalize(aao.caption)) || [];
+            if (!missions.length) return {
+                aao, missions: [], pmFound:false,
+                um:{ok:false, text:'— Brak PM', detail:'Nie znaleziono Potencjalnej misji o tej nazwie.'},
+                buildings:{ok:false, text:'— Brak PM', detail:'Nie znaleziono Potencjalnej misji o tej nazwie.'},
+                allOk:false
+            };
+            const um = evaluateUMRequirements(missions, infra);
+            const buildings = evaluateBuildingRequirements(missions, infra);
+            return { aao, missions, pmFound:true, um, buildings, allOk:!!um.ok && !!buildings.ok };
+        });
+    }
+
+    function filteredZRCheckResults() {
+        const q = normalize(state.zrCheckFilter);
+        return state.zrCheckResults.filter(item => {
+            const aao = item.aao;
+            if (state.zrCheckStatus === 'ok' && !item.allOk) return false;
+            if (state.zrCheckStatus === 'missing' && item.allOk) return false;
+            if (state.zrCheckStatus === 'no-pm' && item.pmFound) return false;
+            if (state.zrCheckCategory !== 'all' && Number(state.zrCheckCategory) !== Number(aao.aao_category_id)) return false;
+            if (q && !normalize(`${aao.id} ${aao.caption} ${getCategoryName(aao.aao_category_id)} ${item.um.text} ${item.buildings.text}`).includes(q)) return false;
+            return true;
+        }).sort((a,b) => Number(b.allOk)-Number(a.allOk) || a.aao.caption.localeCompare(b.aao.caption,'pl',{numeric:true,sensitivity:'base'}));
+    }
+
+    function updateZRCheckControls() {
+        const run = document.getElementById('orzr-zrcheck-run');
+        if (run) {
+            run.disabled = state.zrCheckBusy || state.potentialMissionsLoading;
+            run.textContent = state.zrCheckBusy ? 'Sprawdzam…' : '✅ Sprawdź ZR';
+        }
+        const count = document.getElementById('orzr-zrcheck-count');
+        if (count) count.textContent = state.zrCheckResults.length;
+    }
+
+    function renderZRCheckTable() {
+        const tbody = document.getElementById('orzr-zrcheck-body');
+        const empty = document.getElementById('orzr-zrcheck-empty');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        const rows = filteredZRCheckResults();
+        if (empty) {
+            empty.hidden = rows.length > 0;
+            empty.textContent = state.zrCheckResults.length ? 'Brak wyników pasujących do filtrów.' : 'Kliknij „Sprawdź ZR”, aby porównać wymagania PM z Twoimi UM i budynkami.';
+        }
+        for (const item of rows) {
+            const aao = item.aao;
+            const tr = document.createElement('tr');
+            const umClass = item.um.ok ? 'orzr-check-ok' : item.um.warning ? 'orzr-check-warning' : 'orzr-check-missing';
+            const bClass = item.buildings.ok ? 'orzr-check-ok' : 'orzr-check-missing';
+            tr.innerHTML = `
+                <td class="orzr-id">${aao.id}</td>
+                <td>${escapeHTML(aao.caption)}${item.missions.length > 1 ? `<div class="orzr-check-note">Wariantów PM: ${item.missions.length}</div>` : ''}</td>
+                <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
+                <td class="${item.pmFound ? 'orzr-check-ok' : 'orzr-check-missing'}">${item.pmFound ? `✓ ${item.missions.length} PM` : '✗ Brak PM'}</td>
+                <td class="${umClass}">${escapeHTML(item.um.text)}<div class="orzr-check-note">${escapeHTML(item.um.detail || '')}</div></td>
+                <td class="${bClass}">${escapeHTML(item.buildings.text)}<div class="orzr-check-note">${escapeHTML(item.buildings.detail || '')}</div></td>
+                <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a></td>`;
+            tbody.appendChild(tr);
+        }
+        updateZRCheckControls();
+        updateStats();
+    }
+
+    async function runZRCheck(force = true) {
+        if (state.zrCheckBusy || state.potentialMissionsLoading) return;
+        state.zrCheckBusy = true;
+        updateZRCheckControls();
+        try {
+            setStatus('Sprawdź ZR: pobieram PM, budynki, rozbudowy i UM…', 'info');
+            await loadPotentialMissions(force);
+            const infra = await loadAuditInfrastructure(force);
+            rebuildZRCheckResults(infra);
+            populateZRCheckCategoryFilter();
+            renderZRCheckTable();
+            const ok = state.zrCheckResults.filter(x=>x.allOk).length;
+            const bad = state.zrCheckResults.length-ok;
+            const noPM = state.zrCheckResults.filter(x=>!x.pmFound).length;
+            setStatus(`Sprawdź ZR: sprawdzono ${state.zrCheckResults.length} ZR • OK: ${ok} • z brakami/uwagami: ${bad} • bez PM: ${noPM} • budynki: ${infra.buildings.length} • UM/POI: ${infra.pois.length}.`, bad ? 'warning' : 'success');
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd Sprawdź ZR: ${e.message || e}`, 'danger');
+        } finally {
+            state.zrCheckBusy = false;
+            updateZRCheckControls();
+        }
     }
 
     function duplicateNameKey(caption) {
@@ -2539,6 +2925,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const missingAZRTable = document.getElementById('orzr-missing-azr-table');
         const potentialMissionsTable = document.getElementById('orzr-pm-table');
         const pmCheckTable = document.getElementById('orzr-pmcheck-table');
+        const zrCheckTable = document.getElementById('orzr-zrcheck-table');
         const saveAll = document.getElementById('orzr-save-all');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
@@ -2546,6 +2933,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const missingAZRTools = document.getElementById('orzr-missing-azr-tools');
         const potentialMissionsTools = document.getElementById('orzr-pm-tools');
         const pmCheckTools = document.getElementById('orzr-pmcheck-tools');
+        const zrCheckTools = document.getElementById('orzr-zrcheck-tools');
         const azrUpdateErrors = document.getElementById('orzr-azr-update-errors');
         const toolbar = document.getElementById('orzr-toolbar');
         const normalEmpty = document.getElementById('orzr-empty');
@@ -2553,6 +2941,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const missingAZREmpty = document.getElementById('orzr-missing-azr-empty');
         const potentialMissionsEmpty = document.getElementById('orzr-pm-empty');
         const pmCheckEmpty = document.getElementById('orzr-pmcheck-empty');
+        const zrCheckEmpty = document.getElementById('orzr-zrcheck-empty');
         const shownLabel = document.getElementById('orzr-shown-label');
 
         const copying = state.activeTab === 'copy';
@@ -2560,6 +2949,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const missingAZR = state.activeTab === 'missing-azr';
         const potentialMissions = state.activeTab === 'potential-missions';
         const pmChecking = state.activeTab === 'pm-check';
+        const zrChecking = state.activeTab === 'zr-check';
         const listing = state.activeTab === 'list';
 
         if (listTable) listTable.hidden = !listing;
@@ -2568,21 +2958,24 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (missingAZRTable) missingAZRTable.hidden = !missingAZR;
         if (potentialMissionsTable) potentialMissionsTable.hidden = !potentialMissions;
         if (pmCheckTable) pmCheckTable.hidden = !pmChecking;
+        if (zrCheckTable) zrCheckTable.hidden = !zrChecking;
         if (copyBulk) copyBulk.hidden = !copying;
         if (cleanupTools) cleanupTools.hidden = !cleaning;
         if (missingAZRTools) missingAZRTools.hidden = !missingAZR;
         if (potentialMissionsTools) potentialMissionsTools.hidden = !potentialMissions;
         if (pmCheckTools) pmCheckTools.hidden = !pmChecking;
+        if (zrCheckTools) zrCheckTools.hidden = !zrChecking;
         if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrListMode === 'deleted' || state.azrUpdateErrors.length === 0;
-        if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions || pmChecking;
+        if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions || pmChecking || zrChecking;
         if (saveAll) saveAll.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
-        if (normalEmpty && (cleaning || missingAZR || potentialMissions || pmChecking)) normalEmpty.hidden = true;
+        if (normalEmpty && (cleaning || missingAZR || potentialMissions || pmChecking || zrChecking)) normalEmpty.hidden = true;
         if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
         if (missingAZREmpty && !missingAZR) missingAZREmpty.hidden = true;
         if (potentialMissionsEmpty && !potentialMissions) potentialMissionsEmpty.hidden = true;
         if (pmCheckEmpty && !pmChecking) pmCheckEmpty.hidden = true;
-        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : potentialMissions ? 'Potencjalnych misji' : pmChecking ? 'Wyników PM' : 'Widocznych';
+        if (zrCheckEmpty && !zrChecking) zrCheckEmpty.hidden = true;
+        if (shownLabel) shownLabel.textContent = cleaning ? 'Wyników' : missingAZR ? (state.azrListMode === 'deleted' ? 'Do usunięcia z AZR' : 'Brakuje w AZR') : potentialMissions ? 'Potencjalnych misji' : pmChecking ? 'Wyników PM' : zrChecking ? 'Sprawdzonych ZR' : 'Widocznych';
 
         if (copying) renderCopyTable();
         else if (cleaning) renderCleanupTable();
@@ -2600,6 +2993,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         } else if (pmChecking) {
             populatePMCheckCategoryFilter();
             renderPMCheckTable();
+        } else if (zrChecking) {
+            populateZRCheckCategoryFilter();
+            renderZRCheckTable();
         } else renderTable();
 
         document.querySelectorAll('.orzr-tab').forEach(btn => {
@@ -2608,7 +3004,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     }
 
     function setActiveTab(tab) {
-        if (!['list', 'copy', 'cleanup', 'missing-azr', 'potential-missions', 'pm-check'].includes(tab)) return;
+        if (!['list', 'copy', 'cleanup', 'missing-azr', 'potential-missions', 'pm-check', 'zr-check'].includes(tab)) return;
         state.activeTab = tab;
         setStatus('', 'info');
         renderActiveTable();
@@ -2635,7 +3031,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                     ? filteredPotentialMissions().length
                     : state.activeTab === 'pm-check'
                         ? filteredPMCheckResults().length
-                        : sortedFilteredAAOs(state.activeTab).length;
+                        : state.activeTab === 'zr-check'
+                            ? filteredZRCheckResults().length
+                            : sortedFilteredAAOs(state.activeTab).length;
         if (changed) changed.textContent = state.dirty.size;
     }
 
@@ -2849,8 +3247,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
 #orzr-copy-bulk{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:9px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
 #orzr-copy-bulk[hidden]{display:none}
-#orzr-cleanup-tools,#orzr-missing-azr-tools,#orzr-pm-tools,#orzr-pmcheck-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
-#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden],#orzr-pm-tools[hidden],#orzr-pmcheck-tools[hidden]{display:none}
+#orzr-cleanup-tools,#orzr-missing-azr-tools,#orzr-pm-tools,#orzr-pmcheck-tools,#orzr-zrcheck-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 12px;background:#f7f7f7;border-bottom:1px solid #ddd}
+#orzr-cleanup-tools[hidden],#orzr-missing-azr-tools[hidden],#orzr-pm-tools[hidden],#orzr-pmcheck-tools[hidden],#orzr-zrcheck-tools[hidden]{display:none}
 #orzr-cleanup-tools .btn{white-space:nowrap}
 .orzr-cleanup-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-right:10px;border-right:1px solid #ddd}
 .orzr-cleanup-group:last-child{border-right:0}
@@ -2866,9 +3264,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-status-warning{background:#fcf8e3;border:1px solid #faebcc}
 .orzr-status-danger{background:#f2dede;border:1px solid #ebccd1}
 #orzr-table-wrap{flex:1;overflow:auto;padding:8px 12px 12px}
-#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-pm-table,#orzr-pmcheck-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
-#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-pmcheck-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
-#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-pmcheck-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
+#orzr-table,#orzr-copy-table,#orzr-cleanup-table,#orzr-missing-azr-table,#orzr-pm-table,#orzr-pmcheck-table,#orzr-zrcheck-table,#orzr-azr-update-errors-table{width:100%;border-collapse:collapse;table-layout:fixed}
+#orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-pmcheck-table th,#orzr-zrcheck-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
+#orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-pmcheck-table td,#orzr-zrcheck-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
 #orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
 #orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
@@ -2890,7 +3288,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-cleanup-check input{width:18px;height:18px;cursor:pointer}
 .orzr-cleanup-name{white-space:pre-wrap;overflow-wrap:anywhere}
 .orzr-whitespace-mark{background:#f2dede;color:#a94442;font-family:monospace;font-weight:700;padding:0 2px;border-radius:2px}
-#orzr-cleanup-empty,#orzr-missing-azr-empty,#orzr-pm-empty,#orzr-pmcheck-empty{padding:30px;text-align:center;color:#777}
+#orzr-cleanup-empty,#orzr-missing-azr-empty,#orzr-pm-empty,#orzr-pmcheck-empty,#orzr-zrcheck-empty{padding:30px;text-align:center;color:#777}
 #orzr-missing-azr-table th:nth-child(1),#orzr-missing-azr-table td:nth-child(1){width:85px}
 #orzr-missing-azr-table th:nth-child(3),#orzr-missing-azr-table td:nth-child(3){width:120px}
 #orzr-missing-azr-table th:nth-child(4),#orzr-missing-azr-table td:nth-child(4){width:320px}
@@ -2918,6 +3316,19 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-pmcheck-table th:nth-child(5),#orzr-pmcheck-table td:nth-child(5){width:230px}
 #orzr-pmcheck-table th:nth-child(6),#orzr-pmcheck-table td:nth-child(6){width:190px}
 #orzr-pmcheck-table th:nth-child(7),#orzr-pmcheck-table td:nth-child(7){width:105px}
+#orzr-zrcheck-tools{gap:8px}
+#orzr-zrcheck-tools input[type="search"]{min-width:260px;max-width:420px}
+#orzr-zrcheck-tools select{min-width:180px;max-width:260px}
+#orzr-zrcheck-table th:nth-child(1),#orzr-zrcheck-table td:nth-child(1){width:85px}
+#orzr-zrcheck-table th:nth-child(3),#orzr-zrcheck-table td:nth-child(3){width:190px}
+#orzr-zrcheck-table th:nth-child(4),#orzr-zrcheck-table td:nth-child(4){width:95px}
+#orzr-zrcheck-table th:nth-child(5),#orzr-zrcheck-table td:nth-child(5){width:280px}
+#orzr-zrcheck-table th:nth-child(6),#orzr-zrcheck-table td:nth-child(6){width:520px}
+#orzr-zrcheck-table th:nth-child(7),#orzr-zrcheck-table td:nth-child(7){width:105px}
+.orzr-check-ok{color:#3c763d;font-weight:700;background:#f3fbf0}
+.orzr-check-missing{color:#a94442;font-weight:700;background:#fff5f5}
+.orzr-check-warning{color:#8a6d3b;font-weight:700;background:#fffaf0}
+.orzr-check-note{margin-top:3px;font-size:11px;color:#666;font-weight:400;white-space:normal;overflow-wrap:anywhere}
 #orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
 #orzr-azr-update-errors[hidden]{display:none}
 .orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
@@ -3006,6 +3417,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button type="button" class="orzr-tab" data-tab="missing-azr">🔎 Brakuje w AZR</button>
         <button type="button" class="orzr-tab" data-tab="potential-missions">📋 Potencjalne misje</button>
         <button type="button" class="orzr-tab" data-tab="pm-check">🔎 Sprawdź PM</button>
+        <button type="button" class="orzr-tab" data-tab="zr-check">✅ Sprawdź ZR</button>
         <button type="button" class="orzr-tab" data-tab="cleanup">🧹 Porządkowanie</button>
     </div>
     <div id="orzr-toolbar">
@@ -3070,6 +3482,18 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <button id="orzr-pmcheck-move-backup" type="button" class="btn btn-warning" disabled>📦 Przenieś do Zapasowe (0)</button>
         <span class="orzr-missing-azr-info">Sprawdzanie zawsze pomija „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-pmcheck-count">0</strong>.</span>
     </div>
+    <div id="orzr-zrcheck-tools" hidden>
+        <button id="orzr-zrcheck-run" type="button" class="btn btn-success">✅ Sprawdź ZR</button>
+        <input id="orzr-zrcheck-search" type="search" class="form-control" placeholder="Szukaj ZR po nazwie, ID lub wyniku…">
+        <select id="orzr-zrcheck-status" class="form-control">
+            <option value="all">Wszystkie wyniki</option>
+            <option value="missing">Tylko braki / uwagi</option>
+            <option value="ok">Tylko OK</option>
+            <option value="no-pm">Tylko bez PM</option>
+        </select>
+        <select id="orzr-zrcheck-category" class="form-control"><option value="all">Wszystkie kategorie</option></select>
+        <span class="orzr-missing-azr-info">Porównanie na podstawie Potencjalnych misji. Kolumna UM sprawdza Twoje UM/POI, a „Wymagania (budynki)” liczbę budynków i aktywnych rozbudów. Pomijane są „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-zrcheck-count">0</strong>.</span>
+    </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
             <strong>Wyszukaj duplikaty:</strong>
@@ -3130,6 +3554,12 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             </tr></thead>
             <tbody id="orzr-pmcheck-body"></tbody>
         </table>
+        <table id="orzr-zrcheck-table" hidden>
+            <thead><tr>
+                <th>ID</th><th>Nazwa ZR</th><th>Kategoria</th><th>PM</th><th>UM</th><th>Wymagania (budynki)</th><th>Akcje</th>
+            </tr></thead>
+            <tbody id="orzr-zrcheck-body"></tbody>
+        </table>
         <table id="orzr-cleanup-table" hidden>
             <thead><tr>
                 <th><input id="orzr-cleanup-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie wyniki"></th>
@@ -3140,6 +3570,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         <div id="orzr-missing-azr-empty" hidden></div>
         <div id="orzr-pm-empty" hidden></div>
         <div id="orzr-pmcheck-empty" hidden>Kliknij „Sprawdź PM”, aby rozpocząć porównanie.</div>
+        <div id="orzr-zrcheck-empty" hidden>Kliknij „Sprawdź ZR”, aby rozpocząć kontrolę wymagań.</div>
         <div id="orzr-cleanup-empty" hidden>Wybierz jedną z operacji porządkowania powyżej.</div>
         <div id="orzr-empty" hidden>Brak ZR spełniających wybrane filtry.</div>
     </div>
@@ -3150,9 +3581,12 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
         });
         document.getElementById('orzr-close').addEventListener('click', closeManager);
-        overlay.addEventListener('click', e => {
-            if (e.target === overlay) closeManager();
-        });
+        // Okno zamykamy wyłącznie przyciskiem × lub klawiszem Esc. Kliknięcie / ruch
+        // myszy po tle i w okolicy pól wyszukiwania nie może już zamknąć menedżera.
+        const manager = document.getElementById('orzr-manager');
+        for (const eventName of ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend']) {
+            manager?.addEventListener(eventName, e => e.stopPropagation());
+        }
         document.getElementById('orzr-search').addEventListener('input', e => {
             state.filter = e.target.value;
             renderActiveTable();
@@ -3226,6 +3660,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         });
         document.getElementById('orzr-pmcheck-delete').addEventListener('click', deleteSelectedPMCheck);
         document.getElementById('orzr-pmcheck-move-backup').addEventListener('click', moveSelectedPMCheckToZapasowe);
+        document.getElementById('orzr-zrcheck-run').addEventListener('click', () => runZRCheck(true));
+        document.getElementById('orzr-zrcheck-search').addEventListener('input', e => { state.zrCheckFilter = e.target.value; renderZRCheckTable(); });
+        document.getElementById('orzr-zrcheck-status').addEventListener('change', e => { state.zrCheckStatus = e.target.value; renderZRCheckTable(); });
+        document.getElementById('orzr-zrcheck-category').addEventListener('change', e => { state.zrCheckCategory = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));

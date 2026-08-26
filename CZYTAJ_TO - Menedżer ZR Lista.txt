@@ -254,3 +254,19 @@ WERSJA 3.10.5 (TESTOWA)
 - Numer wersji na przycisku jest pobierany z metadanych userscriptu przez GM_info, z awaryjną wartością zgodną z @version.
 - Zachowano wszystkie funkcje testowej v3.10.4.
 
+
+============================================================
+WERSJA 3.10.6 (TESTOWA)
+============================================================
+- Dodano osobną zakładkę „Sprawdź ZR”.
+- „Sprawdź ZR” dopasowuje ZR do pełnej listy „Potencjalnych misji” po znormalizowanej nazwie.
+- Dodano osobną kolumnę „UM”: skrypt pobiera własne UM/POI i sprawdza, czy występują typy UM wymagane przez odpowiadające Potencjalne misje.
+- Jeżeli wymagane UM są dostępne, wynik jest zielony „OK”; przy brakach wyświetlana jest konkretna lista brakujących UM.
+- Dodano osobną kolumnę „Wymagania (budynki)”: skrypt pobiera budynki oraz aktywne rozbudowy i porównuje je z wymaganiami z Potencjalnych misji.
+- Jeżeli wymagania budynków/rozbudów są spełnione, wynik jest zielony „OK”; przy brakach pokazywane jest czego brakuje oraz stan „masz X/Y”.
+- Gdy pod tą samą nazwą występuje kilka wariantów PM, kontrola uwzględnia wszystkie warianty, a dla liczbowych wymagań przyjmuje najwyższą wymaganą wartość.
+- Zakładka ma wyszukiwanie, filtr wyniku (wszystkie / braki / OK / brak PM) oraz filtr kategorii.
+- „Sprawdź ZR” pomija kategorie „AZR”, „Bez kategorii” i „Zapasowe”.
+- Dodano zabezpieczenie okna Menedżera: kliknięcie lub ruch kursora po tle/okolicy pól wyszukiwania nie zamyka już okna. Menedżer zamyka się tylko przyciskiem „×” albo klawiszem Esc.
+- Zachowano otwieranie pełnej edycji ZR w nowej karcie/oknie oraz numer wersji na przycisku Menedżera.
+- Zachowano wszystkie funkcje testowej v3.10.5.
