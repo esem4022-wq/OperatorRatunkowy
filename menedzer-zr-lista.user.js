@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.6
+// @version      3.10.7
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.6');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.7');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -58,6 +58,8 @@
         zrCheckResults: [],
         zrCheckFilter: '',
         zrCheckStatus: 'all',
+        zrCheckUMStatus: 'all',
+        zrCheckBuildingStatus: 'all',
         zrCheckCategory: 'all',
         zrCheckBusy: false,
         zrCheckInfrastructure: null
@@ -138,6 +140,8 @@
         state.zrCheckResults = [];
         state.zrCheckFilter = '';
         state.zrCheckStatus = 'all';
+        state.zrCheckUMStatus = 'all';
+        state.zrCheckBuildingStatus = 'all';
         state.zrCheckCategory = 'all';
         state.zrCheckInfrastructure = null;
         populateCategoryFilter();
@@ -2134,7 +2138,9 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     function canonicalRequirementName(text) {
         const n = normalize(text);
         if (!n) return '';
-        if ((n.includes('straz') && n.includes('pozar'))) return 'straz pozarna';
+        if ((n.includes('straz') && n.includes('pozar')) ||
+            (n.includes('jednostka') && n.includes('ratowniczo') && n.includes('gasnic')) ||
+            n === 'jrg' || n.includes('remiza strazacka')) return 'straz pozarna';
         if ((n.includes('pogotow') && n.includes('wod')) || n.includes('wopr')) return 'pogotowie wodne';
         if (n.includes('pogotow')) return 'pogotowie ratunkowe';
         if ((n.includes('polic') && n.includes('ruch')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
@@ -2185,7 +2191,18 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const buildingTypes = [];
         const extensions = [];
         for (const b of buildings) {
-            buildingTypes.push(auditBuildingTypeName(b, catalog));
+            const typeId = Number(auditValueOf(b, ['building_type','building_type_id','type'], NaN));
+            const typeName = auditBuildingTypeName(b, catalog);
+            buildingTypes.push(typeName);
+
+            // Aliasujemy podstawowe typy budynków gry do nazw używanych w wymaganiach PM.
+            // Dzięki temu np. typ 0 „Jednostka Ratowniczo-Gaśnicza” liczy się jako
+            // „posterunek straży pożarnej” również wtedy, gdy zewnętrzny katalog nazw
+            // jest chwilowo niedostępny. Każdy alias odpowiada jednemu budynkowi.
+            if (typeId === 0) buildingTypes.push('Posterunek straży pożarnej');
+            else if (typeId === 2) buildingTypes.push('Posterunek pogotowia ratunkowego');
+            else if (typeId === 6) buildingTypes.push('Posterunek policji');
+
             extensions.push(...auditExtensionNames(b, catalog));
         }
 
@@ -2203,7 +2220,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             }
             if (label) poiLabels.push(label); else if (/^\d+$/.test(String(rawType))) numericPoiTypes++;
         }
-        return { buildings, buildingTypes, extensions, pois, poiLabels, numericPoiTypes };
+        return { buildings, catalog, buildingTypes, extensions, pois, poiLabels, numericPoiTypes };
     }
 
     async function loadAuditInfrastructure(force = false) {
@@ -2246,6 +2263,28 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         return { ok:false, text:`✗ Brak: ${missing.join(', ')}`, detail:`Wymagane: ${required.join(', ')}` };
     }
 
+    function auditBuildingMatchesRequirement(building, catalog, requirementLabel) {
+        const typeId = Number(auditValueOf(building, ['building_type','building_type_id','type'], NaN));
+        // Najważniejsze aliasy nazw używanych przez Potencjalne misje.
+        if (canonicalRequirementName(requirementLabel) === 'straz pozarna' && typeId === 0) return true;
+        if (canonicalRequirementName(requirementLabel) === 'pogotowie ratunkowe' && typeId === 2) return true;
+        if (canonicalRequirementName(requirementLabel) === 'policja' && typeId === 6) return true;
+        return fuzzyRequirementMatch(requirementLabel, auditBuildingTypeName(building, catalog));
+    }
+
+    function auditCountBuildingRequirement(req, infra) {
+        if (req.extension) {
+            return infra.extensions.filter(name => fuzzyRequirementMatch(req.label, name)).length;
+        }
+        // Budynki liczymy po surowych rekordach, nie po tablicy aliasów, aby jeden
+        // budynek nigdy nie został policzony podwójnie. Rozbudowy pozostają osobno.
+        const buildingCount = infra.buildings.filter(b =>
+            auditBuildingMatchesRequirement(b, infra.catalog || {}, req.label)
+        ).length;
+        const extensionCount = infra.extensions.filter(name => fuzzyRequirementMatch(req.label, name)).length;
+        return buildingCount + extensionCount;
+    }
+
     function evaluateBuildingRequirements(missions, infra) {
         const aggregated = new Map();
         const unparsed = [];
@@ -2263,8 +2302,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const missing = [];
         const details = [];
         for (const req of aggregated.values()) {
-            const pool = req.extension ? infra.extensions : [...infra.buildingTypes, ...infra.extensions];
-            const have = pool.filter(name => fuzzyRequirementMatch(req.label, name)).length;
+            const have = auditCountBuildingRequirement(req, infra);
             details.push(`${req.count}× ${req.label} (masz ${have})`);
             if (have < req.count) missing.push(`${req.label}: brakuje ${req.count-have} (masz ${have}/${req.count})`);
         }
@@ -2303,6 +2341,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             if (state.zrCheckStatus === 'ok' && !item.allOk) return false;
             if (state.zrCheckStatus === 'missing' && item.allOk) return false;
             if (state.zrCheckStatus === 'no-pm' && item.pmFound) return false;
+            if (state.zrCheckUMStatus === 'ok' && !item.um.ok) return false;
+            if (state.zrCheckUMStatus === 'missing' && item.um.ok) return false;
+            if (state.zrCheckBuildingStatus === 'ok' && !item.buildings.ok) return false;
+            if (state.zrCheckBuildingStatus === 'missing' && item.buildings.ok) return false;
             if (state.zrCheckCategory !== 'all' && Number(state.zrCheckCategory) !== Number(aao.aao_category_id)) return false;
             if (q && !normalize(`${aao.id} ${aao.caption} ${getCategoryName(aao.aao_category_id)} ${item.um.text} ${item.buildings.text}`).includes(q)) return false;
             return true;
@@ -3491,8 +3533,18 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             <option value="ok">Tylko OK</option>
             <option value="no-pm">Tylko bez PM</option>
         </select>
+        <select id="orzr-zrcheck-um-status" class="form-control" title="Filtr wyniku UM">
+            <option value="all">UM: wszystkie</option>
+            <option value="ok">UM: OK</option>
+            <option value="missing">UM: brak</option>
+        </select>
+        <select id="orzr-zrcheck-building-status" class="form-control" title="Filtr wymagań budynków">
+            <option value="all">Wymagania: wszystkie</option>
+            <option value="ok">Wymagania: OK</option>
+            <option value="missing">Wymagania: brak</option>
+        </select>
         <select id="orzr-zrcheck-category" class="form-control"><option value="all">Wszystkie kategorie</option></select>
-        <span class="orzr-missing-azr-info">Porównanie na podstawie Potencjalnych misji. Kolumna UM sprawdza Twoje UM/POI, a „Wymagania (budynki)” liczbę budynków i aktywnych rozbudów. Pomijane są „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-zrcheck-count">0</strong>.</span>
+        <span class="orzr-missing-azr-info">Porównanie na podstawie Potencjalnych misji. Kolumna UM sprawdza Twoje UM/POI, a „Wymagania (budynki)” liczbę budynków i aktywnych rozbudów. Dodano niezależne filtry UM i Wymagania. Pomijane są „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-zrcheck-count">0</strong>.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -3663,6 +3715,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         document.getElementById('orzr-zrcheck-run').addEventListener('click', () => runZRCheck(true));
         document.getElementById('orzr-zrcheck-search').addEventListener('input', e => { state.zrCheckFilter = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-zrcheck-status').addEventListener('change', e => { state.zrCheckStatus = e.target.value; renderZRCheckTable(); });
+        document.getElementById('orzr-zrcheck-um-status').addEventListener('change', e => { state.zrCheckUMStatus = e.target.value; renderZRCheckTable(); });
+        document.getElementById('orzr-zrcheck-building-status').addEventListener('change', e => { state.zrCheckBuildingStatus = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-zrcheck-category').addEventListener('change', e => { state.zrCheckCategory = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));

@@ -270,3 +270,16 @@ WERSJA 3.10.6 (TESTOWA)
 - Dodano zabezpieczenie okna Menedżera: kliknięcie lub ruch kursora po tle/okolicy pól wyszukiwania nie zamyka już okna. Menedżer zamyka się tylko przyciskiem „×” albo klawiszem Esc.
 - Zachowano otwieranie pełnej edycji ZR w nowej karcie/oknie oraz numer wersji na przycisku Menedżera.
 - Zachowano wszystkie funkcje testowej v3.10.5.
+
+
+============================================================
+WERSJA 3.10.7 (TESTOWA)
+============================================================
+- Poprawiono kontrolę wymagań budynków w zakładce „Sprawdź ZR” dla posterunków straży pożarnej.
+- Typ budynku 0 („Jednostka Ratowniczo-Gaśnicza”) jest teraz poprawnie traktowany jako „posterunek straży pożarnej” z Potencjalnych misji.
+- Liczenie podstawowych budynków odbywa się po surowych rekordach API, dzięki czemu jeden budynek nie jest liczony podwójnie przez aliasy nazw.
+- Dodano awaryjne aliasy podstawowych typów: straż pożarna, pogotowie ratunkowe i policja, dzięki czemu sprawdzanie nie zależy wyłącznie od zewnętrznego katalogu nazw.
+- W zakładce „Sprawdź ZR” dodano niezależny filtr „UM: wszystkie / OK / brak”.
+- Dodano niezależny filtr „Wymagania: wszystkie / OK / brak”.
+- Filtry UM i Wymagania można łączyć z dotychczasowym filtrem ogólnym, kategorią i wyszukiwaniem.
+- Zachowano wszystkie funkcje testowej v3.10.6.
