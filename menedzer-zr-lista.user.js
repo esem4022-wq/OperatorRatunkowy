@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.8
+// @version      3.10.9
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.8');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.9');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -56,11 +56,13 @@
         pmCheckCategory: 'all',
         pmCheckBusy: false,
         zrCheckResults: [],
+        zrCheckSelected: new Set(),
         zrCheckFilter: '',
         zrCheckStatus: 'all',
         zrCheckUMStatus: 'all',
         zrCheckBuildingStatus: 'all',
         zrCheckCategory: 'all',
+        zrCheckIncludeBackup: false,
         zrCheckBusy: false,
         zrCheckInfrastructure: null
     };
@@ -138,6 +140,7 @@
         state.pmCheckStatus = 'all';
         state.pmCheckCategory = 'all';
         state.zrCheckResults = [];
+        state.zrCheckSelected.clear();
         state.zrCheckFilter = '';
         state.zrCheckStatus = 'all';
         state.zrCheckUMStatus = 'all';
@@ -255,6 +258,7 @@
             tr.dataset.zrId = aao.id;
             if (state.dirty.has(aao.id)) tr.classList.add('orzr-dirty');
             tr.innerHTML = `
+                <td class="orzr-cleanup-check"><input type="checkbox" class="orzr-zrcheck-select" data-id="${aao.id}" ${state.zrCheckSelected.has(aao.id) ? 'checked' : ''}></td>
                 <td class="orzr-id">${aao.id}</td>
                 <td><input type="text" class="form-control input-sm orzr-caption" value="${escapeHTML(v.caption)}" data-id="${aao.id}"></td>
                 <td><input type="number" class="form-control input-sm orzr-column" value="${Number(v.column) || 1}" min="1" step="1" data-id="${aao.id}"></td>
@@ -1501,6 +1505,22 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         return String(cell?.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
+    function cleanPotentialMissionMultiCell(cell) {
+        if (!cell) return '';
+        const clone = cell.cloneNode(true);
+        clone.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        clone.querySelectorAll('li, p, div').forEach(el => {
+            el.before('\n');
+            el.after('\n');
+        });
+        const lines = String(clone.textContent ?? '')
+            .replace(/\u00a0/g, ' ')
+            .split(/\r?\n/)
+            .map(x => x.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+        return [...new Set(lines)].join('\n');
+    }
+
     function potentialMissionHref(anchor) {
         if (!anchor) return '';
         try {
@@ -1546,10 +1566,11 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (!name) return null;
 
         const valueAt = idx => idx >= 0 && cells[idx] ? cleanPotentialMissionCell(cells[idx]) : '';
+        const valueMultiAt = idx => idx >= 0 && cells[idx] ? cleanPotentialMissionMultiCell(cells[idx]) : '';
         const href = potentialMissionHref(detailsLink) || potentialMissionHref(nameLink) || potentialMissionHref(missionLinks[0]);
         return {
             name,
-            um: valueAt(idxUM),
+            um: valueMultiAt(idxUM),
             credits: valueAt(idxCredits),
             requirements: valueAt(idxRequirements),
             type: valueAt(idxType),
@@ -2248,7 +2269,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         return state.aaos.filter(aao =>
             aao.aao_category_id != null &&
             !isCategoryName(aao, 'AZR') &&
-            !isCategoryName(aao, 'Zapasowe')
+            (state.zrCheckIncludeBackup || !isCategoryName(aao, 'Zapasowe'))
         );
     }
 
@@ -2264,15 +2285,30 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         else { state.zrCheckCategory = 'all'; select.value = 'all'; }
     }
 
+    function splitUMAlternatives(value) {
+        return String(value || '')
+            .split(/\r?\n|\s*[;|]\s*/g)
+            .map(x => x.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+    }
+
     function evaluateUMRequirements(missions, infra) {
-        const required = [...new Set(missions.map(m => String(m.um || '').trim()).filter(Boolean))];
+        // UM w Potencjalnych misjach są alternatywami (LUB), a nie wymaganiami łącznymi.
+        // Przykład: „Agresywny pasażer” może wystąpić przy dowolnym z kilku UM.
+        const required = [...new Set(missions.flatMap(m => splitUMAlternatives(m.um)))];
         if (!required.length) return { ok:true, text:'✓ OK', detail:'Brak wymaganego UM' };
-        const missing = required.filter(req => !infra.poiLabels.some(label => fuzzyRequirementMatch(req, label)));
-        if (!missing.length) return { ok:true, text:'✓ OK', detail:`UM: ${required.join(', ')}` };
-        if (!infra.poiLabels.length && infra.numericPoiTypes > 0) {
-            return { ok:false, warning:true, text:'⚠ Nie można rozpoznać typów UM', detail:`Wymagane: ${required.join(', ')}` };
+        const matched = required.filter(req => infra.poiLabels.some(label => fuzzyRequirementMatch(req, label)));
+        if (matched.length) {
+            return {
+                ok:true,
+                text:`✓ OK — masz ${matched.length} z ${required.length} możliwych UM`,
+                detail:`Pasuje: ${matched.join(', ')} • Możliwe UM: ${required.join(', ')}`
+            };
         }
-        return { ok:false, text:`✗ Brak: ${missing.join(', ')}`, detail:`Wymagane: ${required.join(', ')}` };
+        if (!infra.poiLabels.length && infra.numericPoiTypes > 0) {
+            return { ok:false, warning:true, text:'⚠ Nie można rozpoznać typów UM', detail:`Możliwe UM: ${required.join(', ')}` };
+        }
+        return { ok:false, text:'✗ Brak pasującego UM', detail:`Potrzebujesz co najmniej jednego z: ${required.join(', ')}` };
     }
 
     function auditBuildingMatchesRequirement(building, catalog, requirementLabel) {
@@ -2374,14 +2410,51 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         }).sort((a,b) => Number(b.allOk)-Number(a.allOk) || a.aao.caption.localeCompare(b.aao.caption,'pl',{numeric:true,sensitivity:'base'}));
     }
 
+    function zrCheckVisibleIds() {
+        return filteredZRCheckResults().map(item => item.aao.id);
+    }
+
     function updateZRCheckControls() {
         const run = document.getElementById('orzr-zrcheck-run');
+        const del = document.getElementById('orzr-zrcheck-delete');
+        const move = document.getElementById('orzr-zrcheck-move-backup');
+        const selectedCount = zrCheckVisibleIds().filter(id => state.zrCheckSelected.has(id)).length;
         if (run) {
             run.disabled = state.zrCheckBusy || state.potentialMissionsLoading;
             run.textContent = state.zrCheckBusy ? 'Sprawdzam…' : '✅ Sprawdź ZR';
         }
+        if (del) {
+            del.disabled = state.zrCheckBusy || selectedCount === 0;
+            del.textContent = `🗑 Usuń zaznaczone (${selectedCount})`;
+        }
+        if (move) {
+            move.disabled = state.zrCheckBusy || selectedCount === 0;
+            move.textContent = `📦 Przenieś do Zapasowe (${selectedCount})`;
+        }
         const count = document.getElementById('orzr-zrcheck-count');
         if (count) count.textContent = state.zrCheckResults.length;
+        const all = document.getElementById('orzr-zrcheck-select-all');
+        if (all) {
+            const ids = zrCheckVisibleIds();
+            const sel = ids.filter(id => state.zrCheckSelected.has(id)).length;
+            all.checked = ids.length > 0 && sel === ids.length;
+            all.indeterminate = sel > 0 && sel < ids.length;
+        }
+    }
+
+    function bindZRCheckEvents() {
+        document.querySelectorAll('.orzr-zrcheck-select').forEach(cb => cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.id);
+            if (cb.checked) state.zrCheckSelected.add(id); else state.zrCheckSelected.delete(id);
+            updateZRCheckControls();
+        }));
+        const all = document.getElementById('orzr-zrcheck-select-all');
+        if (all) all.onchange = () => {
+            for (const id of zrCheckVisibleIds()) {
+                if (all.checked) state.zrCheckSelected.add(id); else state.zrCheckSelected.delete(id);
+            }
+            renderZRCheckTable();
+        };
     }
 
     function renderZRCheckTable() {
@@ -2390,6 +2463,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (!tbody) return;
         tbody.innerHTML = '';
         const rows = filteredZRCheckResults();
+        const validIds = new Set(state.zrCheckResults.map(item => item.aao.id));
+        for (const id of [...state.zrCheckSelected]) if (!validIds.has(id)) state.zrCheckSelected.delete(id);
         if (empty) {
             empty.hidden = rows.length > 0;
             empty.textContent = state.zrCheckResults.length ? 'Brak wyników pasujących do filtrów.' : 'Kliknij „Sprawdź ZR”, aby porównać wymagania PM z Twoimi UM i budynkami.';
@@ -2409,6 +2484,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 <td class="orzr-actions"><a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a></td>`;
             tbody.appendChild(tr);
         }
+        bindZRCheckEvents();
         updateZRCheckControls();
         updateStats();
     }
@@ -2422,15 +2498,85 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             await loadPotentialMissions(force);
             const infra = await loadAuditInfrastructure(force);
             rebuildZRCheckResults(infra);
+            state.zrCheckSelected.clear();
             populateZRCheckCategoryFilter();
             renderZRCheckTable();
             const ok = state.zrCheckResults.filter(x=>x.allOk).length;
             const bad = state.zrCheckResults.length-ok;
             const noPM = state.zrCheckResults.filter(x=>!x.pmFound).length;
-            setStatus(`Sprawdź ZR: sprawdzono ${state.zrCheckResults.length} ZR • OK: ${ok} • z brakami/uwagami: ${bad} • bez PM: ${noPM} • budynki: ${infra.buildings.length} • UM/POI: ${infra.pois.length}.`, bad ? 'warning' : 'success');
+            setStatus(`Sprawdź ZR: sprawdzono ${state.zrCheckResults.length} ZR • OK: ${ok} • z brakami/uwagami: ${bad} • bez PM: ${noPM} • budynki: ${infra.buildings.length} • UM/POI: ${infra.pois.length}${state.zrCheckIncludeBackup ? ' • uwzględniono Zapasowe' : ''}.`, bad ? 'warning' : 'success');
         } catch (e) {
             console.error(TAG, e);
             setStatus(`Błąd Sprawdź ZR: ${e.message || e}`, 'danger');
+        } finally {
+            state.zrCheckBusy = false;
+            updateZRCheckControls();
+        }
+    }
+
+    async function deleteSelectedZRCheck() {
+        if (state.zrCheckBusy) return;
+        const ids = zrCheckVisibleIds().filter(id => state.zrCheckSelected.has(id));
+        if (!ids.length) return setStatus('Nie zaznaczono żadnych ZR.', 'warning');
+        if (!confirm(`Usunąć zaznaczone ZR (${ids.length})?\n\nTej operacji nie można cofnąć.`)) return;
+        state.zrCheckBusy = true;
+        updateZRCheckControls();
+        let ok = 0, failed = 0;
+        try {
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i], aao = state.aaos.find(x => x.id === id);
+                setStatus(`Usuwam ${i+1}/${ids.length}: „${aao?.caption ?? `ID ${id}`}”…`, 'info');
+                try {
+                    state.aaos = await deleteViaNativeEditor(id);
+                    state.zrCheckSelected.delete(id);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd usuwania ZR ${id}`, e);
+                    failed++;
+                }
+            }
+            if (state.zrCheckInfrastructure) rebuildZRCheckResults(state.zrCheckInfrastructure);
+            populateZRCheckCategoryFilter();
+            renderZRCheckTable();
+            setStatus(failed ? `Usunięto ${ok} ZR. Błędy: ${failed}.` : `Usunięto zaznaczone ZR: ${ok}.`, failed ? 'warning' : 'success');
+        } finally {
+            state.zrCheckBusy = false;
+            updateZRCheckControls();
+        }
+    }
+
+    async function moveSelectedZRCheckToZapasowe() {
+        if (state.zrCheckBusy) return;
+        const backupId = getZapasoweCategoryId();
+        if (backupId == null) return setStatus('Nie znaleziono kategorii o dokładnej nazwie „Zapasowe”.', 'danger');
+        const ids = zrCheckVisibleIds().filter(id => state.zrCheckSelected.has(id));
+        if (!ids.length) return setStatus('Nie zaznaczono żadnych ZR.', 'warning');
+        if (!confirm(`Przenieść zaznaczone ZR (${ids.length}) do kategorii „Zapasowe”?`)) return;
+        state.zrCheckBusy = true;
+        updateZRCheckControls();
+        let ok = 0, failed = 0;
+        try {
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i], base = state.aaos.find(x => x.id === id);
+                if (!base) continue;
+                const values = { caption: base.caption, column: Number(base.column) || 1, aao_category_id: backupId };
+                setStatus(`Przenoszę ${i+1}/${ids.length}: „${base.caption}” → Zapasowe…`, 'info');
+                try {
+                    await saveViaNativeEditor(id, values);
+                    await new Promise(r => setTimeout(r, 150));
+                    if (!await verifySaved(id, values)) throw new Error('Weryfikacja zapisu nie powiodła się.');
+                    Object.assign(base, values);
+                    state.zrCheckSelected.delete(id);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd przenoszenia ZR ${id}`, e);
+                    failed++;
+                }
+            }
+            if (state.zrCheckInfrastructure) rebuildZRCheckResults(state.zrCheckInfrastructure);
+            populateZRCheckCategoryFilter();
+            renderZRCheckTable();
+            setStatus(failed ? `Przeniesiono ${ok} ZR do Zapasowe. Błędy: ${failed}.` : `Przeniesiono do Zapasowe: ${ok} ZR.`, failed ? 'warning' : 'success');
         } finally {
             state.zrCheckBusy = false;
             updateZRCheckControls();
@@ -3567,7 +3713,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             <option value="missing">Wymagania: brak</option>
         </select>
         <select id="orzr-zrcheck-category" class="form-control"><option value="all">Wszystkie kategorie</option></select>
-        <span class="orzr-missing-azr-info">Porównanie na podstawie Potencjalnych misji. Kolumna UM sprawdza Twoje UM/POI, a „Wymagania (budynki)” liczbę budynków i aktywnych rozbudów. Dodano niezależne filtry UM i Wymagania. Pomijane są „AZR”, „Bez kategorii” i „Zapasowe”. Wyników: <strong id="orzr-zrcheck-count">0</strong>.</span>
+        <label class="orzr-inline-check"><input id="orzr-zrcheck-include-backup" type="checkbox"> Sprawdzaj też w Zapasowe</label>
+        <button id="orzr-zrcheck-move-backup" type="button" class="btn btn-warning" disabled>📦 Przenieś do Zapasowe (0)</button>
+        <button id="orzr-zrcheck-delete" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
+        <span class="orzr-missing-azr-info">Porównanie na podstawie Potencjalnych misji. UM są traktowane jako alternatywy (LUB): wystarczy co najmniej jeden z możliwych UM. „AZR” i „Bez kategorii” są zawsze pomijane; „Zapasowe” jest pomijane, chyba że zaznaczysz „Sprawdzaj też w Zapasowe”. Wyników: <strong id="orzr-zrcheck-count">0</strong>.</span>
     </div>
     <div id="orzr-cleanup-tools" hidden>
         <div class="orzr-cleanup-group">
@@ -3631,6 +3780,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         </table>
         <table id="orzr-zrcheck-table" hidden>
             <thead><tr>
+                <th><input id="orzr-zrcheck-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie widoczne wyniki"></th>
                 <th>ID</th><th>Nazwa ZR</th><th>Kategoria</th><th>PM</th><th>UM</th><th>Wymagania (budynki)</th><th>Akcje</th>
             </tr></thead>
             <tbody id="orzr-zrcheck-body"></tbody>
@@ -3741,6 +3891,15 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         document.getElementById('orzr-zrcheck-um-status').addEventListener('change', e => { state.zrCheckUMStatus = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-zrcheck-building-status').addEventListener('change', e => { state.zrCheckBuildingStatus = e.target.value; renderZRCheckTable(); });
         document.getElementById('orzr-zrcheck-category').addEventListener('change', e => { state.zrCheckCategory = e.target.value; renderZRCheckTable(); });
+        document.getElementById('orzr-zrcheck-include-backup').addEventListener('change', e => {
+            state.zrCheckIncludeBackup = !!e.target.checked;
+            state.zrCheckSelected.clear();
+            if (state.zrCheckInfrastructure && state.potentialMissionsLoaded) rebuildZRCheckResults(state.zrCheckInfrastructure);
+            populateZRCheckCategoryFilter();
+            renderZRCheckTable();
+        });
+        document.getElementById('orzr-zrcheck-delete').addEventListener('click', deleteSelectedZRCheck);
+        document.getElementById('orzr-zrcheck-move-backup').addEventListener('click', moveSelectedZRCheckToZapasowe);
         document.getElementById('orzr-find-duplicates-exclude').addEventListener('click', () => findDuplicateNames('exclude-azr-none'));
         document.getElementById('orzr-find-duplicates-azr').addEventListener('click', () => findDuplicateNames('only-azr'));
         document.getElementById('orzr-find-duplicates-all').addEventListener('click', () => findDuplicateNames('all'));

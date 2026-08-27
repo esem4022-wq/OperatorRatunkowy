@@ -293,3 +293,15 @@ WERSJA 3.10.8 (TESTOWA)
 - Wymaganie WRD jest liczone wyłącznie jako liczba aktywnych rozbudów WRD, a nie jako zwykłe budynki policji.
 - Obsługa Bambi Bucket nie została w tej wersji zmieniona; wymaga osobnego rozpoznawania zasobu/pojazdu.
 - Zachowano filtry UM i Wymagania oraz wszystkie funkcje testowej v3.10.7.
+
+============================================================
+WERSJA 3.10.9 (TESTOWA)
+============================================================
+- W zakładce „Sprawdź ZR” dodano checkboxy przy wynikach oraz zaznaczanie wszystkich aktualnie widocznych pozycji.
+- Dodano operacje zbiorcze dla zaznaczonych ZR: „Przenieś do Zapasowe” oraz „Usuń zaznaczone”.
+- Dodano checkbox „Sprawdzaj też w Zapasowe”. Domyślnie „Sprawdź ZR” nadal pomija kategorię „Zapasowe”; po zaznaczeniu checkboxa ZR z tej kategorii są włączane do kontroli. „AZR” i „Bez kategorii” pozostają zawsze pomijane.
+- Poprawiono logikę UM/POI: lista UM w Potencjalnej misji jest traktowana jako lista alternatywnych miejsc wystąpienia (LUB), a nie jako komplet wymagany jednocześnie. Wystarczy posiadać co najmniej jeden z możliwych UM.
+- Wynik UM pokazuje liczbę posiadanych pasujących typów, np. „OK — masz 1 z 4 możliwych UM”.
+- Poprawiono odczyt komórek UM z wykazu Potencjalnych misji tak, aby zachowywać rozdzielenie wielu pozycji zamiast sklejać je w jeden tekst.
+- Zachowano poprawki v3.10.8 dotyczące stacji pomocy drogowej i Wydziałów Ruchu Drogowego.
+
