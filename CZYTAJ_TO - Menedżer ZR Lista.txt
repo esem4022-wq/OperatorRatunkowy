@@ -305,3 +305,12 @@ WERSJA 3.10.9 (TESTOWA)
 - Poprawiono odczyt komórek UM z wykazu Potencjalnych misji tak, aby zachowywać rozdzielenie wielu pozycji zamiast sklejać je w jeden tekst.
 - Zachowano poprawki v3.10.8 dotyczące stacji pomocy drogowej i Wydziałów Ruchu Drogowego.
 
+============================================================
+WERSJA 3.10.10 (TESTOWA)
+============================================================
+- Naprawiono przesunięcie kolumn w zakładce „Sprawdź ZR”.
+- Przyczyną był brak komórki z checkboxem „Zaznacz” w generowanych wierszach tabeli, mimo że kolumna ta istniała w nagłówku.
+- Każdy wiersz ma teraz stały układ: Zaznacz | ID | Nazwa ZR | Kategoria | PM | UM | Wymagania (budynki) | Akcje.
+- Checkbox przy każdym ZR jest ponownie powiązany z mechanizmem zaznaczania i operacjami zbiorczymi „Przenieś do Zapasowe” oraz „Usuń zaznaczone”.
+- Zachowano wszystkie funkcje testowej v3.10.9.
+

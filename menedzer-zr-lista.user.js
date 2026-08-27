@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.9
+// @version      3.10.10
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.9');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.10');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -2475,6 +2475,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             const umClass = item.um.ok ? 'orzr-check-ok' : item.um.warning ? 'orzr-check-warning' : 'orzr-check-missing';
             const bClass = item.buildings.ok ? 'orzr-check-ok' : 'orzr-check-missing';
             tr.innerHTML = `
+                <td><input class="orzr-zrcheck-select" type="checkbox" data-id="${aao.id}" ${state.zrCheckSelected.has(aao.id) ? 'checked' : ''} title="Zaznacz ZR"></td>
                 <td class="orzr-id">${aao.id}</td>
                 <td>${escapeHTML(aao.caption)}${item.missions.length > 1 ? `<div class="orzr-check-note">Wariantów PM: ${item.missions.length}</div>` : ''}</td>
                 <td>${escapeHTML(getCategoryName(aao.aao_category_id))}</td>
