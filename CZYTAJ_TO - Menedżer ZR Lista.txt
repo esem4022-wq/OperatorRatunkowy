@@ -314,3 +314,14 @@ WERSJA 3.10.10 (TESTOWA)
 - Checkbox przy każdym ZR jest ponownie powiązany z mechanizmem zaznaczania i operacjami zbiorczymi „Przenieś do Zapasowe” oraz „Usuń zaznaczone”.
 - Zachowano wszystkie funkcje testowej v3.10.9.
 
+
+
+============================================================
+WERSJA 3.10.11 (TESTOWA)
+============================================================
+- Poprawiono odczyt własnych UM/POI w zakładce „Sprawdź ZR”.
+- Skrypt nadal korzysta z oficjalnego `/api/v2/pois`, ale nie zakłada już, że rekordy UM znajdują się bezpośrednio w jednej tablicy `result`. Obsługiwane są również zagnieżdżone struktury odpowiedzi, np. `result.pois`, `data.items` i podobne.
+- Rozpoznawanie typu UM nie zależy już od jednego pola. Skrypt zbiera nazwy typu z pól typu `poi_type_name`, `type_name`, kategorii, podpisu/nazwy/opisu oraz z odpowiadającego słownika typów, jeśli jest dostępny.
+- Dodano rekurencyjny fallback dla zagnieżdżonych danych typu UM, aby `Sprawdź ZR` widziało te same własne UM, które są widoczne w Menedżerze UM.
+- Zachowano logikę UM jako alternatyw (LUB): do spełnienia warunku wystarczy co najmniej jeden z możliwych UM.
+- Zachowano wszystkie funkcje testowej v3.10.10.

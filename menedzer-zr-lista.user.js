@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.10
+// @version      3.10.11
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.10');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.11');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -2063,13 +2063,90 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         }
     }
 
+    function auditLooksLikePOI(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const hasId = auditValueOf(value, ['id','poi_id','poiId'], null) != null;
+        const hasCoords = auditValueOf(value, ['latitude','lat'], null) != null ||
+            auditValueOf(value, ['longitude','lng','lon'], null) != null;
+        const hasType = auditValueOf(value, [
+            'poi_type','poi_type_id','poiType','poiTypeId','type','type_id','typeId',
+            'poi_type_caption','poi_type_name','type_caption','type_name','category_name'
+        ], null) != null;
+        const hasCaption = auditValueOf(value, ['caption','name','description','label','title'], null) != null;
+        return hasId && (hasCoords || hasType || hasCaption);
+    }
+
+    function auditExtractPOIRecords(data) {
+        const out = [];
+        const seenObjects = new Set();
+        const visit = value => {
+            if (!value || typeof value !== 'object') return;
+            if (seenObjects.has(value)) return;
+            seenObjects.add(value);
+
+            if (Array.isArray(value)) {
+                for (const item of value) visit(item);
+                return;
+            }
+
+            if (auditLooksLikePOI(value)) {
+                out.push(value);
+                return;
+            }
+
+            // API POI potrafi opakować tablicę głębiej niż API budynków,
+            // np. result.pois / data.items. Przechodzimy rekurencyjnie po
+            // kontenerach zamiast zamieniać cały obiekt przez Object.values().
+            const preferred = ['result','pois','poi','data','items','records','entries'];
+            let usedPreferred = false;
+            for (const key of preferred) {
+                if (value[key] != null) {
+                    usedPreferred = true;
+                    visit(value[key]);
+                }
+            }
+            if (!usedPreferred) {
+                for (const child of Object.values(value)) visit(child);
+            }
+        };
+        visit(data);
+
+        const seen = new Set();
+        return out.filter(poi => {
+            const id = auditValueOf(poi, ['id','poi_id','poiId'], '');
+            const lat = auditValueOf(poi, ['latitude','lat'], '');
+            const lng = auditValueOf(poi, ['longitude','lng','lon'], '');
+            const type = auditValueOf(poi, ['poi_type','poi_type_id','poiType','poiTypeId','type','type_id','typeId'], '');
+            const name = auditValueOf(poi, ['caption','name','description','label','title'], '');
+            const key = `${id}|${lat}|${lng}|${typeof type === 'object' ? JSON.stringify(type) : type}|${name}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
     async function auditFetchPOIs() {
         try {
-            return await auditFetchAllPages('/api/v2/pois?limit=2000');
+            const items = [];
+            let nextUrl = '/api/v2/pois?limit=2000';
+            let safety = 0;
+            while (nextUrl && safety < 250) {
+                safety++;
+                const response = await fetch(nextUrl, { credentials:'same-origin', cache:'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${nextUrl}`);
+                const data = await response.json();
+                items.push(...auditExtractPOIRecords(data));
+                nextUrl = data?.paging?.next_page || data?.result?.paging?.next_page || data?.data?.paging?.next_page || null;
+            }
+            if (safety >= 250) throw new Error('Przerwano pobieranie UM/POI: zbyt wiele stron API.');
+            if (items.length) return auditExtractPOIRecords(items);
+            throw new Error('API v2 zwróciło 0 rozpoznanych rekordów UM/POI.');
         } catch (v2Error) {
-            console.warn(TAG, 'Sprawdź ZR: /api/v2/pois niedostępne, używam starszego API.', v2Error);
-            try { return auditNormalizeResult(await fetchJSON('/api/pois')); }
-            catch (oldError) {
+            console.warn(TAG, 'Sprawdź ZR: /api/v2/pois nie dało rozpoznanych UM, używam starszego API.', v2Error);
+            try {
+                const legacy = await fetchJSON('/api/pois');
+                return auditExtractPOIRecords(legacy);
+            } catch (oldError) {
                 console.warn(TAG, 'Sprawdź ZR: nie udało się pobrać UM/POI.', oldError);
                 return [];
             }
@@ -2241,19 +2318,83 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 
         const poiLabels = [];
         let numericPoiTypes = 0;
-        for (const poi of pois) {
-            const rawType = auditValueOf(poi, ['poi_type','poi_type_id','type_id','type'], '');
-            const directLabel = auditValueOf(poi, ['poi_type_caption','poi_type_name','type_caption','type_name','category_name'], null);
-            let label = directLabel ? String(directLabel) : '';
-            if (!label && rawType !== '' && poiCatalog.has(String(rawType))) label = poiCatalog.get(String(rawType));
-            if (!label && rawType !== '' && !/^\d+$/.test(String(rawType))) label = String(rawType);
-            if (!label) {
-                const fallback = auditValueOf(poi, ['caption','name','description'], '');
-                if (fallback) label = String(fallback);
+
+        function collectPOILabelCandidates(poi) {
+            const labels = [];
+            const add = value => {
+                if (value == null) return;
+                if (typeof value === 'string' || typeof value === 'number') {
+                    const text = String(value).replace(/\s+/g, ' ').trim();
+                    if (text && !/^[-+]?\d+(?:[.,]\d+)?$/.test(text)) labels.push(text);
+                }
+            };
+
+            for (const key of [
+                'poi_type_caption','poi_type_name','poi_type_label','poiTypeCaption','poiTypeName','poiTypeLabel',
+                'type_caption','type_name','type_label','category_name','category_caption','category_label',
+                'caption','name','description','label','title'
+            ]) add(poi?.[key]);
+
+            const rawType = auditValueOf(poi, ['poi_type','poi_type_id','poiType','poiTypeId','type','type_id','typeId'], '');
+            if (rawType && typeof rawType === 'object') {
+                for (const key of ['caption','name','label','title','description']) add(rawType[key]);
+                const nestedId = auditValueOf(rawType, ['id','type_id','typeId','value'], '');
+                if (nestedId !== '' && poiCatalog.has(String(nestedId))) add(poiCatalog.get(String(nestedId)));
+            } else if (rawType !== '') {
+                if (poiCatalog.has(String(rawType))) add(poiCatalog.get(String(rawType)));
+                if (!/^\d+$/.test(String(rawType))) add(rawType);
             }
-            if (label) poiLabels.push(label); else if (/^\d+$/.test(String(rawType))) numericPoiTypes++;
+
+            // Nie zakładamy jednego sztywnego schematu JSON. Jeśli API gry
+            // przeniesie opis typu do zagnieżdżonego obiektu, zbieramy teksty
+            // z pól semantycznie związanych z typem/nazwą UM.
+            const seen = new Set();
+            const walk = (value, depth = 0, parentKey = '') => {
+                if (depth > 3 || value == null) return;
+                if (typeof value === 'string') {
+                    const k = normalize(parentKey);
+                    if (/(poi|type|typ|category|kategor|caption|name|nazwa|description|opis|label|title)/.test(k)) add(value);
+                    return;
+                }
+                if (typeof value !== 'object') return;
+                if (seen.has(value)) return;
+                seen.add(value);
+                if (Array.isArray(value)) {
+                    for (const child of value) walk(child, depth + 1, parentKey);
+                    return;
+                }
+                for (const [key, child] of Object.entries(value)) walk(child, depth + 1, key);
+            };
+            walk(poi);
+
+            const unique = [];
+            const seenLabels = new Set();
+            for (const label of labels) {
+                const key = normalize(label);
+                if (!key || seenLabels.has(key)) continue;
+                seenLabels.add(key);
+                unique.push(label);
+            }
+            return unique;
         }
-        return { buildings, catalog, buildingTypes, extensions, pois, poiLabels, numericPoiTypes };
+
+        for (const poi of pois) {
+            const rawType = auditValueOf(poi, ['poi_type','poi_type_id','poiType','poiTypeId','type','type_id','typeId'], '');
+            const labels = collectPOILabelCandidates(poi);
+            poiLabels.push(...labels);
+            if (!labels.length && /^\d+$/.test(String(rawType))) numericPoiTypes++;
+        }
+
+        const uniquePoiLabels = [];
+        const seenPoiLabels = new Set();
+        for (const label of poiLabels) {
+            const key = normalize(label);
+            if (!key || seenPoiLabels.has(key)) continue;
+            seenPoiLabels.add(key);
+            uniquePoiLabels.push(label);
+        }
+
+        return { buildings, catalog, buildingTypes, extensions, pois, poiLabels: uniquePoiLabels, numericPoiTypes };
     }
 
     async function loadAuditInfrastructure(force = false) {
