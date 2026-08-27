@@ -283,3 +283,13 @@ WERSJA 3.10.7 (TESTOWA)
 - Dodano niezależny filtr „Wymagania: wszystkie / OK / brak”.
 - Filtry UM i Wymagania można łączyć z dotychczasowym filtrem ogólnym, kategorią i wyszukiwaniem.
 - Zachowano wszystkie funkcje testowej v3.10.6.
+
+
+============================================================
+WERSJA 3.10.8 (TESTOWA)
+============================================================
+- Poprawiono wymaganie „stacja pomocy drogowej” w zakładce „Sprawdź ZR”. Budynek typu 25 jest teraz liczony jako „Stacja pomocy drogowej”, również gdy zewnętrzny katalog nazw budynków nie zna jeszcze tego typu.
+- Poprawiono liczenie „Wydziału/Wydziałów Ruchu Drogowego”. Różne formy nazwy oraz skrót WRD są normalizowane do jednej rozbudowy „Rozbudowa o Wydział Ruchu Drogowego”.
+- Wymaganie WRD jest liczone wyłącznie jako liczba aktywnych rozbudów WRD, a nie jako zwykłe budynki policji.
+- Obsługa Bambi Bucket nie została w tej wersji zmieniona; wymaga osobnego rozpoznawania zasobu/pojazdu.
+- Zachowano filtry UM i Wymagania oraz wszystkie funkcje testowej v3.10.7.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.7
+// @version      3.10.8
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.7');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.8');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -2143,8 +2143,19 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             n === 'jrg' || n.includes('remiza strazacka')) return 'straz pozarna';
         if ((n.includes('pogotow') && n.includes('wod')) || n.includes('wopr')) return 'pogotowie wodne';
         if (n.includes('pogotow')) return 'pogotowie ratunkowe';
-        if ((n.includes('polic') && n.includes('ruch')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
+        // Wymagania PM zapisują WRD w kilku odmianach, np. „Wydział Ruchu Drogowego”,
+        // „Wydziały Ruchu Drogowego” albo skrót „WRD”. Wszystkie muszą wskazywać
+        // na tę samą rozbudowę policji „Rozbudowa o Wydział Ruchu Drogowego”.
+        if ((n.includes('wydzial') && n.includes('ruch') && n.includes('drog')) ||
+            (n.includes('polic') && n.includes('ruch')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
         if (n.includes('polic')) return 'policja';
+
+        // Typ 25 nie występuje jeszcze w zewnętrznym katalogu LSSM, dlatego
+        // wymaganie z PM normalizujemy jawnie do stabilnej nazwy.
+        if (n.includes('pomoc') && n.includes('drog')) return 'stacja pomocy drogowej';
+
+        // Obsługa Bambi Bucket pozostaje zgodna z v3.10.7 do czasu osobnego
+        // rozpoznawania zasobów lotniczych. Nie zmieniamy jej w poprawce 3.10.8.
         if (n.includes('samolot') || n.includes('bambi bucket')) return 'stacja samolotow gasniczych';
         if (n.includes('robot') && n.includes('cbrne')) return 'robot cbrne';
         if (n.includes('proszk')) return 'pojazdy proszkowe';
@@ -2202,6 +2213,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             if (typeId === 0) buildingTypes.push('Posterunek straży pożarnej');
             else if (typeId === 2) buildingTypes.push('Posterunek pogotowia ratunkowego');
             else if (typeId === 6) buildingTypes.push('Posterunek policji');
+            else if (typeId === 25) buildingTypes.push('Stacja pomocy drogowej');
 
             extensions.push(...auditExtensionNames(b, catalog));
         }
@@ -2266,13 +2278,24 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     function auditBuildingMatchesRequirement(building, catalog, requirementLabel) {
         const typeId = Number(auditValueOf(building, ['building_type','building_type_id','type'], NaN));
         // Najważniejsze aliasy nazw używanych przez Potencjalne misje.
-        if (canonicalRequirementName(requirementLabel) === 'straz pozarna' && typeId === 0) return true;
-        if (canonicalRequirementName(requirementLabel) === 'pogotowie ratunkowe' && typeId === 2) return true;
-        if (canonicalRequirementName(requirementLabel) === 'policja' && typeId === 6) return true;
+        const reqKey = canonicalRequirementName(requirementLabel);
+        if (reqKey === 'straz pozarna' && typeId === 0) return true;
+        if (reqKey === 'pogotowie ratunkowe' && typeId === 2) return true;
+        if (reqKey === 'policja' && typeId === 6) return true;
+        if (reqKey === 'stacja pomocy drogowej' && typeId === 25) return true;
         return fuzzyRequirementMatch(requirementLabel, auditBuildingTypeName(building, catalog));
     }
 
     function auditCountBuildingRequirement(req, infra) {
+        const reqKey = canonicalRequirementName(req.label);
+
+        // „Wydział/Wydziały Ruchu Drogowego” w PM oznacza liczbę aktywnych
+        // rozbudów WRD w budynkach policji, mimo że tekst PM często nie zawiera
+        // słowa „rozbudowa”. Nie wolno liczyć tu zwykłych budynków policji.
+        if (reqKey === 'wydzial ruchu drogowego') {
+            return infra.extensions.filter(name => canonicalRequirementName(name) === 'wydzial ruchu drogowego').length;
+        }
+
         if (req.extension) {
             return infra.extensions.filter(name => fuzzyRequirementMatch(req.label, name)).length;
         }
