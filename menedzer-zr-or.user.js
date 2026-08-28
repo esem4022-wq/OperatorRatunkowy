@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.13
+// @version      3.14
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.13';
-    const CAPTURE_KEY = 'or_zr_capture_v313';
+    const VERSION = '3.14';
+    const CAPTURE_KEY = 'or_zr_capture_v314';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1718,25 +1718,27 @@
             }
         }
 
-        // Fallback: tekst widocznej żółtej karty, ale tylko jeśli help nie dał
-        // pełnych danych. Nie korzystamy z żadnego linku rozwojowego.
-        if (!vehicles.length || (!water && !foam && !maxPatients)) {
-            const cardText = findCurrentMissionCardText(name);
+        // v3.14: widoczna żółta karta jest ZAWSZE sprawdzana dla listy pojazdów.
+        // mission_help potrafi zwrócić tylko część wymagań (np. samo OPI), mimo że
+        // na karcie aktualnej misji widnieje również K-9. Jeżeli karta zawiera
+        // jakiekolwiek pojazdy, jej lista jest nadrzędna nad mission_help.
+        // Nie korzystamy z żadnego linku z sekcji „Może się rozwinąć w…”.
+        const cardText = findCurrentMissionCardText(name);
 
-            if (cardText && /\bPojazdy\b/i.test(cardText)) {
-                const visibleVehicles = extractVehiclesFromCardText(cardText)
-                    .filter(v => Number(v?.count) > 0);
+        if (cardText && /\bPojazdy\b/i.test(cardText)) {
+            const visibleVehicles = extractVehiclesFromCardText(cardText)
+                .filter(v => Number(v?.count) > 0);
 
-                // v3.06: jeżeli widoczna karta ma listę pojazdów, jest ona
-                // źródłem nadrzędnym nad mission_help. Zapobiega to dublowaniu
-                // i wierszom technicznym `Wymagane ...` z dodatkowych tabel helpa.
-                if (visibleVehicles.length) vehicles = visibleVehicles;
-
-                if (!water) water = extractResourceFromText(cardText, 'water') || 0;
-                if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
-                if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
-                source = source || 'visible_card';
+            if (visibleVehicles.length) {
+                vehicles = visibleVehicles;
+                source = source ? `${source}+visible_card` : 'visible_card';
             }
+
+            // Dla zasobów/pacjentów help nadal może być źródłem pierwszym,
+            // a karta uzupełnia brakujące wartości.
+            if (!water) water = extractResourceFromText(cardText, 'water') || 0;
+            if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
+            if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
         }
 
         if (hasContaminatedVehicleList(vehicles)) {
@@ -3858,6 +3860,7 @@
             [/slop slrr/g, ' oficer operacyjny slop slrr '],
             [/cysterny?/g, ' cysterna '],
             [/piana gasnicza/g, ' piana '],
+            [/(?:^|\s)k\s*9(?:\s|$)/g, ' k9 pies policyjny '],
             [/^opi$/g, ' opi furgonetka policja '],
             [/ambulanse? s lub p/g, ' ambulans s p ratownictwo medyczne '],
             [/ambulanse?/g, ' ambulans s p ratownictwo medyczne ']
