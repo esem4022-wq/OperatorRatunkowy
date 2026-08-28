@@ -325,3 +325,16 @@ WERSJA 3.10.11 (TESTOWA)
 - Dodano rekurencyjny fallback dla zagnieżdżonych danych typu UM, aby `Sprawdź ZR` widziało te same własne UM, które są widoczne w Menedżerze UM.
 - Zachowano logikę UM jako alternatyw (LUB): do spełnienia warunku wystarczy co najmniej jeden z możliwych UM.
 - Zachowano wszystkie funkcje testowej v3.10.10.
+
+
+============================================================
+WERSJA 3.10.12 (TESTOWA)
+============================================================
+- Poprawiono liczenie Wydziałów Ruchu Drogowego (WRD) w zakładce „Sprawdź ZR”.
+- Skrypt odczytuje teraz nie tylko klasyczne `extensions`, ale również pole `specializations` / `building_specializations` zwracane przez nowsze API budynków.
+- Aktywna specjalizacja z nazwą „Rozbudowa o Wydział Ruchu Drogowego” jest liczona jako 1 WRD.
+- Obsługiwane są różne formaty statusu: `active` albo starsze `available` + `enabled`.
+- Dodano obsługę wewnętrznych nazw typu specjalizacji zawierających `traffic` + `police`.
+- Jeżeli ta sama specjalizacja pojawi się jednocześnie w `extensions` i `specializations`, w obrębie jednego budynku jest liczona tylko raz.
+- Przy 3 aktywnych WRD wymaganie „3 Wydziały Ruchu Drogowego” powinno pokazywać „OK (masz 3/3)”.
+- Zachowano wszystkie funkcje testowej v3.10.11.

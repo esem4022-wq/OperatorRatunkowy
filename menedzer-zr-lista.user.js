@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.11
+// @version      3.10.12
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.11');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.12');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -2196,6 +2196,11 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const rawExt = auditValueOf(raw, ['extensions'], []);
         const list = Array.isArray(rawExt) ? rawExt : (rawExt && typeof rawExt === 'object' ? Object.values(rawExt) : []);
         return list.filter(ext => {
+            // Część serwerów/API zwraca dla rozbudów bezpośrednie pole `active`,
+            // inne używają pary `available` + `enabled`. Jeżeli `active` istnieje,
+            // traktujemy je jako nadrzędną informację o faktycznie działającej rozbudowie.
+            const activeRaw = auditValueOf(ext, ['active'], null);
+            if (activeRaw !== null) return auditBool(activeRaw, false);
             const available = auditBool(auditValueOf(ext, ['available'], true), true);
             const enabled = auditBool(auditValueOf(ext, ['enabled'], true), true);
             return available && enabled;
@@ -2207,6 +2212,31 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
                 auditValueOf(meta, ['caption','name','label'], null) ??
                 `Rozbudowa ${extId}`
             );
+        }).filter(Boolean);
+    }
+
+    function auditSpecializationNames(raw) {
+        // Nowsze API gry rozdziela „building specializations” od klasycznych
+        // `extensions`. WRD może występować właśnie tutaj jako obiekt
+        // { caption, type, active }. Wcześniejsze wersje Sprawdź ZR w ogóle
+        // tego pola nie czytały, dlatego aktywne WRD dawały wynik 0.
+        const rawSpecs = auditValueOf(raw, ['specializations','specialisations','building_specializations'], []);
+        const list = Array.isArray(rawSpecs)
+            ? rawSpecs
+            : (rawSpecs && typeof rawSpecs === 'object' ? Object.values(rawSpecs) : []);
+
+        return list.filter(spec => {
+            const activeRaw = auditValueOf(spec, ['active','enabled','available'], null);
+            return activeRaw === null ? false : auditBool(activeRaw, false);
+        }).map(spec => {
+            const caption = auditValueOf(spec, ['caption','name','label','title'], null);
+            const type = auditValueOf(spec, ['type','type_name','typeName','key'], null);
+            const rawName = String(caption ?? type ?? '').trim();
+            const n = normalize(rawName);
+            if ((n.includes('traffic') && n.includes('polic')) || n === 'wrd') {
+                return 'Rozbudowa o Wydział Ruchu Drogowego';
+            }
+            return rawName;
         }).filter(Boolean);
     }
 
@@ -2245,7 +2275,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         // „Wydziały Ruchu Drogowego” albo skrót „WRD”. Wszystkie muszą wskazywać
         // na tę samą rozbudowę policji „Rozbudowa o Wydział Ruchu Drogowego”.
         if ((n.includes('wydzial') && n.includes('ruch') && n.includes('drog')) ||
-            (n.includes('polic') && n.includes('ruch')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
+            (n.includes('polic') && n.includes('ruch')) || (n.includes('traffic') && n.includes('polic')) || /(^|\s)wrd($|\s)/.test(n)) return 'wydzial ruchu drogowego';
         if (n.includes('polic')) return 'policja';
 
         // Typ 25 nie występuje jeszcze w zewnętrznym katalogu LSSM, dlatego
@@ -2313,7 +2343,20 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             else if (typeId === 6) buildingTypes.push('Posterunek policji');
             else if (typeId === 25) buildingTypes.push('Stacja pomocy drogowej');
 
-            extensions.push(...auditExtensionNames(b, catalog));
+            // Aktywne rozbudowy mogą być zwracane zarówno w `extensions`, jak
+            // i w osobnym `specializations`. Łączymy oba źródła, ale w obrębie
+            // jednego budynku nie liczymy tej samej specjalizacji podwójnie.
+            const buildingFeatures = [
+                ...auditExtensionNames(b, catalog),
+                ...auditSpecializationNames(b)
+            ];
+            const seenFeatures = new Set();
+            for (const featureName of buildingFeatures) {
+                const featureKey = canonicalRequirementName(featureName) || normalize(featureName);
+                if (!featureKey || seenFeatures.has(featureKey)) continue;
+                seenFeatures.add(featureKey);
+                extensions.push(featureName);
+            }
         }
 
         const poiLabels = [];
