@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.02
+// @version      3.15.03
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.02';
-    const CAPTURE_KEY = 'or_zr_capture_v31502';
+    const VERSION = '3.15.03';
+    const CAPTURE_KEY = 'or_zr_capture_v31503';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -81,7 +81,7 @@
             .replace(/\u00a0/g, ' ')
             .replace(/[\/|]/g, ' lub ')
             .replace(/[()[\]{},.:;!?]/g, ' ')
-            .replace(/[-–—]/g, ' ')
+            .replace(/[\-\u058A\u05BE\u1400\u1806\u2010-\u2015\u2E17\u2E1A\u2E3A-\u2E3B\u2E40\u301C\u3030\u30A0\uFE31-\uFE32\uFE58\uFE63\uFF0D\u2212]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }
@@ -1672,10 +1672,39 @@
         return result;
     }
 
+    function normalizeK9Dashes(text) {
+        // Operator może używać różnych znaków łącznika, które wizualnie wyglądają
+        // jak zwykły minus: -, ‐, ‑, – itd. Dla K-9 wszystkie traktujemy jednakowo.
+        return String(text || '')
+            .replace(/[\u058A\u05BE\u1400\u1806\u2010-\u2015\u2E17\u2E1A\u2E3A-\u2E3B\u2E40\u301C\u3030\u30A0\uFE31-\uFE32\uFE58\uFE63\uFF0D\u2212]/g, '-')
+            .replace(/\u00a0/g, ' ');
+    }
+
+    function k9CountFromText(text) {
+        const raw = normalizeK9Dashes(text);
+        if (!raw) return 0;
+
+        // Akceptujemy K-9, K 9 i K9, ale ilość MUSI stać przed nazwą pojazdu.
+        // Dzięki temu sama cyfra 9 w nazwie nigdy nie staje się ilością.
+        const patterns = [
+            /(?:^|\s)(\d+)\s+K\s*-\s*9(?=\s|$)/i,
+            /(?:^|\s)(\d+)\s+K\s+9(?=\s|$)/i,
+            /(?:^|\s)(\d+)\s+K9(?=\s|$)/i
+        ];
+
+        for (const re of patterns) {
+            const m = raw.match(re);
+            if (!m) continue;
+            const count = Number.parseInt(m[1], 10);
+            if (Number.isFinite(count) && count > 0) return count;
+        }
+        return 0;
+    }
+
     function extractExplicitK9CountFromVisibleCard(preferredBlock = null) {
-        // v3.15.02: K-9 jest wymaganiem nietypowym, bo cyfra jest częścią nazwy.
-        // Nie polegamy tu na ogólnym parserze pojazdów. Szukamy dokładnie wpisu
-        // „<ilość> K-9” w widocznej żółtej karcie i dokładamy go niezależnie.
+        // v3.15.03: K-9 czytamy niezależną ścieżką bez polegania na mission_help
+        // ani na ogólnym parserze pojazdów. Obsługujemy też nierozdzielającą
+        // kreskę U+2011 i inne znaki łącznika używane przez przeglądarkę/grę.
         const candidates = [];
         const seen = new Set();
 
@@ -1689,26 +1718,58 @@
         addCandidate(findMissionCardFromVehiclesHeading());
         addCandidate(findExactMissionCardByTitle());
 
+        // 1. Najpierw czytamy pełny tekst kandydatów żółtej karty.
         for (const block of candidates) {
-            const raw = (getMissionCardText(block) || block.innerText || block.textContent || '')
+            const raw = (block.innerText || block.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .trim();
             if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) continue;
 
-            // Najpierw ograniczamy się do sekcji Pojazdy, żeby liczby z Pacjentów,
-            // więźniów itp. nie mogły zostać uznane za ilość K-9.
-            const segment = getVehiclesTextSegmentFromCardText(raw) || raw;
-            const patterns = [
-                /(?:^|\s)(\d+)\s+K\s*[-–—]\s*9\b/i,
-                /(?:^|\s)(\d+)\s+K\s*9\b/i
-            ];
+            // Najpierw wycinek sekcji Pojazdy, potem cały tekst karty jako fallback.
+            const segment = getVehiclesTextSegmentFromCardText(raw);
+            let count = k9CountFromText(segment);
+            if (!count) count = k9CountFromText(raw);
+            if (count) return count;
+        }
 
-            for (const re of patterns) {
-                const m = segment.match(re);
-                if (!m) continue;
-                const count = Number.parseInt(m[1], 10);
-                if (Number.isFinite(count) && count > 0) return count;
+        // 2. Awaryjnie szukamy bezpośrednio widocznego WIERSZA „1 K-9”.
+        // To omija problemy, gdy liczba i etykieta są w osobnych spanach.
+        const selectors = 'li,p,span,div,td,dd,strong,b';
+        for (const el of document.querySelectorAll(selectors)) {
+            if (!isVisible(el)) continue;
+
+            const text = (el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!text || text.length > 80) continue;
+
+            const count = k9CountFromText(text);
+            if (!count) continue;
+
+            // Wiersz musi należeć do lokalnego kontenera misji zawierającego
+            // sekcję „Pojazdy”, ale nie listę „Dostępne jednostki”.
+            let parent = el;
+            for (let depth = 0; depth < 8 && parent; depth++, parent = parent.parentElement) {
+                const parentText = (parent.innerText || parent.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .trim();
+                if (!/\bPojazdy\b/i.test(parentText)) continue;
+                if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(parentText)) break;
+                return count;
             }
+        }
+
+        // 3. Ostatni fallback: tekst aktualnej karty znaleziony po nazwie misji.
+        // Nadal ograniczamy się do sekcji Pojazdy, więc K-9 z listy jednostek
+        // użytkownika nie może tu wejść.
+        const missionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame() || '';
+        const cardText = findCurrentMissionCardText(missionName);
+        if (cardText) {
+            const segment = getVehiclesTextSegmentFromCardText(cardText);
+            const count = k9CountFromText(segment);
+            if (count) return count;
         }
 
         return 0;
