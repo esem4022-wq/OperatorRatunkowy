@@ -338,3 +338,26 @@ WERSJA 3.10.12 (TESTOWA)
 - Jeżeli ta sama specjalizacja pojawi się jednocześnie w `extensions` i `specializations`, w obrębie jednego budynku jest liczona tylko raz.
 - Przy 3 aktywnych WRD wymaganie „3 Wydziały Ruchu Drogowego” powinno pokazywać „OK (masz 3/3)”.
 - Zachowano wszystkie funkcje testowej v3.10.11.
+
+
+============================================================
+WERSJA 3.10.13 (TESTOWA)
+============================================================
+- Poprawiono szerokości kolumn w zakładce „Sprawdź ZR”, aby wymagania były znacznie czytelniejsze.
+- Zwężono kolumny techniczne: Zaznacz, ID, Kategoria, PM i Akcje.
+- Kolumna „UM” otrzymała 20% szerokości tabeli.
+- Kolumna „Wymagania (budynki)” otrzymała 33% szerokości tabeli i jest teraz najszerszą kolumną.
+- Opisy wymagań zawijają się naturalnie po wyrazach, zamiast być ściskane w bardzo wąskiej kolumnie.
+- Zachowano wszystkie funkcje testowej v3.10.12.
+
+
+============================================================
+WERSJA 3.10.14 (TESTOWA)
+============================================================
+- Poprawiono ponownie liczenie Wydziałów Ruchu Drogowego (WRD) w zakładce „Sprawdź ZR”.
+- Przyczyną wyniku 0 było inne interpretowanie statusu klasycznych rozbudów `extensions` niż w działającym Menedżerze budynków OR.
+- Dla klasycznych rozbudów skrypt używa teraz dokładnie tej samej zasady co Menedżer budynków: rozbudowa jest aktywna, gdy `available = true` i `enabled = true`.
+- Pole `active` nie nadpisuje już statusu klasycznych `extensions`, ponieważ w API może zwracać wartość niezgodną z faktycznym statusem widocznym w grze.
+- Obsługa `specializations` pozostaje jako dodatkowe źródło dla nowszych formatów API.
+- Przy 3 aktywnych rozbudowach „Rozbudowa o Wydział Ruchu Drogowego” wymaganie 3 WRD powinno dawać „OK (masz 3/3)”.
+- Zachowano wszystkie funkcje testowej v3.10.13.

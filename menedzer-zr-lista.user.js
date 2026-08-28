@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.12
+// @version      3.10.14
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.12');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.14');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -2196,11 +2196,11 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const rawExt = auditValueOf(raw, ['extensions'], []);
         const list = Array.isArray(rawExt) ? rawExt : (rawExt && typeof rawExt === 'object' ? Object.values(rawExt) : []);
         return list.filter(ext => {
-            // Część serwerów/API zwraca dla rozbudów bezpośrednie pole `active`,
-            // inne używają pary `available` + `enabled`. Jeżeli `active` istnieje,
-            // traktujemy je jako nadrzędną informację o faktycznie działającej rozbudowie.
-            const activeRaw = auditValueOf(ext, ['active'], null);
-            if (activeRaw !== null) return auditBool(activeRaw, false);
+            // WAŻNE: używamy dokładnie tej samej logiki statusu rozbudowy co
+            // Menedżer budynków OR, który prawidłowo pokazuje aktywne WRD.
+            // W API pole `active` bywa obecne, ale nie odzwierciedla stanu
+            // klasycznych `extensions` tak jak `available` + `enabled`.
+            // Dlatego dla `extensions` NIE używamy `active` jako nadrzędnego.
             const available = auditBool(auditValueOf(ext, ['available'], true), true);
             const enabled = auditBool(auditValueOf(ext, ['enabled'], true), true);
             return available && enabled;
@@ -3715,12 +3715,18 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-zrcheck-tools{gap:8px}
 #orzr-zrcheck-tools input[type="search"]{min-width:260px;max-width:420px}
 #orzr-zrcheck-tools select{min-width:180px;max-width:260px}
-#orzr-zrcheck-table th:nth-child(1),#orzr-zrcheck-table td:nth-child(1){width:85px}
-#orzr-zrcheck-table th:nth-child(3),#orzr-zrcheck-table td:nth-child(3){width:190px}
-#orzr-zrcheck-table th:nth-child(4),#orzr-zrcheck-table td:nth-child(4){width:95px}
-#orzr-zrcheck-table th:nth-child(5),#orzr-zrcheck-table td:nth-child(5){width:280px}
-#orzr-zrcheck-table th:nth-child(6),#orzr-zrcheck-table td:nth-child(6){width:520px}
-#orzr-zrcheck-table th:nth-child(7),#orzr-zrcheck-table td:nth-child(7){width:105px}
+/* Sprawdź ZR: wąskie kolumny techniczne, szerokie kolumny z treścią.
+   Suma = 100%, więc „Wymagania (budynki)” dostaje najwięcej miejsca. */
+#orzr-zrcheck-table th:nth-child(1),#orzr-zrcheck-table td:nth-child(1){width:3%;text-align:center;padding-left:3px;padding-right:3px}
+#orzr-zrcheck-table th:nth-child(2),#orzr-zrcheck-table td:nth-child(2){width:5%}
+#orzr-zrcheck-table th:nth-child(3),#orzr-zrcheck-table td:nth-child(3){width:18%}
+#orzr-zrcheck-table th:nth-child(4),#orzr-zrcheck-table td:nth-child(4){width:9%}
+#orzr-zrcheck-table th:nth-child(5),#orzr-zrcheck-table td:nth-child(5){width:5%;text-align:center}
+#orzr-zrcheck-table th:nth-child(6),#orzr-zrcheck-table td:nth-child(6){width:20%}
+#orzr-zrcheck-table th:nth-child(7),#orzr-zrcheck-table td:nth-child(7){width:33%}
+#orzr-zrcheck-table th:nth-child(8),#orzr-zrcheck-table td:nth-child(8){width:7%;text-align:center}
+#orzr-zrcheck-table td:nth-child(6),#orzr-zrcheck-table td:nth-child(7){vertical-align:top;white-space:normal;overflow-wrap:break-word;word-break:normal}
+#orzr-zrcheck-table .orzr-actions .btn{padding-left:7px;padding-right:7px}
 .orzr-check-ok{color:#3c763d;font-weight:700;background:#f3fbf0}
 .orzr-check-missing{color:#a94442;font-weight:700;background:#fff5f5}
 .orzr-check-warning{color:#8a6d3b;font-weight:700;background:#fffaf0}
