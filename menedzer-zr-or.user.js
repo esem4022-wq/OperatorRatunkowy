@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15
+// @version      3.15.02
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15';
-    const CAPTURE_KEY = 'or_zr_capture_v315';
+    const VERSION = '3.15.02';
+    const CAPTURE_KEY = 'or_zr_capture_v31502';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1672,6 +1672,48 @@
         return result;
     }
 
+    function extractExplicitK9CountFromVisibleCard(preferredBlock = null) {
+        // v3.15.02: K-9 jest wymaganiem nietypowym, bo cyfra jest częścią nazwy.
+        // Nie polegamy tu na ogólnym parserze pojazdów. Szukamy dokładnie wpisu
+        // „<ilość> K-9” w widocznej żółtej karcie i dokładamy go niezależnie.
+        const candidates = [];
+        const seen = new Set();
+
+        const addCandidate = el => {
+            if (!el || !el.isConnected || seen.has(el)) return;
+            seen.add(el);
+            candidates.push(el);
+        };
+
+        addCandidate(preferredBlock);
+        addCandidate(findMissionCardFromVehiclesHeading());
+        addCandidate(findExactMissionCardByTitle());
+
+        for (const block of candidates) {
+            const raw = (getMissionCardText(block) || block.innerText || block.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+
+            // Najpierw ograniczamy się do sekcji Pojazdy, żeby liczby z Pacjentów,
+            // więźniów itp. nie mogły zostać uznane za ilość K-9.
+            const segment = getVehiclesTextSegmentFromCardText(raw) || raw;
+            const patterns = [
+                /(?:^|\s)(\d+)\s+K\s*[-–—]\s*9\b/i,
+                /(?:^|\s)(\d+)\s+K\s*9\b/i
+            ];
+
+            for (const re of patterns) {
+                const m = segment.match(re);
+                if (!m) continue;
+                const count = Number.parseInt(m[1], 10);
+                if (Number.isFinite(count) && count > 0) return count;
+            }
+        }
+
+        return 0;
+    }
+
     function hasContaminatedVehicleList(vehicles) {
         if (!Array.isArray(vehicles) || !vehicles.length) return false;
 
@@ -1748,6 +1790,22 @@
             if (!water) water = extractResourceFromText(cardText, 'water') || 0;
             if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
             if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
+        }
+
+        // v3.15.02: bezwarunkowy bezpiecznik dla K-9. Nawet jeśli ogólny parser
+        // lub mission_help pominie tę pozycję, dokładny wpis z widocznej karty
+        // zostanie dołączony do listy pojazdów.
+        const explicitK9Count = extractExplicitK9CountFromVisibleCard(block);
+        if (explicitK9Count > 0) {
+            const repairedVehicles = [];
+            const repairedMap = new Map();
+            for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
+                addVehicle(repairedVehicles, repairedMap, vehicle.label, vehicle.count, vehicle.chance);
+            }
+            addVehicle(repairedVehicles, repairedMap, 'K-9', explicitK9Count, null);
+            vehicles = repairedVehicles;
+            source = source ? `${source}+explicit_k9` : 'explicit_k9';
+            log(`Wymuszone wymaganie K-9 z widocznej karty: ${explicitK9Count}`);
         }
 
         if (hasContaminatedVehicleList(vehicles)) {
