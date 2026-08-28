@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.14
+Wersja: 3.15
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15
+- poprawiono parser nazw pojazdów zawierających cyfry, przede wszystkim `K-9`; cyfra `9` po myślniku nie może już zostać potraktowana jako ilość kolejnego pojazdu,
+- odczyt pojazdów z widocznej żółtej karty najpierw korzysta z układu wierszowego DOM, a dopiero awaryjnie z tekstu spłaszczonego,
+- dla `Mały niebezpieczny protest` oczekiwany odczyt to dokładnie `1 K-9`, `4 OPI` i `3 Ambulans S lub P`,
+- dodano jawne przypisanie wymagania `K-9` / `K9` / `K 9` / `Pojazd K-9` do odpowiadającego pola ZR, bez fuzzy-matchingu do OPI,
+- zachowano wszystkie wcześniejsze reguły AZR, auto-zaznaczania i EDYTUJ ZR.
+
 v3.14
 - naprawiono pomijanie pojazdu `K-9` przy tworzeniu/edycji ZR, gdy `mission_help` zwracał tylko część wymagań pojazdowych,
 - lista pojazdów z widocznej żółtej karty aktualnej misji jest teraz zawsze sprawdzana i, jeśli zawiera pojazdy, ma pierwszeństwo przed listą z `mission_help`,

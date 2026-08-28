@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.14
+// @version      3.15
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.14';
-    const CAPTURE_KEY = 'or_zr_capture_v314';
+    const VERSION = '3.15';
+    const CAPTURE_KEY = 'or_zr_capture_v315';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1053,7 +1053,7 @@
 
         // Przykład:
         // "1 SLOP/SLRr (35%) 2 Samochody pożarnicze"
-        const re = /(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+        const re = /(?:^|\s)(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
         let m;
 
         while ((m = re.exec(segment)) !== null) {
@@ -1656,9 +1656,11 @@
         const segment = getVehiclesTextSegmentFromCardText(cardText);
         if (!segment) return result;
 
-        // Działa zarówno dla tekstu z nowymi liniami, jak i dla jednego ciągu:
-        // "2 OPI 1 Samochód pożarniczy" / "6200 Piana gaśnicza 1 SD/SH ...".
-        const re = /(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+        // Działa zarówno dla tekstu z nowymi liniami, jak i dla jednego ciągu.
+        // Ilość musi zaczynać się na początku segmentu albo po białym znaku.
+        // Dzięki temu `9` w nazwie `K-9` NIE może zostać uznane za ilość.
+        // Przykład: `1 K-9 4 OPI` -> `1 K-9` + `4 OPI`.
+        const re = /(?:^|\s)(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
         let m;
         while ((m = re.exec(segment)) !== null) {
             const count = Number.parseInt(m[1], 10);
@@ -1726,8 +1728,15 @@
         const cardText = findCurrentMissionCardText(name);
 
         if (cardText && /\bPojazdy\b/i.test(cardText)) {
-            const visibleVehicles = extractVehiclesFromCardText(cardText)
+            // v3.15: jeżeli mamy prawdziwy blok żółtej karty, najpierw czytamy
+            // pojazdy WIERSZ PO WIERSZU. To jest ważne dla nazw zawierających
+            // cyfry, np. `K-9`: cyfra 9 jest częścią nazwy pojazdu, a nie ilością.
+            const lineVehicles = extractVehiclesFromCardLines(block)
                 .filter(v => Number(v?.count) > 0);
+            const visibleVehicles = (lineVehicles.length
+                ? lineVehicles
+                : extractVehiclesFromCardText(cardText)
+            ).filter(v => Number(v?.count) > 0);
 
             if (visibleVehicles.length) {
                 vehicles = visibleVehicles;
@@ -3906,6 +3915,23 @@
         if (manualName) {
             const f = state.fields.find(x => x.name === manualName);
             if (f) return f;
+        }
+
+        // v3.15: K-9 ma cyfrę w nazwie, dlatego obsługujemy go jawnie i nie
+        // pozwalamy fuzzy-matchingowi pomylić go z OPI ani innym polem liczbowym.
+        if (req.kind === 'vehicle') {
+            const rk9 = normalize(req.label)
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (rk9 === 'k 9' || rk9 === 'k9' || rk9 === 'pojazd k 9' || rk9 === 'pojazd k9') {
+                const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+                const k9Field = vehicleFields.find(x => {
+                    const n = normalize(x.label).replace(/\s+/g, ' ').trim();
+                    return n === 'k 9' || n === 'k9' || n === 'pojazd k 9' || n === 'pojazd k9' ||
+                           /(?:^|\s)k\s*9(?:\s|$)/.test(n);
+                });
+                if (k9Field) return k9Field;
+            }
         }
 
         // Pacjenci: nie używamy tu fuzzy-matchingu. Szukamy konkretnego pola
