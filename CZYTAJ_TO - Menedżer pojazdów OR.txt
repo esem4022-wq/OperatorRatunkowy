@@ -24,11 +24,19 @@ Przy wydawaniu kolejnej wersji:
 5. Numer wersji zmienia się w metadanych @version, ale nazwa pliku .user.js pozostaje stała.
 
 ZIP może mieć numer wersji w nazwie, np.:
-menedzer-pojazdow-or-v3.01.zip
+menedzer-pojazdow-or-v3.02.zip
 
 ============================================================
 HISTORIA WERSJI
 ============================================================
+
+v3.02
+- przycisk główny ma nazwę „Pojazdy”,
+- numer wersji jest wyświetlany pod nazwą przycisku,
+- przycisk ma stały, ujednolicony rozmiar zgodny ze wspólnymi zasadami projektu,
+- przycisk pozostaje dostępny wyłącznie na stronie głównej OperatorRatunkowy.pl,
+- zachowano stałą nazwę pliku menedzer-pojazdow-or.user.js i obsługę aktualizacji z GitHub,
+- ZIP zawiera skrypt oraz ten plik CZYTAJ_TO z pełną historią wersji.
 
 v3.01
 - dodano zakładkę „Klasa”,

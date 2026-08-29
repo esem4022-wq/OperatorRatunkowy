@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer budynkow OR
 // @namespace    operatorratunkowy.local.buildingmanager
-// @version      3.02
+// @version      3.03
 // @description  Zarzadzanie budynkami: nazwy, specjalizacje, obsada, pojazdy i rozbudowa w OperatorRatunkowy.pl
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,7 +16,7 @@
 
 /*
  * Operator Ratunkowy - Menedzer budynkow OR
- * Wersja 3.02
+ * Wersja 3.03
  *
  * Funkcje:
  * - pobiera wszystkie budynki z API gry,
@@ -25,6 +25,7 @@
  * - osobna zakladka Specjalizacje z lista rozbudow/specjalizacji dla kazdego budynku,
  * - osobna zakladka Obsada i pojazdy: liczba pojazdow, pojemnosc, personel, cel, bilans i rekrutacja,
  * - osobna zakladka Rozbudowa: rodzaj budynku, wariant, obecny i maksymalny poziom oraz maksymalna pojemnosc pojazdow,
+ * - v3.03: przycisk startowy ma nazwe „Budynki”, numer wersji pod nazwa i ujednolicony rozmiar,
  * - filtry obsady: brakuje zalogi / za duzo zalogi,
  * - edycja docelowej liczby pracownikow i sterowanie rekrutacja bezposrednio z tabeli,
  * - mozliwosc ukrycia kolumny Typ budynku w zakladce Obsada i pojazdy,
@@ -1417,10 +1418,15 @@
     style.textContent = `
       #${APP_ID}-button {
         position: fixed; right: 132px; bottom: 18px; z-index: 99990;
-        border: 0; border-radius: 999px; padding: 11px 16px;
-        background: #546e7a; color: white; font-weight: 700; cursor: pointer;
-        box-shadow: 0 4px 16px rgba(0,0,0,.28); font: 600 13px/1.2 Arial,sans-serif;
+        width: 118px; height: 46px; box-sizing: border-box;
+        border: 0; border-radius: 999px; padding: 7px 14px 6px;
+        background: #546e7a; color: white; font: 700 13px/1.15 Arial,sans-serif; cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0,0,0,.28);
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+        white-space: nowrap;
       }
+      #${APP_ID}-button .or-bm-launcher-title { display:block; line-height:1.05; }
+      #${APP_ID}-button .or-bm-launcher-version { display:block; font-size:9px; line-height:1; opacity:.82; font-weight:600; }
       #${APP_ID}-button:hover { filter: brightness(1.08); }
       #${APP_ID}-modal {
         display:none; position:fixed; inset:0; z-index:99991;
@@ -1594,7 +1600,8 @@
     const button = document.createElement('button');
     button.id = `${APP_ID}-button`;
     button.type = 'button';
-    button.textContent = '🏢 Budynki OR';
+    button.innerHTML = '<span class="or-bm-launcher-title">Budynki</span><span class="or-bm-launcher-version">v3.03</span>';
+    button.title = 'Otwórz Menedżer budynków OR — v3.03';
     document.body.appendChild(button);
     keepLauncherNextToFleetManager();
 
@@ -1604,7 +1611,7 @@
     modal.innerHTML = `
       <div class="or-bm-window" role="dialog" aria-modal="true" aria-label="Menedzer budynkow Operator Ratunkowy">
         <div class="or-bm-header">
-          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v3.02</span></h2>
+          <h2>🏢 Menedzer budynkow OR <span style="font-size:12px;color:#cfd8dc">v3.03</span></h2>
           <button type="button" class="or-bm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
 
@@ -1931,5 +1938,5 @@
   }
 
   createUi();
-  console.log('[OR Building Manager] Wersja 3.02 zaladowana. Przycisk „Budynki OR” jest ustawiany obok Menedzera pojazdow.');
+  console.log('[OR Building Manager] Wersja 3.03 zaladowana. Przycisk „Budynki” (v3.03) jest ustawiany obok Menedzera pojazdow.');
 })();

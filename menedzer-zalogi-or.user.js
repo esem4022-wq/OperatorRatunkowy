@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer załogi OR
 // @namespace    operatorratunkowy.local.crewmanager
-// @version      3.02
+// @version      3.03
 // @description  Osobny menedżer personelu i obsady pojazdów w OperatorRatunkowy.pl
 // @author       ChatGPT + użytkownik
 // @license      CC BY-NC-SA 4.0
@@ -17,7 +17,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.02';
+  const VERSION = '3.03';
   const APP_ID = 'or-crew-manager-v01';
   const PAGE_SIZE = 200;
   const BUILDING_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/buildings';
@@ -1082,7 +1082,7 @@
     const button = document.createElement('button');
     button.id = `${APP_ID}-button`;
     button.type = 'button';
-    button.innerHTML = `<span class="or-cm-launcher-name">👥 Menedżer załogi OR</span><span class="or-cm-launcher-version">v${VERSION}</span>`;
+    button.innerHTML = `<span class="or-cm-launcher-name">Załoga</span><span class="or-cm-launcher-version">v${VERSION}</span>`;
     document.body.appendChild(button);
 
     const modal = document.createElement('div');

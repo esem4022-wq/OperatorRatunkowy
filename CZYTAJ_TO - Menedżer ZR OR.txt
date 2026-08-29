@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.06
+Wersja: 3.15.07
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,15 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.07
+- poprawiono auto-zaznaczanie `Ambulans` dla misji z dokładnie 1 pacjentem i jedynym wymaganiem `1 Ambulans` (np. `Przedawkowanie Leków`),
+- poprawiono auto-zaznaczanie `Straż` dla misji, w których jedynym wymaganiem pojazdowym jest dokładnie `1 Samochód pożarniczy`,
+- reguły `Ambulans`, `Radiowóz` i `Straż` są teraz wyliczane z jednego, pełnego snapshotu widocznej żółtej karty: lista `Pojazdy`, pacjenci, woda i piana pochodzą z tego samego kontenera,
+- zachowano dodatkowy fallback tekstowy, ale nie może on już zastąpić pełnego snapshotu częściowym fragmentem `Pojazdy` albo `Pacjenci`,
+- naprawiono znikający fioletowy komunikat `✓ Zaznaczono ZR`: status nie jest już usuwany tylko dlatego, że znajduje się wewnątrz kontenera przycisków nagłówka,
+- po faktycznym kliknięciu ZR stan jest oznaczany jako `selected`; MutationObserver może odtworzyć fioletowy komunikat po przebudowie nagłówka, ale nie klika ZR ponownie,
+- zmieniono klucz capture na wersję 3.15.07, aby test nie korzystał z danych poprzedniej wersji.
+
 v3.15.06
 - naprawiono błędny odczyt widoczny jako wymaganie `10` z ilością `2`; były to techniczne fragmenty DOM, a nie pojazd misji,
 - parser listy `Pojazdy` nie składa już wymagań z przypadkowych najmniejszych elementów `span/div`; najpierw czyta prawdziwe linie żółtej karty,

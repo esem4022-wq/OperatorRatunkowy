@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.06
+// @version      3.15.07
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.06';
-    const CAPTURE_KEY = 'or_zr_capture_v31506';
+    const VERSION = '3.15.07';
+    const CAPTURE_KEY = 'or_zr_capture_v31507';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -2777,19 +2777,26 @@
 
     function showAutoSelectStatus(aaoName) {
         const header = findOpenedMissionHeader();
-        if (!header) return;
+        if (!header || !aaoName) return;
 
         ensureAutoSelectStyle();
 
         let status = document.getElementById('orzr-auto-select-status');
-        if (status && status.parentElement !== header) status.remove();
+
+        // v3.15.07: status jest zwykle dzieckiem #orzr-header-actions, a nie
+        // bezpośrednim dzieckiem nagłówka. Poprzedni test parentElement !== header
+        // usuwał poprawny status przy kolejnych skanach MutationObservera.
+        if (status && !header.contains(status)) {
+            status.remove();
+            status = null;
+        }
 
         if (!status) {
             status = document.createElement('span');
             status.id = 'orzr-auto-select-status';
 
             const actions = document.getElementById('orzr-header-actions');
-            if (actions?.parentElement === header) {
+            if (actions && header.contains(actions)) {
                 actions.appendChild(status);
             } else {
                 header.appendChild(status);
@@ -3329,8 +3336,110 @@
         return null;
     }
 
+    function strictVisibleSpecialSnapshot(missionName = '') {
+        // v3.15.07: reguły Ambulans/Radiowóz/Straż czytamy z JEDNEJ, pełnej
+        // żółtej karty. To eliminuje przypadki, w których parser widział tylko
+        // podkontener „Pojazdy” (bez „Pacjenci”) albo tylko „Pacjenci”.
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const block =
+            findMissionCardFromVehiclesHeading() ||
+            findExactMissionCardByTitle() ||
+            findMissionInfoBlock();
+
+        if (!block) return null;
+
+        const raw = (
+            getMissionCardText(block, liveName) ||
+            String(block.innerText || block.textContent || '')
+        )
+            .replace(/\u00a0/g, ' ')
+            .trim();
+
+        if (!raw || !/\b(?:Pojazdy|Pacjent|Pacjenci)\b/i.test(raw)) return null;
+
+        let vehicles = extractVehiclesFromCardLines(block)
+            .filter(v => Number(v?.count) > 0);
+
+        if (!vehicles.length && /\bPojazdy\b/i.test(raw)) {
+            vehicles = extractVehiclesFromCardText(raw)
+                .filter(v => Number(v?.count) > 0);
+        }
+
+        const maxPatients = Math.max(
+            extractMaxPatients(block) || 0,
+            extractMaxPatientsFromText(raw) || 0
+        );
+
+        return {
+            raw,
+            vehicles,
+            maxPatients,
+            water: extractResourceFromText(raw, 'water') || 0,
+            foam: extractResourceFromText(raw, 'foam') || 0,
+            vehicleSegment: getVehiclesTextSegmentFromCardText(raw)
+        };
+    }
+
+    function specialTargetFromStrictVisibleSnapshot(snapshot) {
+        if (!snapshot) return null;
+
+        const vehicles = Array.isArray(snapshot.vehicles)
+            ? snapshot.vehicles.filter(v => Number(v?.count) > 0)
+            : [];
+        const maxPatients = Number(snapshot.maxPatients) || 0;
+        const water = Number(snapshot.water) || 0;
+        const foam = Number(snapshot.foam) || 0;
+        const vehicleKey = normalize(snapshot.vehicleSegment || '');
+
+        // Dokładnie 1 pacjent i albo brak pojazdów, albo dokładnie 1 Ambulans.
+        // Jeśli parser tablicy nie zwrócił pojazdu, ale tekst sekcji Pojazdy
+        // istnieje, wolno uznać skrót tylko dla dokładnego „1 Ambulans”.
+        const ambulanceOnly =
+            (vehicles.length === 1 && isSinglePlainAmbulanceRequirement(vehicles[0])) ||
+            (vehicles.length === 0 && vehicleKey === '1 ambulans');
+        const noVehicleRequirement = vehicles.length === 0 && !vehicleKey;
+
+        if (
+            maxPatients === 1 &&
+            water === 0 &&
+            foam === 0 &&
+            (noVehicleRequirement || ambulanceOnly)
+        ) {
+            return 'Ambulans';
+        }
+
+        const opiOnly =
+            (vehicles.length === 1 && isSingleOPIRequirement(vehicles[0])) ||
+            (vehicles.length === 0 && vehicleKey === '1 opi');
+
+        if (opiOnly && maxPatients === 0 && water === 0 && foam === 0) {
+            return 'Radiowóz';
+        }
+
+        const fireOnly =
+            (vehicles.length === 1 && isSingleFireVehicleRequirement(vehicles[0])) ||
+            [
+                '1 samochod pozarniczy',
+                '1 samochody pozarnicze',
+                '1 pojazd strazacki',
+                '1 woz strazacki',
+                '1 wozy strazackie'
+            ].includes(vehicleKey);
+
+        if (fireOnly && maxPatients === 0 && water === 0 && foam === 0) {
+            return 'Straż';
+        }
+
+        return null;
+    }
+
     function visibleSpecialAutoSelectTarget(missionName = '') {
-        const cardText = visibleMissionCardTextForSpecialRules(missionName);
+        const snapshot = strictVisibleSpecialSnapshot(missionName);
+        const strictTarget = specialTargetFromStrictVisibleSnapshot(snapshot);
+        if (strictTarget) return strictTarget;
+
+        // Fallback dla starszych układów DOM, ale nadal na pełnym tekście karty.
+        const cardText = snapshot?.raw || visibleMissionCardTextForSpecialRules(missionName);
         return strictSpecialAutoSelectTargetFromCardText(cardText);
     }
 
@@ -3453,7 +3562,15 @@
         // kończy się NATYCHMIAST. MutationObserver nie może ponownie klikać AAO.
         if (state.autoSelectCompletedMissionKey === missionKey) {
             const completedState = state.autoSelectCompletedState || state.azrLookupState || 'found';
-            setHeaderAZRLookupState(completedState, state.autoSelectCompletedTargetName || '');
+            const headerState = completedState === 'selected' ? 'found' : completedState;
+            setHeaderAZRLookupState(headerState, state.autoSelectCompletedTargetName || '');
+
+            // v3.15.07: jeżeli ZR została faktycznie kliknięta, MutationObserver
+            // ma również odtworzyć fioletowy status, gdy nagłówek został chwilowo
+            // przebudowany przez grę. Nie klikamy ZR ponownie.
+            if (completedState === 'selected' && state.autoSelectCompletedTargetName) {
+                showAutoSelectStatus(state.autoSelectCompletedTargetName);
+            }
             return;
         }
 
@@ -3625,7 +3742,7 @@
 
             // Zablokuj kolejne wywołania ZANIM pokażemy status i zanim
             // MutationObserver zobaczy zmiany DOM wywołane kliknięciem.
-            markAutoSelectCompleted(missionKey, aaoId, targetName, group, 'found');
+            markAutoSelectCompleted(missionKey, aaoId, targetName, group, 'selected');
             setTimeout(() => setAAOSearch(group, ''), 120);
             showAutoSelectStatus(targetName);
             log(`Automatycznie wybrano ZR „${targetName}” przez widoczną kategorię AZR.`);

@@ -23,6 +23,14 @@ Numer wersji znajduje się w nagłówku userscriptu (@version) oraz w nazwie arc
 HISTORIA WERSJI
 ===============
 
+v3.03
+-----
+- Zmieniono nazwę na przycisku uruchamiającym na „Budynki”.
+- Numer wersji jest wyświetlany pod nazwą przycisku.
+- Ujednolicono rozmiar przycisku zgodnie ze wspólną zasadą projektu Operator Menadżery.
+- Przycisk nadal jest dostępny wyłącznie na stronie głównej i ustawiany obok Menedżera pojazdów.
+- Zachowano aktualizacje GitHub przez @homepageURL, @updateURL i @downloadURL.
+
 v3.02
 -----
 - Dodano do pakietu plik „CZYTAJ_TO - Menedżer budynków OR.txt”.

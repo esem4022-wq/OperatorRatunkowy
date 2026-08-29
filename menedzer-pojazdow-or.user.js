@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      3.01
+// @version      3.02
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -17,9 +17,11 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 3.01
+ * Wersja 3.02
  *
  * Funkcje:
+ * - v3.02: przycisk główny zgodny ze wspólnymi zasadami projektu: „Pojazdy” + numer wersji pod nazwą,
+ * - v3.02: ujednolicony stały rozmiar przycisku; przycisk nadal tylko na stronie głównej,
  * - pobiera wszystkie pojazdy i jednostki z API gry,
  * - osobna karta Załoga: max, przydzielona i brakujaca obsada pojazdu,
  * - v2.12: osobna karta Stan do indywidualnej i zbiorczej zmiany FMS pojazdu 2/6,
@@ -104,6 +106,7 @@
   'use strict';
 
   const APP_ID = 'or-fleet-manager-v01';
+  const VERSION = '3.02';
   const STORAGE_KEY = 'orFleetManagerV01Settings';
   const PAGE_SIZE = 200;
   const CREW_PAGE_SIZE = 100;
@@ -3774,10 +3777,15 @@
     style.textContent = `
       #${APP_ID}-button {
         position: fixed; right: 18px; bottom: 18px; z-index: 99990;
-        border: 0; border-radius: 999px; padding: 11px 16px;
-        background: #1565c0; color: white; font-weight: 700; cursor: pointer;
-        box-shadow: 0 4px 16px rgba(0,0,0,.28); font: 600 13px/1.2 Arial,sans-serif;
+        width: 118px; height: 52px; box-sizing: border-box;
+        border: 0; border-radius: 14px; padding: 6px 10px;
+        background: #1565c0; color: white; cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0,0,0,.28);
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        font-family: Arial,sans-serif; line-height: 1.05;
       }
+      #${APP_ID}-button .or-fm-launcher-name { font-size: 13px; font-weight: 700; }
+      #${APP_ID}-button .or-fm-launcher-version { margin-top: 3px; font-size: 10px; font-weight: 600; opacity: .88; }
       #${APP_ID}-button:hover { filter: brightness(1.08); }
       #${APP_ID}-modal { display:none; position:fixed; inset:0; z-index:99991; background:rgba(0,0,0,.56); font:13px/1.35 Arial,sans-serif; color:#222; }
       #${APP_ID}-modal.or-fm-open { display:flex; align-items:center; justify-content:center; }
@@ -3890,7 +3898,7 @@
     const button = document.createElement('button');
     button.id = `${APP_ID}-button`;
     button.type = 'button';
-    button.textContent = '🚒 Flota OR';
+    button.innerHTML = `<span class="or-fm-launcher-name">Pojazdy</span><span class="or-fm-launcher-version">v${VERSION}</span>`;
     document.body.appendChild(button);
 
     const modal = document.createElement('div');
@@ -3898,7 +3906,7 @@
     modal.innerHTML = `
       <div class="or-fm-window" role="dialog" aria-modal="true" aria-label="Menedzer pojazdow Operator Ratunkowy">
         <div class="or-fm-header">
-          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v2.08</span></h2>
+          <h2>🚒 Menedzer pojazdow OR <span class="or-fm-muted" style="font-size:12px;color:#cfd8dc">v${VERSION}</span></h2>
           <button type="button" class="or-fm-close" id="${APP_ID}-close" title="Zamknij">×</button>
         </div>
         <div class="or-fm-tabs">
@@ -4602,5 +4610,5 @@
   }
 
   createUi();
-  console.log('[OR Fleet Manager] Wersja 2.08 zaladowana. Przycisk „Flota OR” znajduje sie w prawym dolnym rogu.');
+  console.log(`[OR Fleet Manager] Wersja ${VERSION} zaladowana. Przycisk „Pojazdy” znajduje sie w prawym dolnym rogu.`);
 })();

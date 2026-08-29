@@ -1,4 +1,4 @@
-Menedżer załogi OR v3.02
+Menedżer załogi OR v3.03
 
 Plik instalacyjny Tampermonkey:
 menedzer-zalogi-or.user.js
@@ -55,3 +55,9 @@ v3.02
 - przycisk nadal jest dostępny wyłącznie na stronie głównej OperatorRatunkowy.pl,
 - zachowano stałą nazwę pliku GitHub `menedzer-zalogi-or.user.js` oraz nagłówki @homepageURL, @updateURL i @downloadURL wskazujące repozytorium `esem4022-wq/OperatorRatunkowy`,
 - wydanie przygotowane jako ZIP z plikiem skryptu i zachowaną historią wersji w `CZYTAJ_TO - Menedżer załogi OR.txt`.
+
+
+v3.03
+- zmieniono nazwę wyświetlaną na przycisku głównym z „Menedżer załogi OR” na „Załoga”,
+- numer wersji nadal jest wyświetlany w osobnym, mniejszym wierszu pod nazwą,
+- pozostałe zasady wyglądu, pozycjonowania i działania przycisku pozostają bez zmian.

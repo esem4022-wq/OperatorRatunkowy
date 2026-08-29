@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer UM OR
 // @namespace    operatorratunkowy.local.poimanager
-// @version      3.02
+// @version      3.03
 // @description  Katalog i kontrola UM/POI na podstawie Potencjalnych misji oraz własnych punktów UM.
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,12 +16,14 @@
 
 /*
  * Operator Ratunkowy - Menedżer UM OR
- * Wersja 3.02
+ * Wersja 3.03
  *
- * Założenia wersji 3.02:
- * - numer wersji jest wyświetlany małą czcionką pod nazwą przycisku, jak w Menedżerze ZR Lista,
- * - numer wersji jest odczytywany z metadanych userscriptu przez GM_info (z awaryjnym fallbackiem),
- * - w zakładce „Moje UM” dodano niezależne sortowanie po typie i po nazwie,
+ * Założenia wersji 3.03:
+ * - wspólne zasady projektu Operator Menadżery: jednakowy rozmiar przycisków, numer wersji pod nazwą, przycisk tylko na stronie głównej,
+ * - nazwa na przycisku została skrócona do „UM”,
+ * - rozmiar przycisku jest synchronizowany z widocznymi przyciskami pozostałych menedżerów; przy ich braku używany jest wspólny rozmiar awaryjny,
+ * - numer wersji jest wyświetlany małą czcionką pod nazwą i odczytywany z metadanych userscriptu przez GM_info,
+ * - w zakładce „Moje UM” pozostaje niezależne sortowanie po typie i po nazwie,
  * - zachowano poprawione wyświetlanie przycisku na dole strony głównej,
  * - przycisk ma wysoki z-index i ustawia się automatycznie po lewej stronie
  *   istniejących przycisków pozostałych menedżerów,
@@ -44,7 +46,7 @@
   const APP_ID = 'or-um-manager-v30';
   const BUTTON_ID = `${APP_ID}-button`;
   const MODAL_ID = `${APP_ID}-modal`;
-  const VERSION = '3.02';
+  const VERSION = '3.03';
   const MISSIONS_URL = '/einsaetze';
   const POIS_API_URL = '/api/v2/pois';
   const POI_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/pois';
@@ -125,9 +127,12 @@
         visibility: visible !important;
         opacity: 1 !important;
         pointer-events: auto !important;
+        width: 118px !important;
+        height: 50px !important;
+        box-sizing: border-box !important;
         border: 0;
         border-radius: 999px;
-        padding: 11px 16px;
+        padding: 6px 10px !important;
         background: #6c5ce7;
         color: #fff;
         box-shadow: 0 4px 16px rgba(0,0,0,.28);
@@ -330,12 +335,40 @@
     });
   }
 
+  function syncLauncherSize(button, candidates) {
+    if (!button) return;
+
+    // Wspólna zasada projektu: przyciski menedżerów mają mieć jednakowe rozmiary.
+    // Jeżeli inny przycisk jest już widoczny, przejmujemy jego faktyczny rozmiar.
+    // Pozwala to zachować zgodność także wtedy, gdy standard wymiarów zmieni się
+    // w pozostałych menedżerach.
+    const preferred = candidates
+      .map(el => ({ el, rect: el.getBoundingClientRect() }))
+      .filter(x => x.rect.width >= 70 && x.rect.width <= 220 && x.rect.height >= 32 && x.rect.height <= 80)
+      .sort((a, b) => {
+        const at = normalizeText(a.el.textContent);
+        const bt = normalizeText(b.el.textContent);
+        const ap = /ZR Lista|Menedżer ZR/i.test(at) ? 0 : 1;
+        const bp = /ZR Lista|Menedżer ZR/i.test(bt) ? 0 : 1;
+        return ap - bp;
+      })[0];
+
+    if (preferred) {
+      button.style.width = `${Math.round(preferred.rect.width)}px`;
+      button.style.height = `${Math.round(preferred.rect.height)}px`;
+    } else {
+      button.style.width = '118px';
+      button.style.height = '50px';
+    }
+  }
+
   function positionLauncherButton() {
     const button = document.getElementById(BUTTON_ID);
     if (!button) return false;
 
     button.style.bottom = '18px';
     const candidates = launcherCandidates();
+    syncLauncherSize(button, candidates);
     if (!candidates.length) {
       button.style.right = '520px';
       return false;
@@ -376,7 +409,7 @@
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.type = 'button';
-      button.innerHTML = `<span class="or-um-launcher-title">📍 UM OR</span><span class="or-um-launcher-version">v${esc(getScriptVersion())}</span>`;
+      button.innerHTML = `<span class="or-um-launcher-title">UM</span><span class="or-um-launcher-version">v${esc(getScriptVersion())}</span>`;
       button.title = 'Menedżer UM / POI';
       button.addEventListener('click', openManager);
       document.body.appendChild(button);
