@@ -15,6 +15,17 @@ https://raw.githubusercontent.com/esem4022-wq/OperatorRatunkowy/main/menedzer-um
 HISTORIA WERSJI
 ===============
 
+Wersja 4.00
+------------
+- Rozpoczęto wspólną numerację projektu „Operator Menadżery” od wersji 4.00.
+- Dostosowano przycisk do nowych wspólnych zasad projektu.
+- Wszystkie przyciski menedżerów mają mieć identyczny rozmiar; Menedżer UM synchronizuje rozmiar z pozostałymi menedżerami i ma wspólny rozmiar awaryjny 118×50 px.
+- Pierwsza linia przycisku zawiera ikonę i nazwę: „📍 UM”.
+- Druga linia zawiera numer wersji „v4.00” zwykłą, niepogrubioną czcionką.
+- Przycisk nadal jest wyświetlany wyłącznie na stronie głównej.
+- Zachowano wszystkie funkcje v3.03, w tym zakładki Wymagane UM, Moje UM i Braki oraz sortowanie Moje UM po typie i nazwie.
+- Zachowano stałą nazwę pliku GitHub: menedzer-um-or.user.js.
+
 Wersja 3.03
 ------------
 - Dostosowano Menedżer UM OR do wspólnych zasad projektu „Operator Menadżery”.

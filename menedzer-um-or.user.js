@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer UM OR
 // @namespace    operatorratunkowy.local.poimanager
-// @version      3.03
+// @version      4.00
 // @description  Katalog i kontrola UM/POI na podstawie Potencjalnych misji oraz własnych punktów UM.
 // @author       ChatGPT
 // @license      CC BY-NC-SA 4.0
@@ -16,13 +16,14 @@
 
 /*
  * Operator Ratunkowy - Menedżer UM OR
- * Wersja 3.03
+ * Wersja 4.00
  *
- * Założenia wersji 3.03:
- * - wspólne zasady projektu Operator Menadżery: jednakowy rozmiar przycisków, numer wersji pod nazwą, przycisk tylko na stronie głównej,
- * - nazwa na przycisku została skrócona do „UM”,
+ * Założenia wersji 4.00:
+ * - wspólna numeracja projektu Operator Menadżery rozpoczyna się od 4.00,
+ * - wspólne zasady przycisków: jednakowy rozmiar, ikona + nazwa w pierwszej linii, wersja w drugiej linii, przycisk tylko na stronie głównej,
+ * - nazwa na przycisku: „📍 UM”,
  * - rozmiar przycisku jest synchronizowany z widocznymi przyciskami pozostałych menedżerów; przy ich braku używany jest wspólny rozmiar awaryjny,
- * - numer wersji jest wyświetlany małą czcionką pod nazwą i odczytywany z metadanych userscriptu przez GM_info,
+ * - numer wersji jest wyświetlany zwykłą, niepogrubioną czcionką pod nazwą i odczytywany z metadanych userscriptu przez GM_info,
  * - w zakładce „Moje UM” pozostaje niezależne sortowanie po typie i po nazwie,
  * - zachowano poprawione wyświetlanie przycisku na dole strony głównej,
  * - przycisk ma wysoki z-index i ustawia się automatycznie po lewej stronie
@@ -46,7 +47,7 @@
   const APP_ID = 'or-um-manager-v30';
   const BUTTON_ID = `${APP_ID}-button`;
   const MODAL_ID = `${APP_ID}-modal`;
-  const VERSION = '3.03';
+  const VERSION = '4.00';
   const MISSIONS_URL = '/einsaetze';
   const POIS_API_URL = '/api/v2/pois';
   const POI_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/pois';
@@ -141,8 +142,9 @@
         white-space: nowrap;
       }
       #${BUTTON_ID}:hover { filter: brightness(1.08); }
-      #${BUTTON_ID} .or-um-launcher-title { font: 700 13px/1.15 Arial,sans-serif; }
-      #${BUTTON_ID} .or-um-launcher-version { font: 400 9px/1.05 Arial,sans-serif; opacity: .78; }
+      #${BUTTON_ID} .or-um-launcher-title { display: inline-flex; align-items: center; justify-content: center; gap: 4px; font: 700 13px/1.15 Arial,sans-serif; }
+      #${BUTTON_ID} .or-um-launcher-icon { font-weight: 400; }
+      #${BUTTON_ID} .or-um-launcher-version { font: 400 9px/1.05 Arial,sans-serif; font-weight: 400 !important; opacity: .78; }
 
       #${MODAL_ID} {
         position: fixed;
@@ -409,7 +411,7 @@
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.type = 'button';
-      button.innerHTML = `<span class="or-um-launcher-title">UM</span><span class="or-um-launcher-version">v${esc(getScriptVersion())}</span>`;
+      button.innerHTML = `<span class="or-um-launcher-title"><span class="or-um-launcher-icon" aria-hidden="true">📍</span> UM</span><span class="or-um-launcher-version">v${esc(getScriptVersion())}</span>`;
       button.title = 'Menedżer UM / POI';
       button.addEventListener('click', openManager);
       document.body.appendChild(button);
