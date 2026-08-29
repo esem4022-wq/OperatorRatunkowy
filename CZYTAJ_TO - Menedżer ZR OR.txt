@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.09
+Wersja: 3.15.10
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.10
+- przy otwarciu edycji istniejącej ZR skrypt ustawia kolor tła na biały (`FFFFFF`),
+- kolor tekstu jest ustawiany na automatyczny przez włączenie pola `automatic_text_color`,
+- ustawienie wyglądu jest wykonywane tylko na stronie edycji istniejącej ZR (`/aaos/<ID>/edit`), a nie podczas tworzenia nowej ZR,
+- pola wyglądu nadal pozostają wykluczone z dopasowywania wymagań pojazdów oraz z zerowania przez `Zastąp ZR`,
+- zmieniono klucz capture na wersję 3.15.10.
+
 v3.15.09
 - naprawiono zmianę kolorów podczas edycji istniejącej ZR,
 - pola wyglądu ZR (kolor tła, kolor tekstu/czcionki i pola typu `color`) są całkowicie wykluczone z listy pól obsługiwanych przez Menedżera ZR,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.09
+// @version      3.15.10
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.09';
-    const CAPTURE_KEY = 'or_zr_capture_v31509';
+    const VERSION = '3.15.10';
+    const CAPTURE_KEY = 'or_zr_capture_v31510';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -4216,6 +4216,75 @@
         return /^\/aaos\/(?:new|\d+\/(?:edit|copy))\/?$/.test(location.pathname);
     }
 
+    function isExistingAAOEdit() {
+        return /^\/aaos\/\d+\/edit\/?$/.test(location.pathname);
+    }
+
+    function dispatchFormControlEvents(control) {
+        if (!control) return;
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function applyAAOEditorAppearanceDefaults() {
+        // v3.15.10: przy edycji istniejącej ZR użytkownik chce zawsze zacząć
+        // od białego tła i automatycznego koloru tekstu. Nie dotyczy to /aaos/new.
+        if (!isExistingAAOEdit()) return;
+
+        const named = [...document.querySelectorAll('input[name], select[name]')];
+
+        // Pole `aao[color]` jest kolorem tła ZR. W zależności od widoku gry
+        // może być zwykłym polem hex albo input[type=color]. Ustawiamy wszystkie
+        // kontrolki odpowiadające temu polu, bo plugin koloru czasem tworzy duplikat.
+        const backgroundFields = named.filter(control => {
+            const name = String(control.name || '').toLowerCase();
+            const id = String(control.id || '').toLowerCase();
+            return (
+                name === 'aao[color]' ||
+                name === 'color' ||
+                id === 'aao_color' ||
+                /(?:^|_)aao_color$/.test(id)
+            ) && !/text|automatic/.test(`${name} ${id}`);
+        });
+
+        for (const control of backgroundFields) {
+            const value = String(control.type || '').toLowerCase() === 'color' ? '#ffffff' : 'FFFFFF';
+            if (control.value !== value) control.value = value;
+            dispatchFormControlEvents(control);
+        }
+
+        // W API gry za automatyczny dobór koloru odpowiada `automatic_text_color`.
+        // Rails może generować hidden + checkbox o tej samej nazwie, dlatego
+        // ustawiamy przede wszystkim checkbox, a hidden zostawiamy bez zmian.
+        const autoCandidates = named.filter(control => {
+            const key = `${control.name || ''} ${control.id || ''}`.toLowerCase();
+            return key.includes('automatic_text_color') || key.includes('automatic-text-color');
+        });
+
+        const autoCheckbox = autoCandidates.find(control => String(control.type || '').toLowerCase() === 'checkbox');
+        if (autoCheckbox) {
+            autoCheckbox.checked = true;
+            dispatchFormControlEvents(autoCheckbox);
+        } else {
+            // Fallback dla ewentualnego selecta / pola bez checkboxa.
+            const autoControl = autoCandidates.find(control => String(control.type || '').toLowerCase() !== 'hidden');
+            if (autoControl) {
+                if (autoControl.tagName === 'SELECT') {
+                    const option = [...autoControl.options].find(opt => {
+                        const text = normalize(opt.textContent || '');
+                        return text.includes('automat') || String(opt.value).toLowerCase() === 'true' || String(opt.value) === '1';
+                    });
+                    if (option) autoControl.value = option.value;
+                } else {
+                    autoControl.value = '1';
+                }
+                dispatchFormControlEvents(autoControl);
+            }
+        }
+
+        log('Edycja ZR: ustawiono białe tło i automatyczny kolor tekstu.');
+    }
+
     function labelFor(input) {
         if (input.id) {
             try {
@@ -4631,6 +4700,9 @@
         if (!isAAOEditor()) return;
         if (document.getElementById('orzr-editor')) return;
 
+        // Przy edycji istniejącej ZR najpierw ustawiamy wygląd zgodnie z
+        // zasadą projektu: białe tło + automatyczny kolor tekstu.
+        applyAAOEditorAppearanceDefaults();
         collectFields();
 
         // Nie pokazuj wymagań z poprzedniej misji. Przy przejściu z przycisku
