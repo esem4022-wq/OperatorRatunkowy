@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.07
+// @version      3.15.09
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.07';
-    const CAPTURE_KEY = 'or_zr_capture_v31507';
+    const VERSION = '3.15.09';
+    const CAPTURE_KEY = 'or_zr_capture_v31509';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -3433,7 +3433,80 @@
         return null;
     }
 
+    function directLiteralSpecialTargetFromVisibleCard(missionName = '') {
+        // v3.15.08: niezależny, prosty bezpiecznik dla trzech skrótów.
+        // Nie polega na parserze tabel/mission_help. Czyta dosłownie sekcję
+        // `Pojazdy` z małego widocznego kontenera żółtej karty.
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const liveKey = exactMissionNameKey(liveName);
+        const candidates = [];
+
+        for (const el of document.querySelectorAll('div,section,article,aside')) {
+            if (!el || !el.isConnected || !isDisplayedInInterface(el)) continue;
+
+            const raw = String(el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+
+            if (!raw || raw.length > 4500) continue;
+            if (!/\bPojazdy\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            // Jeżeli kontener zawiera tytuł, musi to być tytuł bieżącej misji.
+            // Kontenery bez tytułu nadal są dozwolone (lista Pojazdy bywa osobnym
+            // podkontenerem), ale dostają niższy priorytet.
+            const nraw = exactMissionNameKey(raw);
+            const hasCurrentTitle = liveKey && nraw.includes(liveKey);
+
+            const segment = getVehiclesTextSegmentFromCardText(raw);
+            const vehicleKey = normalize(segment);
+            if (!vehicleKey) continue;
+
+            const maxPatients = extractMaxPatientsFromText(raw) || 0;
+            const water = extractResourceFromText(raw, 'water') || 0;
+            const foam = extractResourceFromText(raw, 'foam') || 0;
+
+            let target = null;
+            if (vehicleKey === '1 ambulans' && maxPatients === 1 && water === 0 && foam === 0) {
+                target = 'Ambulans';
+            } else if (vehicleKey === '1 opi' && maxPatients === 0 && water === 0 && foam === 0) {
+                target = 'Radiowóz';
+            } else if (
+                [
+                    '1 samochod pozarniczy',
+                    '1 samochody pozarnicze',
+                    '1 pojazd strazacki',
+                    '1 woz strazacki',
+                    '1 wozy strazackie'
+                ].includes(vehicleKey) &&
+                maxPatients === 0 && water === 0 && foam === 0 &&
+                !/\bPacjenci\b/i.test(raw)
+            ) {
+                target = 'Straż';
+            }
+
+            if (!target) continue;
+
+            let score = 0;
+            if (hasCurrentTitle) score += 100;
+            if (isPaleMissionCardBackground(el)) score += 40;
+            score += Math.max(0, 30 - Math.floor(raw.length / 100));
+            candidates.push({ target, score, len: raw.length, vehicleKey, raw });
+        }
+
+        candidates.sort((a, b) => b.score - a.score || a.len - b.len);
+        const best = candidates[0] || null;
+        if (best) {
+            log(`Bezpośrednia reguła skrótowa: ${best.target}; Pojazdy = ${best.vehicleKey}`);
+            return best.target;
+        }
+        return null;
+    }
+
     function visibleSpecialAutoSelectTarget(missionName = '') {
+        const directTarget = directLiteralSpecialTargetFromVisibleCard(missionName);
+        if (directTarget) return directTarget;
+
         const snapshot = strictVisibleSpecialSnapshot(missionName);
         const strictTarget = specialTargetFromStrictVisibleSnapshot(snapshot);
         if (strictTarget) return strictTarget;
@@ -3685,6 +3758,17 @@
             }
 
             if (!apiAAO) {
+                // v3.15.08: dla skrótów Ambulans/Radiowóz/Straż nie kończymy
+                // sprawdzania po pierwszym odczycie API. Lista ZR i żółta karta
+                // potrafią pojawić się w różnej kolejności. Dajemy kilka krótkich
+                // prób, zanim uznamy, że skrótowej ZR naprawdę nie ma w AZR.
+                if (['Ambulans', 'Radiowóz', 'Straż'].includes(targetName) && state.autoSelectAttempts < 4) {
+                    setHeaderAZRLookupState('checking');
+                    await loadAAOsForAutoSelect(true);
+                    scheduleAutoSelectRetry(140);
+                    return;
+                }
+
                 if (!getVisibleMissionRequirementSnapshot() && state.autoSelectAttempts <= 8) {
                     setHeaderAZRLookupState('checking');
                     scheduleAutoSelectRetry(150);
@@ -4144,6 +4228,29 @@
             ?.replace(/\s+/g, ' ').trim() || '';
     }
 
+    function isAAOAppearanceField(input, label = '', name = '') {
+        const rawName = String(name || input?.name || '');
+        const rawLabel = String(label || '');
+        const nn = normalize(rawName);
+        const nl = normalize(rawLabel);
+        const idn = normalize(input?.id || '');
+        const cls = normalize(input?.className || '');
+        const type = String(input?.type || '').toLowerCase();
+
+        // Pola wyglądu ZR NIE są wymaganiami pojazdów. Wcześniej ogólna reguła
+        // `aao[...]` mogła potraktować m.in. kolor tła i kolor tekstu jak pole ZR,
+        // a `Zastąp ZR` zerowało je lub wpisywało do nich liczbę pojazdów.
+        if (type === 'color') return true;
+
+        const text = `${nn} ${nl} ${idn} ${cls}`;
+        return (
+            /(?:^|\s)(?:color|colour|kolor)(?:\s|$)/.test(text) ||
+            /background|background color|bg color|kolor tla|tlo/.test(text) ||
+            /text color|font color|foreground|kolor tekstu|kolor czcionki/.test(text) ||
+            /aao color|aao text color|aao background/.test(text)
+        );
+    }
+
     function collectFields() {
         const result = [];
 
@@ -4153,6 +4260,11 @@
 
             const label = labelFor(input);
             const name = input.name || '';
+
+            // v3.15.09: całkowicie wykluczamy ustawienia wyglądu z Menedżera ZR.
+            // Ani Uzupełnij ZR, ani Zastąp ZR nie może dotknąć kolorów.
+            if (isAAOAppearanceField(input, label, name)) continue;
+
             const nl = normalize(label);
             const nn = normalize(name);
 
@@ -4474,10 +4586,11 @@
         const reqs = requirements();
 
         if (replace) {
-            for (const f of state.fields.filter(x => x.kind !== 'caption')) {
-                if (f.input.type === 'number' || /^(aao\[|vehicle_type_ids\[|vehicle_type_caption\[)/.test(f.name)) {
-                    setInput(f.input, 0);
-                }
+            // Zerujemy wyłącznie rzeczywiste pola wymagań. Nie używamy już
+            // samego prefiksu `aao[...]`, bo pod nim znajdują się też ustawienia
+            // wyglądu (np. kolor tła / tekstu).
+            for (const f of state.fields.filter(x => ['vehicle', 'water', 'foam'].includes(x.kind))) {
+                setInput(f.input, 0);
             }
         }
 

@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.07
+Wersja: 3.15.09
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,22 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.09
+- naprawiono zmianę kolorów podczas edycji istniejącej ZR,
+- pola wyglądu ZR (kolor tła, kolor tekstu/czcionki i pola typu `color`) są całkowicie wykluczone z listy pól obsługiwanych przez Menedżera ZR,
+- `Uzupełnij ZR` nie może już przypisać wymagania pojazdu do pola koloru,
+- `Zastąp ZR` zeruje wyłącznie rzeczywiste pola wymagań: pojazdy, wodę i pianę; nie zeruje już wszystkich pól `aao[...]`,
+- zachowano dotychczasowe kolory tła i tekstu edytowanej ZR bez zmian,
+- zmieniono klucz capture na wersję 3.15.09.
+
+v3.15.08
+- poprawiono ponownie auto-zaznaczanie ZR `Straż` dla misji, w której widoczna żółta karta zawiera wyłącznie `1 Samochód pożarniczy`,
+- dodano niezależny, dosłowny odczyt sekcji `Pojazdy` z małego widocznego kontenera karty; reguła `Straż` nie zależy już wyłącznie od parsera listy ani `mission_help`,
+- bezpośredni odczyt rozpoznaje także warianty `1 pojazd strażacki` i `1 wóz strażacki`,
+- ten sam bezpiecznik obejmuje ścisłe przypadki `1 Ambulans + dokładnie 1 pacjent` oraz `1 OPI`,
+- dla skrótowych ZR `Ambulans`, `Radiowóz` i `Straż` skrypt wykonuje kilka krótkich ponownych odczytów listy AZR przed uznaniem, że danej ZR nie ma; zapobiega to zakończeniu sprawdzania zanim interfejs/API zdąży się w pełni załadować,
+- zmieniono klucz capture na wersję 3.15.08.
+
 v3.15.07
 - poprawiono auto-zaznaczanie `Ambulans` dla misji z dokładnie 1 pacjentem i jedynym wymaganiem `1 Ambulans` (np. `Przedawkowanie Leków`),
 - poprawiono auto-zaznaczanie `Straż` dla misji, w których jedynym wymaganiem pojazdowym jest dokładnie `1 Samochód pożarniczy`,
