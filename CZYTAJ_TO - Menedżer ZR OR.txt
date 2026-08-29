@@ -40,6 +40,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.05
+- poprawiono odczyt misji `Jazda bez tablic rejestracyjnych`: lista z widocznej sekcji `Pojazdy` ma teraz bezwzględne pierwszeństwo nad `mission_help`, nawet gdy tekstowy fallback nie odnajdzie karty,
+- skrypt ma zachować dokładnie widoczne wymagania pojazdów, m.in. `1 OPI`, `1 WRD` i `1 radiowozy WRD lub radiowozy`,
+- `Wymagane Wydziały Ruchu Drogowego` z `mission_help` jest traktowane jako warunek wstępny/specjalizacja misji i nie jest już dodawane do listy pojazdów ZR,
+- dodano jawne przypisanie krótkich etykiet `OPI` i `WRD` do odpowiadających pól pojazdów w edytorze ZR,
+- zmieniono klucz capture, aby test 3.15.05 nie korzystał z danych poprzedniej wersji.
+
 v3.15.04
 - znaleziono właściwą przyczynę pomijania K-9: oficjalny `mission_help` opisuje to wymaganie jako `Potrzeba Jednostki K-9`, a parser obsługiwał tylko prefiksy `Wymagane...` / `Potrzebne...`,
 - dodano jawne rozpoznawanie wiersza `Potrzeba Jednostki K-9 | <ilość>` i zapis wymagania jako `K-9`,

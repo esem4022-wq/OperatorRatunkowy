@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.04
+// @version      3.15.05
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.04';
-    const CAPTURE_KEY = 'or_zr_capture_v31504';
+    const VERSION = '3.15.05';
+    const CAPTURE_KEY = 'or_zr_capture_v31505';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1433,10 +1433,14 @@
             return;
         }
 
-        // Pomiń warunki generowania misji i personel.
+        // Pomiń warunki generowania misji, wymagania budynków/specjalizacji
+        // i personel. `Wymagane Wydziały Ruchu Drogowego` jest warunkiem
+        // wstępnym misji, a NIE pojazdem do wpisania do ZR.
         if (
             nl.includes('posterunk') ||
             nl.includes('rozbudow') ||
+            nl.includes('wydzial ruchu drogowego') ||
+            nl.includes('wydzialy ruchu drogowego') ||
             nl.includes('minimalna liczba') ||
             nl.includes('minimum ') ||
             nl.includes('personel') ||
@@ -1798,6 +1802,47 @@
         });
     }
 
+    function extractAuthoritativeVisibleVehicles(preferredBlock = null, missionName = '') {
+        // v3.15.05: lista `Pojazdy` widoczna na żółtej karcie jest źródłem
+        // prawdy dla ZR. Nie uzależniamy jej od `findCurrentMissionCardText()`,
+        // bo ten fallback potrafi nie znaleźć karty mimo że blok DOM jest już
+        // poprawnie wyrenderowany.
+        const candidates = [];
+        const seen = new Set();
+        const add = el => {
+            if (!el || !el.isConnected || seen.has(el)) return;
+            seen.add(el);
+            candidates.push(el);
+        };
+
+        add(preferredBlock);
+        add(findMissionCardFromVehiclesHeading());
+        add(findExactMissionCardByTitle());
+
+        for (const block of candidates) {
+            const raw = getMissionCardText(block, missionName) ||
+                String(block.innerText || block.textContent || '').replace(/\u00a0/g, ' ').trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) continue;
+
+            const lineVehicles = extractVehiclesFromCardLines(block)
+                .filter(v => Number(v?.count) > 0);
+            if (lineVehicles.length) return lineVehicles;
+
+            const flatVehicles = extractVehiclesFromCardText(raw)
+                .filter(v => Number(v?.count) > 0);
+            if (flatVehicles.length) return flatVehicles;
+        }
+
+        // Ostatni fallback: tekst karty odnaleziony po nazwie misji.
+        const cardText = findCurrentMissionCardText(missionName);
+        if (cardText && /\bPojazdy\b/i.test(cardText)) {
+            return extractVehiclesFromCardText(cardText)
+                .filter(v => Number(v?.count) > 0);
+        }
+        return [];
+    }
+
     async function captureMission() {
         const block = findMissionInfoBlock();
         const cardName = getMissionName(block);
@@ -1842,29 +1887,20 @@
             }
         }
 
-        // v3.14: widoczna żółta karta jest ZAWSZE sprawdzana dla listy pojazdów.
-        // mission_help potrafi zwrócić tylko część wymagań (np. samo OPI), mimo że
-        // na karcie aktualnej misji widnieje również K-9. Jeżeli karta zawiera
-        // jakiekolwiek pojazdy, jej lista jest nadrzędna nad mission_help.
-        // Nie korzystamy z żadnego linku z sekcji „Może się rozwinąć w…”.
-        const cardText = findCurrentMissionCardText(name);
+        // v3.15.05: widoczna sekcja `Pojazdy` ma bezwzględne pierwszeństwo
+        // nad mission_help. Czytamy ją bezpośrednio z prawdziwego bloku DOM,
+        // a dopiero potem z tekstowego fallbacku. Dzięki temu dla np.
+        // `Jazda bez tablic rejestracyjnych` zachowujemy dokładnie:
+        // 1 OPI + 1 WRD + 1 radiowozy WRD lub radiowozy, bez dodawania
+        // warunku wstępnego `Wydziały Ruchu Drogowego` jako pojazdu.
+        const visibleVehicles = extractAuthoritativeVisibleVehicles(block, name);
+        if (visibleVehicles.length) {
+            vehicles = visibleVehicles;
+            source = source ? `${source}+visible_card` : 'visible_card';
+        }
 
-        if (cardText && /\bPojazdy\b/i.test(cardText)) {
-            // v3.15: jeżeli mamy prawdziwy blok żółtej karty, najpierw czytamy
-            // pojazdy WIERSZ PO WIERSZU. To jest ważne dla nazw zawierających
-            // cyfry, np. `K-9`: cyfra 9 jest częścią nazwy pojazdu, a nie ilością.
-            const lineVehicles = extractVehiclesFromCardLines(block)
-                .filter(v => Number(v?.count) > 0);
-            const visibleVehicles = (lineVehicles.length
-                ? lineVehicles
-                : extractVehiclesFromCardText(cardText)
-            ).filter(v => Number(v?.count) > 0);
-
-            if (visibleVehicles.length) {
-                vehicles = visibleVehicles;
-                source = source ? `${source}+visible_card` : 'visible_card';
-            }
-
+        const cardText = getMissionCardText(block, name) || findCurrentMissionCardText(name);
+        if (cardText) {
             // Dla zasobów/pacjentów help nadal może być źródłem pierwszym,
             // a karta uzupełnia brakujące wartości.
             if (!water) water = extractResourceFromText(cardText, 'water') || 0;
@@ -4083,6 +4119,28 @@
                            /(?:^|\s)k\s*9(?:\s|$)/.test(n);
                 });
                 if (k9Field) return k9Field;
+            }
+        }
+
+        // v3.15.05: krótkie etykiety z widocznej karty mapujemy jawnie.
+        // `WRD` z sekcji Pojazdy oznacza pojazd/radiowóz WRD, a nie wymaganie
+        // budynku `Wydział Ruchu Drogowego`.
+        if (req.kind === 'vehicle') {
+            const rn = normalize(req.label).trim();
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+
+            if (rn === 'opi') {
+                const f = vehicleFields.find(x => {
+                    const n = normalize(x.label);
+                    return n === 'opi' || n === 'pojazd opi' || n === 'radiowoz opi';
+                });
+                if (f) return f;
+            }
+
+            if (rn === 'wrd') {
+                const exactNames = ['wrd', 'pojazd wrd', 'radiowoz wrd', 'radiowozy wrd'];
+                const f = vehicleFields.find(x => exactNames.includes(normalize(x.label)));
+                if (f) return f;
             }
         }
 
