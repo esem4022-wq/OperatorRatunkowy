@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.03
+// @version      3.15.04
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.03';
-    const CAPTURE_KEY = 'or_zr_capture_v31503';
+    const VERSION = '3.15.04';
+    const CAPTURE_KEY = 'or_zr_capture_v31504';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1414,6 +1414,14 @@
             return;
         }
 
+        // v3.15.04: Operator zapisuje K-9 w tabeli mission_help jako
+        // `Potrzeba Jednostki K-9 | 1`, a nie jako klasyczne `Wymagane ...`.
+        // Dlatego K-9 rozpoznajemy jawnie przed ogólnym filtrowaniem etykiet.
+        if (/(?:^|\s)(?:jednostk\S*\s+)?k\s*9(?:\s|$)/.test(nl)) {
+            addVehicle(out.vehicles, out.byName, 'K-9', value, null);
+            return;
+        }
+
         // v0.32: help misji ma też tabele informacyjne, np.
         // "Inne informacje | Wartość Maks.". To nie są wymagania ZR.
         if (
@@ -1445,10 +1453,11 @@
             nl.startsWith('wymagana') ||
             nl.startsWith('potrzebne') ||
             nl.startsWith('potrzebny') ||
-            nl.startsWith('potrzebna')
+            nl.startsWith('potrzebna') ||
+            nl.startsWith('potrzeba')
         ) {
             const vehicleLabel = label
-                .replace(/^(?:Wymagan(?:e|y|a)|Potrzebn(?:e|y|a))\s+/i, '')
+                .replace(/^(?:Wymagan(?:e|y|a)|Potrzebn(?:e|y|a)|Potrzeba)\s+/i, '')
                 .replace(/\s+/g, ' ')
                 .trim();
 
@@ -1800,6 +1809,7 @@
         let foam = 0;
         let maxPatients = 0;
         let source = '';
+        let helpK9Count = 0;
 
         // v0.31: pierwszym źródłem jest ukryty #mission_help aktualnej misji.
         // Link zawiera /einsaetze/<typ> + mission_id, więc nie może wskazać
@@ -1816,6 +1826,15 @@
                 foam = parsed.foam || 0;
                 maxPatients = parsed.maxPatients || 0;
                 source = 'mission_help';
+
+                // v3.15.04: zapamiętujemy K-9 z mission_help osobno. Widoczna
+                // karta bywa parsowana częściowo (np. tylko OPI) i może później
+                // zastąpić listę pojazdów. Tego wymagania nie wolno wtedy zgubić.
+                const helpK9 = (Array.isArray(parsed.vehicles) ? parsed.vehicles : []).find(v => {
+                    const n = normalize(v?.label || '');
+                    return /(?:^|\s)(?:jednostk\S*\s+)?k\s*9(?:\s|$)/.test(n);
+                });
+                helpK9Count = Number(helpK9?.count) || 0;
 
                 log('Odczyt z dokładnego #mission_help:', helpUrl, parsed);
             } catch (error) {
@@ -1851,6 +1870,20 @@
             if (!water) water = extractResourceFromText(cardText, 'water') || 0;
             if (!foam) foam = extractResourceFromText(cardText, 'foam') || 0;
             if (!maxPatients) maxPatients = extractMaxPatientsFromText(cardText) || 0;
+        }
+
+        // v3.15.04: jeśli mission_help podał K-9, przywracamy je po ewentualnym
+        // nadpisaniu listy przez częściowo odczytaną widoczną kartę. Dodajemy tylko
+        // K-9, więc nie wraca wcześniejszy problem dublowania OPI/radiowozów.
+        if (helpK9Count > 0) {
+            const repairedVehicles = [];
+            const repairedMap = new Map();
+            for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
+                addVehicle(repairedVehicles, repairedMap, vehicle.label, vehicle.count, vehicle.chance);
+            }
+            addVehicle(repairedVehicles, repairedMap, 'K-9', helpK9Count, null);
+            vehicles = repairedVehicles;
+            source = source ? `${source}+help_k9` : 'help_k9';
         }
 
         // v3.15.02: bezwarunkowy bezpiecznik dla K-9. Nawet jeśli ogólny parser

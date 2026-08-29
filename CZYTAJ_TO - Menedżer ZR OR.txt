@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.03
+Wersja: 3.15.04
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,14 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.04
+- znaleziono właściwą przyczynę pomijania K-9: oficjalny `mission_help` opisuje to wymaganie jako `Potrzeba Jednostki K-9`, a parser obsługiwał tylko prefiksy `Wymagane...` / `Potrzebne...`,
+- dodano jawne rozpoznawanie wiersza `Potrzeba Jednostki K-9 | <ilość>` i zapis wymagania jako `K-9`,
+- parser ogólny obsługuje teraz także prefiks `Potrzeba`,
+- K-9 odczytane z `mission_help` jest zachowywane nawet wtedy, gdy częściowy odczyt widocznej karty zwróci tylko OPI i nadpisze listę pojazdów,
+- zachowano osobny awaryjny odczyt K-9 z widocznej karty oraz dotychczasowe zabezpieczenia przed dublowaniem wymagań,
+- zmieniono klucz capture, aby test 3.15.04 nie korzystał z danych poprzedniej wersji.
+
 v3.15.03
 - poprawiono odczyt `K-9` dla różnych znaków łącznika używanych przez stronę/przeglądarkę (np. zwykły `-`, łącznik nierozdzielający `‑`, półpauza),
 - dodano niezależny parser dokładnego wiersza `<ilość> K-9` bezpośrednio w widocznej żółtej karcie misji, także gdy liczba i nazwa są rozbite na osobne elementy HTML,
