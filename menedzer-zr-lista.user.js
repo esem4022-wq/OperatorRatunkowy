@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.10.14
+// @version      4.00
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '3.10.14');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '4.00');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -30,6 +30,7 @@
         aaos: [],
         categories: new Map(),
         dirty: new Map(),
+        listSelected: new Set(),
         saving: false,
         filter: '',
         categoryFilter: 'all',
@@ -128,6 +129,7 @@
         }
 
         state.dirty.clear();
+        state.listSelected.clear();
         state.copyTargets.clear();
         state.cleanupResults = [];
         state.cleanupMode = null;
@@ -244,10 +246,47 @@
         return out.join('');
     }
 
+    function listVisibleIds() {
+        return sortedFilteredAAOs('list').map(aao => Number(aao.id)).filter(Number.isFinite);
+    }
+
+    function updateListSelectionUI() {
+        const visibleIds = listVisibleIds();
+        const visibleSet = new Set(visibleIds);
+        for (const id of [...state.listSelected]) {
+            if (!state.aaos.some(aao => aao.id === id)) state.listSelected.delete(id);
+        }
+
+        const selectedVisible = visibleIds.filter(id => state.listSelected.has(id));
+        const deleteSelected = document.getElementById('orzr-list-delete-selected');
+        if (deleteSelected) {
+            deleteSelected.disabled = state.deleting || selectedVisible.length === 0;
+            deleteSelected.textContent = state.deleting
+                ? 'Usuwanie…'
+                : `🗑 Usuń zaznaczone (${selectedVisible.length})`;
+        }
+
+        document.querySelectorAll('.orzr-list-select').forEach(cb => {
+            cb.disabled = state.deleting;
+            const id = Number(cb.dataset.id);
+            cb.checked = state.listSelected.has(id);
+        });
+        document.querySelectorAll('.orzr-list-delete-row').forEach(btn => {
+            btn.disabled = state.deleting;
+        });
+
+        const all = document.getElementById('orzr-list-select-all');
+        if (all) {
+            all.disabled = state.deleting || visibleIds.length === 0;
+            all.checked = visibleIds.length > 0 && selectedVisible.length === visibleIds.length;
+            all.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visibleIds.length;
+        }
+    }
+
     function renderTable() {
         const tbody = document.getElementById('orzr-list-body');
         if (!tbody) return;
-        const rows = sortedFilteredAAOs();
+        const rows = sortedFilteredAAOs('list');
         tbody.innerHTML = '';
         const empty = document.getElementById('orzr-empty');
         if (empty) empty.hidden = rows.length > 0;
@@ -258,18 +297,20 @@
             tr.dataset.zrId = aao.id;
             if (state.dirty.has(aao.id)) tr.classList.add('orzr-dirty');
             tr.innerHTML = `
-                <td class="orzr-cleanup-check"><input type="checkbox" class="orzr-zrcheck-select" data-id="${aao.id}" ${state.zrCheckSelected.has(aao.id) ? 'checked' : ''}></td>
+                <td class="orzr-list-check"><input type="checkbox" class="orzr-list-select" data-id="${aao.id}" ${state.listSelected.has(aao.id) ? 'checked' : ''} title="Zaznacz ZR"></td>
                 <td class="orzr-id">${aao.id}</td>
                 <td><input type="text" class="form-control input-sm orzr-caption" value="${escapeHTML(v.caption)}" data-id="${aao.id}"></td>
                 <td><input type="number" class="form-control input-sm orzr-column" value="${Number(v.column) || 1}" min="1" step="1" data-id="${aao.id}"></td>
                 <td><select class="form-control input-sm orzr-category" data-id="${aao.id}">${categoryOptions(v.aao_category_id)}</select></td>
-                <td class="orzr-actions">
+                <td class="orzr-actions orzr-list-actions">
                     <button type="button" class="btn btn-success btn-sm orzr-save-row" data-id="${aao.id}">💾 Zapisz</button>
                     <a class="btn btn-default btn-sm" href="/aaos/${aao.id}/edit" target="_blank" rel="noopener noreferrer">✎ Edycja</a>
+                    <button type="button" class="btn btn-danger btn-sm orzr-list-delete-row" data-id="${aao.id}">🗑 Usuń</button>
                 </td>`;
             tbody.appendChild(tr);
         }
         bindRowEvents();
+        updateListSelectionUI();
         updateStats();
     }
 
@@ -278,6 +319,101 @@
         document.querySelectorAll('.orzr-column').forEach(el => el.addEventListener('input', () => markDirty(Number(el.dataset.id), 'column', Math.max(1, Number.parseInt(el.value, 10) || 1))));
         document.querySelectorAll('.orzr-category').forEach(el => el.addEventListener('change', () => markDirty(Number(el.dataset.id), 'aao_category_id', el.value === '' ? null : Number(el.value))));
         document.querySelectorAll('.orzr-save-row').forEach(el => el.addEventListener('click', () => saveOne(Number(el.dataset.id), el)));
+        document.querySelectorAll('.orzr-list-select').forEach(cb => cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.id);
+            if (cb.checked) state.listSelected.add(id); else state.listSelected.delete(id);
+            updateListSelectionUI();
+        }));
+        document.querySelectorAll('.orzr-list-delete-row').forEach(btn => btn.addEventListener('click', () => deleteOneFromList(Number(btn.dataset.id), btn)));
+
+        const all = document.getElementById('orzr-list-select-all');
+        if (all) {
+            all.onchange = () => {
+                for (const id of listVisibleIds()) {
+                    if (all.checked) state.listSelected.add(id); else state.listSelected.delete(id);
+                }
+                updateListSelectionUI();
+            };
+        }
+    }
+
+    function forgetDeletedAAO(id) {
+        state.dirty.delete(id);
+        state.copyTargets.delete(id);
+        state.listSelected.delete(id);
+        state.cleanupSelected.delete(id);
+        state.pmCheckSelected.delete(id);
+        state.zrCheckSelected.delete(id);
+    }
+
+    async function deleteOneFromList(id, button = null) {
+        if (state.deleting) return;
+        const aao = state.aaos.find(x => x.id === id);
+        if (!aao) return;
+        if (!confirm(`Usunąć ZR „${aao.caption}” (ID ${aao.id})?\n\nTej operacji nie można cofnąć.`)) return;
+
+        state.deleting = true;
+        const oldText = button?.textContent;
+        if (button) button.textContent = 'Usuwam…';
+        updateListSelectionUI();
+        try {
+            setStatus(`Usuwam ZR „${aao.caption}”…`, 'info');
+            state.aaos = await deleteViaNativeEditor(id);
+            forgetDeletedAAO(id);
+            renderActiveTable();
+            setStatus(`Usunięto ZR „${aao.caption}” (ID ${id}).`, 'success');
+        } catch (e) {
+            console.error(TAG, e);
+            setStatus(`Błąd usuwania ZR ${id}: ${e.message || e}`, 'danger');
+        } finally {
+            state.deleting = false;
+            if (button && document.contains(button)) button.textContent = oldText || '🗑 Usuń';
+            updateListSelectionUI();
+            updateStats();
+        }
+    }
+
+    async function deleteSelectedFromList() {
+        if (state.deleting) return;
+        const visibleIds = listVisibleIds();
+        const ids = visibleIds.filter(id => state.listSelected.has(id));
+        if (!ids.length) {
+            setStatus('Nie zaznaczono żadnych widocznych ZR do usunięcia.', 'warning');
+            return;
+        }
+        if (!confirm(`Usunąć zaznaczone ZR (${ids.length})?\n\nTej operacji nie można cofnąć.`)) return;
+
+        state.deleting = true;
+        updateListSelectionUI();
+        let ok = 0, failed = 0;
+        const failedIds = [];
+        try {
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i];
+                const aao = state.aaos.find(x => x.id === id);
+                setStatus(`Usuwam ${i + 1}/${ids.length}: „${aao?.caption ?? `ID ${id}`}”…`, 'info');
+                try {
+                    state.aaos = await deleteViaNativeEditor(id);
+                    forgetDeletedAAO(id);
+                    ok++;
+                } catch (e) {
+                    console.error(TAG, `Błąd usuwania ZR ${id}`, e);
+                    failed++;
+                    failedIds.push(id);
+                }
+            }
+            renderActiveTable();
+            setStatus(
+                failed
+                    ? `Usunięto ${ok} ZR. Błędy: ${failed}${failedIds.length ? ` (ID: ${failedIds.join(', ')})` : ''}.`
+                    : `Usunięto wszystkie zaznaczone ZR: ${ok}.`,
+                failed ? 'warning' : 'success'
+            );
+        } finally {
+            state.deleting = false;
+            updateListSelectionUI();
+            updateStats();
+        }
     }
 
     function getCopyTarget(id) {
@@ -3323,6 +3459,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         const pmCheckTable = document.getElementById('orzr-pmcheck-table');
         const zrCheckTable = document.getElementById('orzr-zrcheck-table');
         const saveAll = document.getElementById('orzr-save-all');
+        const listDeleteSelected = document.getElementById('orzr-list-delete-selected');
         const changedStat = document.getElementById('orzr-changed-stat');
         const copyBulk = document.getElementById('orzr-copy-bulk');
         const cleanupTools = document.getElementById('orzr-cleanup-tools');
@@ -3364,6 +3501,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrListMode === 'deleted' || state.azrUpdateErrors.length === 0;
         if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions || pmChecking || zrChecking;
         if (saveAll) saveAll.hidden = !listing;
+        if (listDeleteSelected) listDeleteSelected.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
         if (normalEmpty && (cleaning || missingAZR || potentialMissions || pmChecking || zrChecking)) normalEmpty.hidden = true;
         if (cleanupEmpty && !cleaning) cleanupEmpty.hidden = true;
@@ -3637,7 +3775,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-tab{border:1px solid #ccc;border-bottom:0;border-radius:5px 5px 0 0;background:#e9e9e9;padding:8px 16px;font-weight:700;cursor:pointer}
 .orzr-tab.orzr-tab-active{background:#fff;color:#337ab7;position:relative;top:1px}
 #orzr-close{border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer}
-#orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 240px 230px auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
+#orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 220px 210px auto auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
 #orzr-toolbar input,#orzr-toolbar select{width:100%}
 #orzr-toolbar[hidden]{display:none}
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
@@ -3664,10 +3802,16 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 #orzr-table th,#orzr-copy-table th,#orzr-cleanup-table th,#orzr-missing-azr-table th,#orzr-pm-table th,#orzr-pmcheck-table th,#orzr-zrcheck-table th,#orzr-azr-update-errors-table th{position:sticky;top:0;z-index:2;background:#eee;border:1px solid #ccc;padding:7px;text-align:left}
 #orzr-table td,#orzr-copy-table td,#orzr-cleanup-table td,#orzr-missing-azr-table td,#orzr-pm-table td,#orzr-pmcheck-table td,#orzr-zrcheck-table td,#orzr-azr-update-errors-table td{border:1px solid #ddd;padding:5px 7px;vertical-align:middle}
 #orzr-table tbody tr.orzr-dirty td{background:#fff8dc}
-#orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:85px}
-#orzr-table th:nth-child(3),#orzr-table td:nth-child(3){width:120px}
-#orzr-table th:nth-child(4),#orzr-table td:nth-child(4){width:280px}
-#orzr-table th:nth-child(5),#orzr-table td:nth-child(5){width:210px}
+/* Lista / edycja: wąskie kolumny techniczne, szeroka nazwa ZR. */
+#orzr-table th:nth-child(1),#orzr-table td:nth-child(1){width:48px;text-align:center;padding-left:3px;padding-right:3px}
+#orzr-table th:nth-child(2),#orzr-table td:nth-child(2){width:78px}
+#orzr-table th:nth-child(4),#orzr-table td:nth-child(4){width:92px}
+#orzr-table th:nth-child(5),#orzr-table td:nth-child(5){width:230px}
+#orzr-table th:nth-child(6),#orzr-table td:nth-child(6){width:270px}
+#orzr-table td:nth-child(3){min-width:280px}
+.orzr-list-check input{width:18px;height:18px;cursor:pointer}
+.orzr-list-actions{white-space:nowrap}
+.orzr-list-actions .btn{margin-right:4px}
 #orzr-copy-table th:nth-child(1),#orzr-copy-table td:nth-child(1){width:80px}
 #orzr-copy-table th:nth-child(3),#orzr-copy-table td:nth-child(3){width:110px}
 #orzr-copy-table th:nth-child(4),#orzr-copy-table td:nth-child(4){width:230px}
@@ -3731,9 +3875,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-check-missing{color:#a94442;font-weight:700;background:#fff5f5}
 .orzr-check-warning{color:#8a6d3b;font-weight:700;background:#fffaf0}
 .orzr-check-note{margin-top:3px;font-size:11px;color:#666;font-weight:400;white-space:normal;overflow-wrap:anywhere}
-#orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden}
+#orzr-azr-update-errors{margin:0 12px 8px;border:1px solid #ebccd1;background:#fff;border-radius:4px;overflow:hidden;flex:0 0 auto}
 #orzr-azr-update-errors[hidden]{display:none}
 .orzr-azr-update-errors-title{padding:8px 10px;background:#f2dede;color:#a94442;font-weight:700;border-bottom:1px solid #ebccd1}
+.orzr-azr-update-errors-scroll{max-height:min(36vh,360px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 #orzr-azr-update-errors-table th:nth-child(1),#orzr-azr-update-errors-table td:nth-child(1){width:90px}
 #orzr-azr-update-errors-table th:nth-child(3),#orzr-azr-update-errors-table td:nth-child(3){width:90px}
 #orzr-azr-update-errors-table th:nth-child(4),#orzr-azr-update-errors-table td:nth-child(4){width:180px}
@@ -3839,6 +3984,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         </select>
         <button id="orzr-refresh" type="button" class="btn btn-default">↻ Odśwież</button>
         <button id="orzr-save-all" type="button" class="btn btn-success" disabled>💾 Zapisz zmienione (0)</button>
+        <button id="orzr-list-delete-selected" type="button" class="btn btn-danger" disabled>🗑 Usuń zaznaczone (0)</button>
     </div>
     <div id="orzr-copy-bulk" hidden>
         <div class="orzr-copy-bulk-group">
@@ -3935,14 +4081,16 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
     <div id="orzr-status" class="orzr-status orzr-status-info" hidden></div>
     <div id="orzr-azr-update-errors" hidden>
         <div class="orzr-azr-update-errors-title">⚠ Błędy aktualizacji AZR: <span id="orzr-azr-update-errors-count">0</span></div>
-        <table id="orzr-azr-update-errors-table">
-            <thead><tr><th>ID AZR</th><th>Nazwa ZR</th><th>ID źródła</th><th>Kategoria źródłowa</th><th>Różnice pojazdów</th><th>Błąd techniczny</th><th>Akcje</th></tr></thead>
-            <tbody id="orzr-azr-update-errors-body"></tbody>
-        </table>
+        <div class="orzr-azr-update-errors-scroll">
+            <table id="orzr-azr-update-errors-table">
+                <thead><tr><th>ID AZR</th><th>Nazwa ZR</th><th>ID źródła</th><th>Kategoria źródłowa</th><th>Różnice pojazdów</th><th>Błąd techniczny</th><th>Akcje</th></tr></thead>
+                <tbody id="orzr-azr-update-errors-body"></tbody>
+            </table>
+        </div>
     </div>
     <div id="orzr-table-wrap">
         <table id="orzr-table">
-            <thead><tr><th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Akcje</th></tr></thead>
+            <thead><tr><th><input id="orzr-list-select-all" type="checkbox" title="Zaznacz / odznacz wszystkie widoczne ZR"></th><th>ID</th><th>Nazwa ZR</th><th>Nr kolumny</th><th>Kategoria</th><th>Akcje</th></tr></thead>
             <tbody id="orzr-list-body"></tbody>
         </table>
         <table id="orzr-copy-table" hidden>
@@ -4025,6 +4173,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             }
         });
         document.getElementById('orzr-save-all').addEventListener('click', saveAllChanged);
+        document.getElementById('orzr-list-delete-selected').addEventListener('click', deleteSelectedFromList);
         document.getElementById('orzr-copy-all-column-apply').addEventListener('click', applyCopyColumnToAllVisible);
         document.getElementById('orzr-copy-all-category-apply').addEventListener('click', applyCopyCategoryToAllVisible);
         document.getElementById('orzr-copy-all-visible').addEventListener('click', copyAllVisible);

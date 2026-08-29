@@ -361,3 +361,14 @@ WERSJA 3.10.14 (TESTOWA)
 - Obsługa `specializations` pozostaje jako dodatkowe źródło dla nowszych formatów API.
 - Przy 3 aktywnych rozbudowach „Rozbudowa o Wydział Ruchu Drogowego” wymaganie 3 WRD powinno dawać „OK (masz 3/3)”.
 - Zachowano wszystkie funkcje testowej v3.10.13.
+
+============================================================
+Wersja 4.00
+============================================================
+- Wspólna numeracja projektu Operator Menadżery przechodzi na serię 4.xx.
+- Zakładka „Lista / edycja”: poprawiono szerokości kolumn i wyrównanie nagłówków z danymi.
+- Dodano checkboxy zaznaczania ZR oraz zaznaczanie wszystkich widocznych pozycji.
+- Dodano przycisk „Usuń” przy każdym ZR.
+- Dodano zbiorczy przycisk „Usuń zaznaczone (N)” dla aktualnie widocznych, zaznaczonych ZR.
+- Lista „Błędy aktualizacji AZR” ma teraz własny pionowy przewijany obszar, dzięki czemu długa lista błędów jest dostępna bez blokowania okna menedżera.
+
