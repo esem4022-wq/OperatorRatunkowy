@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.10
+// @version      3.15.11
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.10';
-    const CAPTURE_KEY = 'or_zr_capture_v31510';
+    const VERSION = '3.15.11';
+    const CAPTURE_KEY = 'or_zr_capture_v31511';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -3503,7 +3503,101 @@
         return null;
     }
 
+    function completeVisibleMissionCardForShortcutRules(missionName = '') {
+        // v3.15.11: dla reguł skrótowych nie wolno brać samego małego
+        // podkontenera `Pojazdy`. W misjach medycznych sekcja `Pacjenci`
+        // bywa rodzeństwem, więc trzeba wejść do wspólnego żółtego kontenera.
+        const heading = findVisibleVehiclesHeading();
+        if (!heading) return null;
+
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const liveKey = exactMissionNameKey(liveName);
+        const candidates = [];
+
+        let cur = heading;
+        for (let depth = 0; depth < 12 && cur; depth++, cur = cur.parentElement) {
+            if (!cur.isConnected || !isDisplayedInInterface(cur)) continue;
+
+            const raw = String(cur.innerText || cur.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+
+            if (!raw || raw.length > 7000) continue;
+            if (!/\bPojazdy\b/i.test(raw)) continue;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) continue;
+
+            const compact = raw.replace(/\s+/g, ' ').trim();
+            const vehicleSegment = getVehiclesTextSegmentFromCardText(raw);
+            if (!vehicleSegment) continue;
+
+            let score = 0;
+            const normalizedRaw = exactMissionNameKey(compact);
+            if (liveKey && normalizedRaw.includes(liveKey)) score += 120;
+            if (isPaleMissionCardBackground(cur)) score += 60;
+            if (/\bPacjent(?:ci)?\b/i.test(raw)) score += 30;
+            if (/\bDokładnie\s+1\s+pacjent\b/i.test(raw) || /\bDokladnie\s+1\s+pacjent\b/i.test(raw)) score += 40;
+            score -= depth * 2;
+            score -= Math.floor(raw.length / 500);
+
+            candidates.push({ el: cur, raw, vehicleSegment, score, len: raw.length });
+        }
+
+        // Jeśli istnieje kandydat z sekcją Pacjenci, preferujemy go. To jest
+        // kluczowe dla `1 Ambulans + Dokładnie 1 pacjent`.
+        const withPatients = candidates.filter(c => /\bPacjent(?:ci)?\b/i.test(c.raw));
+        const pool = withPatients.length ? withPatients : candidates;
+        pool.sort((a, b) => b.score - a.score || a.len - b.len);
+        return pool[0] || null;
+    }
+
+    function universalShortcutTargetFromCompleteCard(missionName = '') {
+        const card = completeVisibleMissionCardForShortcutRules(missionName);
+        if (!card) return null;
+
+        const raw = card.raw;
+        const vehicleKey = normalize(card.vehicleSegment || '');
+        const water = extractResourceFromText(raw, 'water') || 0;
+        const foam = extractResourceFromText(raw, 'foam') || 0;
+        const maxPatients = extractMaxPatientsFromText(raw) || 0;
+        const exactOnePatient =
+            /\bDokładnie\s+1\s+pacjent\b/i.test(raw) ||
+            /\bDokladnie\s+1\s+pacjent\b/i.test(raw) ||
+            maxPatients === 1;
+
+        if (
+            vehicleKey === '1 ambulans' &&
+            exactOnePatient &&
+            water === 0 && foam === 0
+        ) {
+            log('Pełna karta: wymuszam skrót Ambulans (1 Ambulans + dokładnie 1 pacjent).');
+            return 'Ambulans';
+        }
+
+        if (vehicleKey === '1 opi' && maxPatients === 0 && water === 0 && foam === 0) {
+            return 'Radiowóz';
+        }
+
+        if (
+            [
+                '1 samochod pozarniczy',
+                '1 samochody pozarnicze',
+                '1 pojazd strazacki',
+                '1 woz strazacki',
+                '1 wozy strazackie'
+            ].includes(vehicleKey) &&
+            maxPatients === 0 && water === 0 && foam === 0 &&
+            !/\bPacjent(?:ci)?\b/i.test(raw)
+        ) {
+            return 'Straż';
+        }
+
+        return null;
+    }
+
     function visibleSpecialAutoSelectTarget(missionName = '') {
+        const completeCardTarget = universalShortcutTargetFromCompleteCard(missionName);
+        if (completeCardTarget) return completeCardTarget;
+
         const directTarget = directLiteralSpecialTargetFromVisibleCard(missionName);
         if (directTarget) return directTarget;
 
@@ -3758,6 +3852,21 @@
             }
 
             if (!apiAAO) {
+                // v3.15.11: gdy nie znaleziono ZR o nazwie misji, nie kończymy
+                // od razu tej misji. Żółta karta (zwłaszcza sekcja Pacjenci)
+                // potrafi doładować się chwilę później. Bez tego skrypt zapisywał
+                // stan `notfound` zanim zdążył rozpoznać `Ambulans`/`Straż`.
+                if (
+                    !namedSpecialTarget &&
+                    !liveSpecialTarget &&
+                    exactMissionNameKey(targetName) === exactMissionNameKey(matchMissionName) &&
+                    state.autoSelectAttempts < 5
+                ) {
+                    setHeaderAZRLookupState('checking');
+                    scheduleAutoSelectRetry(180);
+                    return;
+                }
+
                 // v3.15.08: dla skrótów Ambulans/Radiowóz/Straż nie kończymy
                 // sprawdzania po pierwszym odczycie API. Lista ZR i żółta karta
                 // potrafią pojawić się w różnej kolejności. Dajemy kilka krótkich
