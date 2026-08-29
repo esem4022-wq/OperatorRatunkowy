@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer załogi OR
 // @namespace    operatorratunkowy.local.crewmanager
-// @version      0.1.1
+// @version      3.02
 // @description  Osobny menedżer personelu i obsady pojazdów w OperatorRatunkowy.pl
 // @author       ChatGPT + użytkownik
 // @license      CC BY-NC-SA 4.0
@@ -17,7 +17,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '0.1.1';
+  const VERSION = '3.02';
   const APP_ID = 'or-crew-manager-v01';
   const PAGE_SIZE = 200;
   const BUILDING_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/buildings';
@@ -157,26 +157,70 @@
     return catalog?.[id] ?? catalog?.[Number(id)] ?? null;
   }
 
-  function typeNameFromCatalog(catalog, id, raw, fallbackPrefix) {
-    const entry = getCatalogEntry(catalog, id);
-    if (typeof entry === 'string') return entry;
-    return String(
-      valueOf(entry, ['caption', 'name', 'label'], null) ??
-      valueOf(raw, ['caption_type', 'type_caption', 'building_type_caption', 'vehicle_type_caption'], null) ??
-      `${fallbackPrefix} ${id || '?'}`
-    );
+  function nonEmptyText(value) {
+    if (value === undefined || value === null) return null;
+    const text = String(value).trim();
+    return text || null;
   }
 
-  function getVehicleMaxCrew(rawVehicle, vehicleCatalog) {
+  function nonEmptyValueOf(obj, keys) {
+    for (const key of keys) {
+      const text = nonEmptyText(obj?.[key]);
+      if (text) return text;
+    }
+    return null;
+  }
+
+  function typeNameFromCatalog(catalog, id, raw, fallbackPrefix) {
+    const entry = getCatalogEntry(catalog, id);
+
+    // Pusty wpis z katalogu LSSM nie jest poprawną nazwą typu. W starszej
+    // wersji pusty string kończył wyszukiwanie i kolumna „Typ” była pusta.
+    if (typeof entry === 'string') {
+      const text = nonEmptyText(entry);
+      if (text) return text;
+    }
+
+    const catalogName = nonEmptyValueOf(entry, ['caption', 'name', 'label']);
+    if (catalogName) return catalogName;
+
+    const apiName = nonEmptyValueOf(raw, [
+      'caption_type',
+      'type_caption',
+      'building_type_caption',
+      'vehicle_type_caption',
+    ]);
+    if (apiName) return apiName;
+
+    // Zawsze pokazujemy ID typu, jeżeli nie znamy jego nazwy. Dzięki temu
+    // zamiast pustej komórki będzie np. „Typ pojazdu 96”.
+    return `${fallbackPrefix} ${id || '?'}`;
+  }
+
+  function getVehicleMaxCrewInfo(rawVehicle, vehicleCatalog) {
     const override = optionalNumber(valueOf(rawVehicle, ['max_personnel_override'], null));
-    if (override !== null) return Math.max(0, Math.round(override));
+
+    // Dodatni override jest rzeczywistym limitem dla konkretnego pojazdu.
+    if (override !== null && override > 0) {
+      return { value: Math.max(0, Math.round(override)), reliable: true, source: 'override' };
+    }
 
     const typeId = String(valueOf(rawVehicle, ['vehicle_type', 'vehicle_type_id', 'type'], ''));
     const entry = getCatalogEntry(vehicleCatalog, typeId);
-    return Math.max(0, Math.round(numberValue(
-      valueOf(entry, ['maxPersonnel', 'max_personnel'], null) ?? entry?.staff?.max,
-      0
-    )));
+    const directCatalogMax = optionalNumber(valueOf(entry, ['maxPersonnel', 'max_personnel'], null));
+    const staffCatalogMax = optionalNumber(entry?.staff?.max);
+    const catalogMax = directCatalogMax !== null && directCatalogMax > 0
+      ? directCatalogMax
+      : staffCatalogMax;
+
+    if (catalogMax !== null && catalogMax > 0) {
+      return { value: Math.max(0, Math.round(catalogMax)), reliable: true, source: 'catalog' };
+    }
+
+    // W API wartość 0 w max_personnel_override może oznaczać brak nadpisania,
+    // dlatego nie uznajemy jej za pewny limit. Dla nowych typów brak w katalogu
+    // uzupełniamy później na podstawie innych pojazdów tego samego ID typu.
+    return { value: 0, reliable: false, source: override === 0 ? 'zero-override' : 'unknown' };
   }
 
   function getAssignedCrew(rawVehicle) {
@@ -191,6 +235,62 @@
     const list = valueOf(rawVehicle, ['assigned_personnel', 'assigned_personal', 'personnel', 'personal'], null);
     if (Array.isArray(list)) return list.length;
     return null;
+  }
+
+  function applyVehicleCrewInference(vehicles) {
+    const inferredByType = new Map();
+
+    // Najpierw zbieramy najlepszą znaną wartość dla każdego rzeczywistego ID typu.
+    // Wiarygodny limit ma pierwszeństwo, ale faktycznie przypisana załoga również
+    // jest dowodem, że maksymalna obsada nie może być od niej mniejsza.
+    for (const v of vehicles) {
+      if (!v.typeId) continue;
+      const candidate = Math.max(
+        v.maxCrewReliable ? v.maxCrew : 0,
+        v.assignedCrew === null ? 0 : v.assignedCrew
+      );
+      if (candidate <= 0) continue;
+      inferredByType.set(v.typeId, Math.max(inferredByType.get(v.typeId) || 0, candidate));
+    }
+
+    for (const v of vehicles) {
+      const inferred = v.typeId ? (inferredByType.get(v.typeId) || 0) : 0;
+
+      // Nie nadpisujemy dodatniego, wiarygodnego override konkretnego pojazdu.
+      // Uzupełniamy tylko brak/zerowy, niewiarygodny limit.
+      if (!v.maxCrewReliable && inferred > v.maxCrew) {
+        v.maxCrew = inferred;
+        v.maxCrewSource = 'type-inferred';
+      }
+
+      // Niezależnie od katalogu limit nie może być niższy niż liczba już
+      // przypisanych osób. Chroni to przed stanem „Max 0 / Przydzielona 2”.
+      if (v.assignedCrew !== null && v.assignedCrew > v.maxCrew) {
+        v.maxCrew = v.assignedCrew;
+        v.maxCrewSource = 'assigned-inferred';
+      }
+
+      v.missingCrew = v.assignedCrew === null ? null : Math.max(0, v.maxCrew - v.assignedCrew);
+    }
+  }
+
+  function recalculateBuildingCrewData(buildings, vehicles) {
+    const vehiclesByBuilding = new Map();
+    for (const v of vehicles) {
+      if (!vehiclesByBuilding.has(v.buildingId)) vehiclesByBuilding.set(v.buildingId, []);
+      vehiclesByBuilding.get(v.buildingId).push(v);
+    }
+
+    for (const b of buildings) {
+      const list = vehiclesByBuilding.get(b.id) || [];
+      b.vehicleCount = list.length;
+      b.vehicleCrewTarget = list.reduce((sum, v) => sum + v.maxCrew, 0);
+      b.personnelBalance = b.personnelCurrent - b.vehicleCrewTarget;
+      b.knownAssignedCrew = list
+        .filter(v => v.assignedCrew !== null)
+        .reduce((sum, v) => sum + v.assignedCrew, 0);
+      b.unknownAssignedVehicles = list.filter(v => v.assignedCrew === null).length;
+    }
   }
 
   function normalizeData(rawBuildings, rawVehicles, buildingCatalog, vehicleCatalog) {
@@ -219,9 +319,8 @@
       const id = String(valueOf(raw, ['id'], ''));
       const buildingId = String(valueOf(raw, ['building_id', 'buildingId'], ''));
       const typeId = String(valueOf(raw, ['vehicle_type', 'vehicle_type_id', 'type'], ''));
-      const maxCrew = getVehicleMaxCrew(raw, vehicleCatalog);
+      const maxCrewInfo = getVehicleMaxCrewInfo(raw, vehicleCatalog);
       const assignedCrew = getAssignedCrew(raw);
-      const missingCrew = assignedCrew === null ? null : Math.max(0, maxCrew - assignedCrew);
       const unit = buildingById.get(buildingId);
       return {
         raw,
@@ -231,32 +330,26 @@
         name: String(valueOf(raw, ['caption', 'name'], `Pojazd ${id}`)),
         typeName: typeNameFromCatalog(vehicleCatalog, typeId, raw, 'Typ pojazdu'),
         buildingName: unit?.name || `Jednostka ${buildingId || '?'}`,
-        maxCrew,
+        maxCrew: maxCrewInfo.value,
+        maxCrewReliable: maxCrewInfo.reliable,
+        maxCrewSource: maxCrewInfo.source,
         assignedCrew,
-        missingCrew,
+        missingCrew: null,
       };
     }).filter(v => v.id);
 
-    const vehiclesByBuilding = new Map();
-    for (const v of vehicles) {
-      if (!vehiclesByBuilding.has(v.buildingId)) vehiclesByBuilding.set(v.buildingId, []);
-      vehiclesByBuilding.get(v.buildingId).push(v);
-    }
+    applyVehicleCrewInference(vehicles);
 
-    const buildings = buildingsBasic.map(b => {
-      const list = vehiclesByBuilding.get(b.id) || [];
-      const vehicleCrewTarget = list.reduce((sum, v) => sum + v.maxCrew, 0);
-      const knownAssignedCrew = list.filter(v => v.assignedCrew !== null).reduce((sum, v) => sum + v.assignedCrew, 0);
-      const unknownAssignedVehicles = list.filter(v => v.assignedCrew === null).length;
-      return {
-        ...b,
-        vehicleCount: list.length,
-        vehicleCrewTarget,
-        personnelBalance: b.personnelCurrent - vehicleCrewTarget,
-        knownAssignedCrew,
-        unknownAssignedVehicles,
-      };
-    });
+    const buildings = buildingsBasic.map(b => ({
+      ...b,
+      vehicleCount: 0,
+      vehicleCrewTarget: 0,
+      personnelBalance: b.personnelCurrent,
+      knownAssignedCrew: 0,
+      unknownAssignedVehicles: 0,
+    }));
+
+    recalculateBuildingCrewData(buildings, vehicles);
 
     buildings.sort((a, b) =>
       a.typeName.localeCompare(b.typeName, 'pl', { numeric: true }) ||
@@ -509,6 +602,65 @@
     if (el) el.textContent = `Zaznaczone: ${state.selectedVehicles.size}`;
   }
 
+  function assignedCrewFromPersonnelForm(form) {
+    if (!form) return null;
+    const { checkbox, multi } = personnelControlsInForm(form);
+    if (checkbox.length) return checkbox.filter(el => el.checked).length;
+    if (multi.length) return [...multi[0].options].filter(option => option.selected).length;
+    return null;
+  }
+
+  async function fetchAssignedCrewDetail(vehicleId) {
+    try {
+      const data = await fetchJson(`/api/v2/vehicles/${encodeURIComponent(vehicleId)}`);
+      const raw = data?.result ?? data;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) return getAssignedCrew(raw);
+    } catch (_) {}
+    return null;
+  }
+
+  async function enrichUnknownVehicleAssignments() {
+    const unknown = state.vehicles.filter(v => v.assignedCrew === null);
+    if (!unknown.length) return { checked: 0, resolved: 0, unresolved: 0 };
+
+    let cursor = 0;
+    let resolved = 0;
+    const workers = Math.min(4, unknown.length);
+
+    async function worker() {
+      while (true) {
+        const index = cursor++;
+        if (index >= unknown.length) return;
+        const v = unknown[index];
+
+        let count = await fetchAssignedCrewDetail(v.id);
+        if (count === null) {
+          try {
+            const native = await findNativeVehiclePersonnelPage(v.id);
+            count = assignedCrewFromPersonnelForm(native?.form || null);
+          } catch (_) {
+            count = null;
+          }
+        }
+
+        if (count !== null) {
+          v.assignedCrew = Math.max(0, Math.round(count));
+          resolved += 1;
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+    applyVehicleCrewInference(state.vehicles);
+    recalculateBuildingCrewData(state.buildings, state.vehicles);
+
+    return {
+      checked: unknown.length,
+      resolved,
+      unresolved: state.vehicles.filter(v => v.assignedCrew === null).length,
+    };
+  }
+
   async function loadData(force = false) {
     if (state.loading) return;
     state.loading = true;
@@ -526,12 +678,27 @@
         fetchCatalog(VEHICLE_CATALOG_URL),
       ]);
       normalizeData(rawBuildings, rawVehicles, buildingCatalog, vehicleCatalog);
+
+      const unknownBefore = state.vehicles.filter(v => v.assignedCrew === null).length;
+      let lookup = { checked: 0, resolved: 0, unresolved: unknownBefore };
+      if (unknownBefore) {
+        setStatus(`Wczytano dane podstawowe. Uzupełniam przydział załogi dla ${unknownBefore} pojazdów…`, 'info');
+        lookup = await enrichUnknownVehicleAssignments();
+      }
+
       state.buildingPage = 1;
       state.vehiclePage = 1;
       rebuildFilterOptions();
       updateSummary();
       renderCurrentTab();
-      setStatus(`Wczytano ${state.buildings.length} jednostek i ${state.vehicles.length} pojazdów.`, 'ok');
+
+      const suffix = lookup.checked
+        ? ` Uzupełniono przydział: ${lookup.resolved}/${lookup.checked}; nadal bez danych: ${lookup.unresolved}.`
+        : '';
+      setStatus(
+        `Wczytano ${state.buildings.length} jednostek i ${state.vehicles.length} pojazdów.${suffix}`,
+        lookup.unresolved ? 'warn' : 'ok'
+      );
     } catch (error) {
       console.error('[OR Crew Manager] Błąd ładowania:', error);
       setStatus(`Błąd ładowania: ${error.message}`, 'error');
@@ -838,8 +1005,10 @@
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      #${APP_ID}-button{position:fixed;right:260px;bottom:18px;z-index:2147483000;border:0;border-radius:999px;background:#455a64;color:#fff;padding:8px 12px;font:700 13px Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer}
+      #${APP_ID}-button{position:fixed;right:260px;bottom:18px;z-index:2147483000;width:150px;height:52px;box-sizing:border-box;border:0;border-radius:999px;background:#455a64;color:#fff;padding:5px 10px;font-family:Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;white-space:nowrap;line-height:1.05}
       #${APP_ID}-button:hover{background:#37474f}
+      #${APP_ID}-button .or-cm-launcher-name{display:block;font-size:13px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+      #${APP_ID}-button .or-cm-launcher-version{display:block;font-size:10px;font-weight:600;opacity:.78;line-height:1.1}
       #${APP_ID}-modal{display:none;position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.52);align-items:center;justify-content:center;font-family:Arial,sans-serif}
       #${APP_ID}-modal.or-cm-open{display:flex}
       .or-cm-window{width:min(1600px,96vw);height:min(900px,92vh);background:#fff;border-radius:9px;box-shadow:0 10px 40px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden}
@@ -860,6 +1029,20 @@
     document.head.appendChild(style);
   }
 
+  function syncLauncherSize(referenceButton) {
+    const btn = document.getElementById(`${APP_ID}-button`);
+    if (!btn || !referenceButton) return false;
+
+    const rect = referenceButton.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 34) return false;
+
+    // Wspólna zasada projektu: przyciski menedżerów mają być jednakowej wielkości.
+    // Menedżer ZR Lista jest przyciskiem referencyjnym, bo Załoga OR stoi bezpośrednio po jego lewej stronie.
+    btn.style.width = `${Math.round(rect.width)}px`;
+    btn.style.height = `${Math.round(rect.height)}px`;
+    return true;
+  }
+
   function positionButton() {
     const btn = document.getElementById(`${APP_ID}-button`);
     if (!btn) return;
@@ -869,6 +1052,7 @@
       [...document.querySelectorAll('button')].find(el => /menedżer\s*zr/i.test(el.textContent || ''));
 
     if (zrButton) {
+      syncLauncherSize(zrButton);
       const rect = zrButton.getBoundingClientRect();
       btn.style.right = `${Math.max(10, Math.round(window.innerWidth - rect.left + 10))}px`;
       btn.style.bottom = `${Math.max(10, Math.round(window.innerHeight - rect.bottom))}px`;
@@ -876,6 +1060,10 @@
     }
 
     // Fallback, gdy Menedżer ZR nie zdążył się jeszcze załadować.
+    // Do czasu pojawienia się przycisku referencyjnego używany jest rozmiar zapasowy 150×52 px.
+    btn.style.width = '150px';
+    btn.style.height = '52px';
+
     const candidates = [
       document.getElementById('or-building-manager-v01-button'),
       document.getElementById('or-fleet-manager-v01-button'),
@@ -894,7 +1082,7 @@
     const button = document.createElement('button');
     button.id = `${APP_ID}-button`;
     button.type = 'button';
-    button.textContent = '👥 Załoga OR';
+    button.innerHTML = `<span class="or-cm-launcher-name">👥 Menedżer załogi OR</span><span class="or-cm-launcher-version">v${VERSION}</span>`;
     document.body.appendChild(button);
 
     const modal = document.createElement('div');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.05
+// @version      3.15.06
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.05';
-    const CAPTURE_KEY = 'or_zr_capture_v31505';
+    const VERSION = '3.15.06';
+    const CAPTURE_KEY = 'or_zr_capture_v31506';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -794,6 +794,11 @@
 
         if (!n || n.length < 2 || n.length > 150) return false;
 
+        // v3.15.06: nazwa wymagania pojazdu musi zawierać co najmniej jedną
+        // literę. Wcześniej techniczny fragment DOM typu `10` mógł przejść
+        // walidację i pojawić się jako wymaganie `10` z przypadkową ilością.
+        if (!/[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(raw)) return false;
+
         const bad = [
             'minut',
             'kredyt',
@@ -983,20 +988,15 @@
         const result = [];
         const map = new Map();
 
-        let lines = getMissionCardLines(block);
-
-        // Część widoków Operatora nie zachowuje nowych linii w innerText karty.
-        // Wtedy budujemy sekwencję z najmniejszych widocznych elementów DOM.
-        if (!lines.some(line => normalize(line) === 'pojazdy' || /^pojazdy\b/i.test(line))) {
-            lines = getMissionCardLeafTexts(block);
-        }
-
+        // v3.15.06: czytamy WYŁĄCZNIE prawdziwe linie innerText żółtej karty.
+        // Nie składamy już listy z przypadkowych najmniejszych span/div, bo na
+        // części misji elementy techniczne formularza dawały fałszywe pary
+        // typu `2` + `10`, co kończyło się wymaganiem `10`.
+        const lines = getMissionCardLines(block);
         if (!lines.length) return result;
 
         let start = lines.findIndex(line => normalize(line) === 'pojazdy');
-        if (start < 0) {
-            start = lines.findIndex(line => /^pojazdy\b/i.test(line));
-        }
+        if (start < 0) start = lines.findIndex(line => /^pojazdy\b/i.test(line));
         if (start < 0) return result;
 
         const isStop = line => {
@@ -1004,6 +1004,8 @@
             return (
                 n === 'pacjenci' ||
                 n === 'personel' ||
+                n.includes('wiezniow') ||
+                n.startsWith('specjalne wymagania') ||
                 n.startsWith('moze sie rozwinac') ||
                 n.startsWith('potrzebna woda') ||
                 n.startsWith('wymagana woda') ||
@@ -1016,6 +1018,8 @@
             );
         };
 
+        let ambiguous = false;
+
         for (let i = start + 1; i < lines.length; i++) {
             const line = lines[i];
             if (isStop(line)) break;
@@ -1023,23 +1027,38 @@
             let count = null;
             let rawLabel = '';
 
-            let m = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
+            const m = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
             if (m) {
                 count = Number.parseInt(m[1], 10);
                 rawLabel = m[2].trim();
+
+                // Jeśli jedna linia zawiera kilka pozycji, np.
+                // `1 OPI 1 WRD 1 radiowozy WRD lub radiowozy`, nie traktujemy
+                // całego ogona jako jednej nazwy. Zwracamy pustą listę, aby
+                // extractAuthoritativeVisibleVehicles użył parsera płaskiego,
+                // który rozdziela kolejne pary ilość+nazwa.
+                if (/\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(rawLabel)) {
+                    ambiguous = true;
+                    break;
+                }
             } else if (/^\s*\d+\s*$/.test(line) && lines[i + 1] && !isStop(lines[i + 1])) {
-                // Niektóre układy HTML rozbijają liczbę i nazwę pojazdu na osobne linie.
+                const next = lines[i + 1].trim();
+                // Liczba i etykieta mogą być rozbite na dwie linie, ale druga
+                // linia musi wyglądać jak rzeczywista nazwa pojazdu.
+                if (!/[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(next) || /^\d+$/.test(next)) continue;
                 count = Number.parseInt(line, 10);
-                rawLabel = lines[++i].trim();
+                rawLabel = next;
+                i++;
             }
 
             if (!count || !rawLabel) continue;
+            if (!looksLikeVehicleLabel(rawLabel)) continue;
 
             const chance = parseChanceFromLabel(rawLabel);
             addVehicle(result, map, rawLabel, count, chance);
         }
 
-        return result;
+        return ambiguous ? [] : result;
     }
 
     function extractVehiclesFromFlatText(block) {
@@ -1803,7 +1822,7 @@
     }
 
     function extractAuthoritativeVisibleVehicles(preferredBlock = null, missionName = '') {
-        // v3.15.05: lista `Pojazdy` widoczna na żółtej karcie jest źródłem
+        // v3.15.06: lista `Pojazdy` widoczna na żółtej karcie jest źródłem
         // prawdy dla ZR. Nie uzależniamy jej od `findCurrentMissionCardText()`,
         // bo ten fallback potrafi nie znaleźć karty mimo że blok DOM jest już
         // poprawnie wyrenderowany.

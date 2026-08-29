@@ -1,4 +1,4 @@
-Menedżer załogi OR v0.1.1
+Menedżer załogi OR v3.02
 
 Plik instalacyjny Tampermonkey:
 menedzer-zalogi-or.user.js
@@ -14,6 +14,44 @@ Zakres:
 - zaznaczanie wielu pojazdów i próba przydziału do maksymalnej obsady przez natywny formularz gry,
 - bezpieczny fallback do otwarcia natywnej strony, jeżeli formularza nie da się automatycznie znaleźć.
 
-Zmiany v0.1.1:
+============================================================
+HISTORIA WERSJI
+============================================================
+
+v0.1.0
+- pierwsza wersja Menedżera załogi OR,
+- utworzony jako osobny menedżer bez usuwania funkcji załogi z innych menedżerów,
+- dodano zakładkę Jednostki z personelem obecnym, docelowym, potrzebą załogi, bilansem i rekrutacją,
+- dodano zakładkę Pojazdy z maksymalną, przydzieloną i brakującą załogą,
+- dodano filtry braków / OK / nadmiaru,
+- dodano zaznaczanie wielu pojazdów i przydział do maksymalnej obsady przez natywny formularz gry,
+- dodano bezpieczny fallback do natywnej strony, gdy formularza nie da się automatycznie znaleźć,
+- dodano obsługę aktualizacji przez GitHub.
+
+v0.1.1
 - przycisk Załoga OR ma w pełni zaokrąglony kształt,
-- przycisk jest pozycjonowany bezpośrednio po lewej stronie przycisku Menedżera ZR.
+- przycisk jest pozycjonowany bezpośrednio po lewej stronie przycisku Menedżera ZR,
+- plik CZYTAJ_TO zachowuje historię wcześniejszych wersji; kolejne zmiany będą dopisywane bez usuwania poprzednich wpisów.
+
+v3.0
+- ujednolicono numerację Menedżera załogi OR z pozostałymi menedżerami Operator Ratunkowy do serii 3.xx,
+- funkcjonalnie wersja bazowa odpowiada wcześniejszej wersji v0.1.1.
+
+v3.01
+- poprawiono odczyt nazwy typu pojazdu: pusty wpis katalogu LSSM nie jest już traktowany jako poprawna nazwa,
+- gdy nazwa typu jest niedostępna, kolumna Typ pokazuje rzeczywiste ID, np. „Typ pojazdu 96”, zamiast pustej komórki,
+- poprawiono odczyt maksymalnej załogi dla nowych/nieznanych typów pojazdów,
+- wartość max_personnel_override = 0 nie jest już automatycznie uznawana za pewny limit 0,
+- brakujący limit załogi jest uzupełniany na podstawie wiarygodnych danych innych pojazdów o tym samym ID typu,
+- faktycznie przypisana liczba osób może podnieść nieznany/zerowy limit, dzięki czemu nie występuje błędny stan „Max 0 / Przydzielona 2 / Nadmiar”,
+- dla pojazdów bez liczby przydzielonej załogi skrypt próbuje pobrać szczegóły pojazdu, a następnie odczytać zaznaczenia z natywnego formularza przydziału,
+- po dodatkowym odczycie ponownie przeliczane są braki pojazdów oraz potrzeba załogi i bilans jednostek.
+
+v3.02
+- dostosowano Menedżer załogi OR do wspólnych zasad projektu „Operator Menadżery”,
+- przycisk menedżera pokazuje teraz nazwę oraz numer wersji w osobnym, mniejszym wierszu pod nazwą,
+- zachowano zaokrąglony wygląd przycisku i pozycję bezpośrednio po lewej stronie Menedżera ZR Lista,
+- rozmiar przycisku jest synchronizowany z przyciskiem Menedżera ZR Lista, aby oba miały jednakową szerokość i wysokość; do czasu załadowania przycisku referencyjnego używany jest rozmiar zapasowy 150×52 px,
+- przycisk nadal jest dostępny wyłącznie na stronie głównej OperatorRatunkowy.pl,
+- zachowano stałą nazwę pliku GitHub `menedzer-zalogi-or.user.js` oraz nagłówki @homepageURL, @updateURL i @downloadURL wskazujące repozytorium `esem4022-wq/OperatorRatunkowy`,
+- wydanie przygotowane jako ZIP z plikiem skryptu i zachowaną historią wersji w `CZYTAJ_TO - Menedżer załogi OR.txt`.

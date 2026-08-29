@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.04
+Wersja: 3.15.06
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,15 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.06
+- naprawiono błędny odczyt widoczny jako wymaganie `10` z ilością `2`; były to techniczne fragmenty DOM, a nie pojazd misji,
+- parser listy `Pojazdy` nie składa już wymagań z przypadkowych najmniejszych elementów `span/div`; najpierw czyta prawdziwe linie żółtej karty,
+- nazwa wymaganego pojazdu musi zawierać co najmniej jedną literę, więc wartości czysto numeryczne nie mogą zostać dodane do ZR,
+- jeśli kilka wymagań znajduje się w jednej linii (np. `1 OPI 1 WRD 1 radiowozy WRD lub radiowozy`), parser automatycznie przełącza się na bezpieczny parser płaskiego segmentu `Pojazdy`,
+- rozszerzono granice sekcji `Pojazdy` o więźniów i specjalne wymagania, aby ich liczby nie zostały pomylone z pojazdami,
+- dla `Jazda bez tablic rejestracyjnych` oczekiwany wynik pozostaje: `1 OPI`, `1 WRD`, `1 radiowozy WRD lub radiowozy`,
+- zmieniono klucz capture, aby test 3.15.06 nie korzystał z błędnego zapisu z 3.15.05.
+
 v3.15.05
 - poprawiono odczyt misji `Jazda bez tablic rejestracyjnych`: lista z widocznej sekcji `Pojazdy` ma teraz bezwzględne pierwszeństwo nad `mission_help`, nawet gdy tekstowy fallback nie odnajdzie karty,
 - skrypt ma zachować dokładnie widoczne wymagania pojazdów, m.in. `1 OPI`, `1 WRD` i `1 radiowozy WRD lub radiowozy`,
