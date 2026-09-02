@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.11
+Wersja: 3.15.12
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -40,6 +40,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.12
+- przy edycji istniejącej ZR kolor tła jest teraz ustawiany na `Bez koloru` (pusta wartość), zamiast na biały `FFFFFF`,
+- kolor tekstu pozostaje ustawiany na `Automatyczny kolor`,
+- dodano obsługę formularzy, w których kolor tła jest selectem, zwykłym polem albo inputem `type=color`,
+- ustawienie dotyczy wyłącznie edycji istniejącej ZR; tworzenie nowej ZR pozostaje bez zmian,
+- zmieniono klucz capture na wersję 3.15.12.
+
 v3.15.11
 - poprawiono ponownie globalną regułę `Ambulans`: skrypt szuka teraz wspólnego, pełnego żółtego kontenera zawierającego sekcję `Pojazdy` oraz sekcję `Pacjenci`, zamiast kończyć analizę na małym podkontenerze `Pojazdy`,
 - przypadek `1 Ambulans` + `Dokładnie 1 pacjent` jest wykrywany bezpośrednio z pełnej widocznej karty i wymusza ZR `Ambulans`, o ile nie ma wody ani piany,
