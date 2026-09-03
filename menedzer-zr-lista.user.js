@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR Lista
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      4.00
+// @version      4.01
 // @description  Osobny menedżer ZR: lista, szybka edycja, kopiowanie, kontrola i synchronizacja AZR, porządkowanie, duplikaty, usuwanie i eksport CSV.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR - lista]';
-    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '4.00');
+    const VERSION = String((typeof GM_info !== 'undefined' && GM_info?.script?.version) || '4.01');
 
     // Przycisk Menedżera ZR Lista ma działać tylko na głównej stronie gry.
     // Nie uruchamiamy skryptu w iframe'ach ani na podstronach/oknach gry.
@@ -34,6 +34,7 @@
         saving: false,
         filter: '',
         categoryFilter: 'all',
+        columnFilter: 'all',
         sort: 'caption-asc',
         activeTab: 'list',
         copyTargets: new Map(),
@@ -150,6 +151,7 @@
         state.zrCheckCategory = 'all';
         state.zrCheckInfrastructure = null;
         populateCategoryFilter();
+        populateColumnFilter();
         populatePMCheckCategoryFilter();
         renderActiveTable();
         updateStats();
@@ -217,6 +219,7 @@
             if (state.categoryFilter === 'with' && v.aao_category_id === null) return false;
             if (!['all', 'none', 'with'].includes(state.categoryFilter) &&
                 Number(state.categoryFilter) !== Number(v.aao_category_id)) return false;
+            if (mode === 'list' && state.columnFilter !== 'all' && Number(state.columnFilter) !== Number(v.column)) return false;
             if (q) {
                 const haystack = normalize(`${v.caption} ${v.column} ${getCategoryName(v.aao_category_id)} ${aao.id}`);
                 if (!haystack.includes(q)) return false;
@@ -228,8 +231,9 @@
             const av = valuesForView(a, mode), bv = valuesForView(b, mode);
             switch (state.sort) {
                 case 'caption-desc': return bv.caption.localeCompare(av.caption, 'pl', { numeric: true, sensitivity: 'base' });
-                case 'column-asc': return Number(av.column) - Number(bv.column) || av.caption.localeCompare(bv.caption, 'pl');
-                case 'column-desc': return Number(bv.column) - Number(av.column) || av.caption.localeCompare(bv.caption, 'pl');
+                case 'column-caption-asc':
+                case 'column-asc': return Number(av.column) - Number(bv.column) || av.caption.localeCompare(bv.caption, 'pl', { numeric: true, sensitivity: 'base' });
+                case 'column-desc': return Number(bv.column) - Number(av.column) || av.caption.localeCompare(bv.caption, 'pl', { numeric: true, sensitivity: 'base' });
                 case 'category-asc': return getCategoryName(av.aao_category_id).localeCompare(getCategoryName(bv.aao_category_id), 'pl', { numeric: true, sensitivity: 'base' }) || av.caption.localeCompare(bv.caption, 'pl');
                 case 'id-asc': return a.id - b.id;
                 default: return av.caption.localeCompare(bv.caption, 'pl', { numeric: true, sensitivity: 'base' });
@@ -310,6 +314,7 @@
             tbody.appendChild(tr);
         }
         bindRowEvents();
+        populateColumnFilter();
         updateListSelectionUI();
         updateStats();
     }
@@ -1310,44 +1315,76 @@ Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy na
         return snapshot;
     }
 
+    function canonicalVehicleFieldIdentity(field) {
+        const name = String(field?.name || '').trim();
+        const label = String(field?.label || '').replace(/\s+/g, ' ').trim();
+
+        // Typy własne pojazdów mają stabilny identyfikator w nazwie pola.
+        const typeId = name.match(/^vehicle_type_ids\[(\d+)\]/i);
+        if (typeId) return { key: `vehicle_type_id:${typeId[1]}`, label: label || `Typ pojazdu ${typeId[1]}` };
+
+        // Gdy etykieta formularza jest czytelna, używamy jej jako wspólnego klucza.
+        // Dzięki temu różne techniczne nazwy pól w źródle i AZR nie tworzą fałszywej różnicy.
+        const normalizedLabel = normalize(label);
+        if (normalizedLabel && !/^vehicle[_\s-]*type[_\s-]*(ids|caption)/.test(normalizedLabel)) {
+            return { key: `label:${normalizedLabel}`, label };
+        }
+
+        // Ostateczny fallback dla pól bez czytelnej etykiety.
+        return { key: `name:${normalize(name)}`, label: label || name || 'Pojazd' };
+    }
+
+    function canonicalVehicleSnapshot(snapshot) {
+        const map = new Map();
+        for (const field of snapshot?.fields || []) {
+            const value = Number(normalizeVehicleRequirementValue(field.rawValue ?? field.value ?? ''));
+            // Zera nie są wymaganiem i różnice w liczbie pustych/technicznych pól formularza ignorujemy.
+            if (!Number.isFinite(value) || value <= 0) continue;
+            const identity = canonicalVehicleFieldIdentity(field);
+            const existing = map.get(identity.key);
+            if (!existing) {
+                map.set(identity.key, { key: identity.key, label: identity.label, value });
+            } else {
+                // Powielone kontrolki tego samego logicznego wymagania nie powinny podwajać liczby pojazdów.
+                existing.value = Math.max(existing.value, value);
+                if ((!existing.label || /^vehicle[_\s-]/i.test(existing.label)) && identity.label) existing.label = identity.label;
+            }
+        }
+        return [...map.values()].sort((a, b) => a.key.localeCompare(b.key, 'pl', { numeric: true, sensitivity: 'base' }));
+    }
+
+    function canonicalVehicleSignature(snapshot) {
+        return canonicalVehicleSnapshot(snapshot).map(item => `${item.key}=${item.value}`).join('\n');
+    }
+
     function vehicleSnapshotsEqual(a, b) {
-        return String(a?.signature ?? '') === String(b?.signature ?? '');
+        return canonicalVehicleSignature(a) === canonicalVehicleSignature(b);
     }
 
     function formatVehicleSnapshot(snapshot) {
-        const items = [];
-        for (const field of snapshot?.fields || []) {
-            const value = normalizeVehicleRequirementValue(field.rawValue ?? field.value ?? '');
-            const numeric = Number(String(value).replace(',', '.'));
-            if (!Number.isFinite(numeric) || numeric <= 0) continue;
-            const label = String(field.label || field.name || field.key || 'Pojazd').replace(/\s+/g, ' ').trim();
-            items.push({ label, value });
-        }
-        items.sort((a, b) => a.label.localeCompare(b.label, 'pl', { numeric: true, sensitivity: 'base' }));
+        const items = canonicalVehicleSnapshot(snapshot)
+            .map(item => ({ label: String(item.label || item.key).replace(/\s+/g, ' ').trim(), value: item.value }))
+            .sort((a, b) => a.label.localeCompare(b.label, 'pl', { numeric: true, sensitivity: 'base' }));
         return items.length ? items.map(item => `${item.label}: ${item.value}`).join(' • ') : 'brak aktywnych pojazdów';
     }
 
     function describeVehicleSnapshotDiff(expectedSnapshot, actualSnapshot) {
-        const expected = new Map((expectedSnapshot?.fields || []).map(field => [field.key, field]));
-        const actual = new Map((actualSnapshot?.fields || []).map(field => [field.key, field]));
+        const expected = new Map(canonicalVehicleSnapshot(expectedSnapshot).map(item => [item.key, item]));
+        const actual = new Map(canonicalVehicleSnapshot(actualSnapshot).map(item => [item.key, item]));
         const keys = [...new Set([...expected.keys(), ...actual.keys()])].sort();
         const rows = [];
 
         for (const key of keys) {
             const exp = expected.get(key);
             const act = actual.get(key);
-            const expValue = normalizeVehicleRequirementValue(exp?.rawValue ?? exp?.value ?? '');
-            const actValue = normalizeVehicleRequirementValue(act?.rawValue ?? act?.value ?? '');
+            const expValue = Number(exp?.value || 0);
+            const actValue = Number(act?.value || 0);
             if (expValue === actValue) continue;
-
-            const label = String(exp?.label || act?.label || exp?.name || act?.name || key).replace(/\s+/g, ' ').trim();
+            const label = String(exp?.label || act?.label || key).replace(/\s+/g, ' ').trim();
             rows.push(`${label}: powinno ${expValue}, w AZR ${actValue}`);
         }
 
         if (rows.length) return rows.join(' • ');
-
-        // Jeżeli formularz gry zmienił kolejność/nazwy techniczne pól, nadal pokaż
-        // użytkownikowi czytelne zestawy pojazdów zamiast pustego komunikatu.
         return `Źródło: ${formatVehicleSnapshot(expectedSnapshot)}\nAZR: ${formatVehicleSnapshot(actualSnapshot)}`;
     }
 
@@ -1405,10 +1442,19 @@ Przed usuwaniem skrypt odświeży listę i przy każdej pozycji sprawdzi, czy na
             }
 
             const sourceByKey = new Map(sourceSnapshot.fields.map(field => [field.key, field]));
+            const sourceByCanonical = new Map();
+            for (const field of sourceSnapshot.fields) {
+                const identity = canonicalVehicleFieldIdentity(field);
+                const numeric = Number(normalizeVehicleRequirementValue(field.rawValue ?? field.value ?? ''));
+                if (!Number.isFinite(numeric) || numeric <= 0) continue;
+                if (!sourceByCanonical.has(identity.key)) sourceByCanonical.set(identity.key, field);
+            }
             let changed = 0;
 
             for (const [key, targetField] of targetByKey.entries()) {
-                const sourceField = sourceByKey.get(key);
+                const targetPseudoField = { name: targetField.name, label: labelForAAOField(doc, targetField) || targetField.name };
+                const canonicalKey = canonicalVehicleFieldIdentity(targetPseudoField).key;
+                const sourceField = sourceByKey.get(key) || sourceByCanonical.get(canonicalKey);
                 const newValue = sourceField ? sourceField.rawValue : '';
                 if (normalizeVehicleRequirementValue(targetField.value) !== normalizeVehicleRequirementValue(newValue)) {
                     setNativeValue(targetField, newValue);
@@ -3500,6 +3546,8 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         if (zrCheckTools) zrCheckTools.hidden = !zrChecking;
         if (azrUpdateErrors) azrUpdateErrors.hidden = !missingAZR || state.azrListMode === 'deleted' || state.azrUpdateErrors.length === 0;
         if (toolbar) toolbar.hidden = cleaning || missingAZR || potentialMissions || pmChecking || zrChecking;
+        const columnFilter = document.getElementById('orzr-filter-column');
+        if (columnFilter) columnFilter.hidden = !listing;
         if (saveAll) saveAll.hidden = !listing;
         if (listDeleteSelected) listDeleteSelected.hidden = !listing;
         if (changedStat) changedStat.hidden = !listing;
@@ -3597,6 +3645,16 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             bulkCategory.innerHTML = categoryOptions(previous === '' ? null : Number(previous));
             if ([...bulkCategory.options].some(o => o.value === previous)) bulkCategory.value = previous;
         }
+    }
+
+    function populateColumnFilter() {
+        const select = document.getElementById('orzr-filter-column');
+        if (!select) return;
+        const old = String(state.columnFilter ?? 'all');
+        const columns = [...new Set(state.aaos.map(aao => Number(currentRowValues(aao.id)?.column ?? aao.column)).filter(n => Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
+        select.innerHTML = '<option value="all">Wszystkie kolumny</option>' + columns.map(n => `<option value="${n}">Kolumna ${n}</option>`).join('');
+        state.columnFilter = [...select.options].some(o => o.value === old) ? old : 'all';
+        select.value = state.columnFilter;
     }
 
     function waitForFrameLoad(frame, timeoutMs = 15000) {
@@ -3775,7 +3833,7 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
 .orzr-tab{border:1px solid #ccc;border-bottom:0;border-radius:5px 5px 0 0;background:#e9e9e9;padding:8px 16px;font-weight:700;cursor:pointer}
 .orzr-tab.orzr-tab-active{background:#fff;color:#337ab7;position:relative;top:1px}
 #orzr-close{border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer}
-#orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 220px 210px auto auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
+#orzr-toolbar{display:grid;grid-template-columns:minmax(280px,1fr) 210px 150px 240px auto auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid #ddd;align-items:center}
 #orzr-toolbar input,#orzr-toolbar select{width:100%}
 #orzr-toolbar[hidden]{display:none}
 #orzr-stats{padding:7px 12px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:12px}
@@ -3974,9 +4032,13 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
             <option value="with">Wszystkie z kategorią</option>
             <option value="none">Bez kategorii</option>
         </select>
+        <select id="orzr-filter-column" class="form-control">
+            <option value="all">Wszystkie kolumny</option>
+        </select>
         <select id="orzr-sort" class="form-control">
             <option value="caption-asc">Nazwa A → Z</option>
             <option value="caption-desc">Nazwa Z → A</option>
+            <option value="column-caption-asc">Kolumna rosnąco + Nazwa A → Z</option>
             <option value="column-asc">Kolumna rosnąco</option>
             <option value="column-desc">Kolumna malejąco</option>
             <option value="category-asc">Kategoria A → Z</option>
@@ -4157,6 +4219,10 @@ Po próbie: nie udało się ponownie odczytać ZR w AZR.`;
         });
         document.getElementById('orzr-filter-category').addEventListener('change', e => {
             state.categoryFilter = e.target.value;
+            renderActiveTable();
+        });
+        document.getElementById('orzr-filter-column').addEventListener('change', e => {
+            state.columnFilter = e.target.value;
             renderActiveTable();
         });
         document.getElementById('orzr-sort').addEventListener('change', e => {

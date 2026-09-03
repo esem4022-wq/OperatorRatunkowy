@@ -372,3 +372,13 @@ Wersja 4.00
 - Dodano zbiorczy przycisk „Usuń zaznaczone (N)” dla aktualnie widocznych, zaznaczonych ZR.
 - Lista „Błędy aktualizacji AZR” ma teraz własny pionowy przewijany obszar, dzięki czemu długa lista błędów jest dostępna bez blokowania okna menedżera.
 
+
+============================================================
+Wersja 4.01
+============================================================
+- Zakładka „Lista / edycja”: dodano osobny filtr po numerze kolumny ZR.
+- Dodano sortowanie „Kolumna rosnąco + Nazwa A → Z”, które najpierw grupuje ZR po rosnącym numerze kolumny, a wewnątrz każdej kolumny sortuje nazwy alfabetycznie.
+- Poprawiono synchronizację pojazdów AZR: porównanie po zapisie korzysta teraz z kanonicznej reprezentacji aktywnych wymagań pojazdowych.
+- Weryfikacja ignoruje kolejność pól, puste/zerowe pola formularza oraz różnice technicznych nazw pól, jeżeli logiczne pojazdy i ich liczby są takie same.
+- Ujednolicono opis różnic pojazdów z tym samym mechanizmem kanonicznym, dzięki czemu identyczne zestawy nie są już zgłaszane jako fałszywy błąd „Weryfikacja pojazdów po zapisie nie powiodła się”.
+- Przy aktualizacji AZR skrypt próbuje dopasować pola najpierw po kluczu formularza, a następnie po kanonicznej tożsamości pojazdu, co zwiększa odporność na różnice nazw technicznych między formularzami.
