@@ -39,6 +39,7 @@ FUNKCJE WERSJI 4.00
     - ikona + nazwa w pierwszej linii,
     - numer wersji w drugiej linii,
     - wyświetlanie tylko na stronie głównej,
+    - zawsze w dolnym rzędzie strony,
     - pozycjonowanie obok pozostałych menedżerów.
 12. Aktualizacja z repozytorium GitHub przez @updateURL i @downloadURL.
 
@@ -72,6 +73,11 @@ UWAGI
 ============================================================
 HISTORIA ZMIAN
 ============================================================
+
+Wersja 4.01
+- Przeniesiono przycisk „Misje sojuszu” na dół strony głównej.
+- Pozycja pionowa przycisku jest teraz stała w dolnym rzędzie niezależnie od położenia innych przycisków menedżerów.
+- Zachowano dopasowanie rozmiaru i ustawianie obok pozostałych menedżerów.
 
 Wersja 4.00
 - Pierwsza wersja Menedżera Generatora Misji Sojuszu.

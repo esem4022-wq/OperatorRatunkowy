@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer Generator Misji Sojuszu
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      4.00
+// @version      4.01
 // @description  Generator dużych misji sojuszu: natywny formularz gry, szablony, podgląd i skalowanie wymagań.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const APP_ID = 'or-alliance-mission-manager';
-    const VERSION = '4.00';
+    const VERSION = '4.01';
     const TAG = '[OR Generator Misji Sojuszu]';
     const STORAGE_URL = `${APP_ID}:native-url`;
     const STORAGE_TEMPLATES = `${APP_ID}:templates`;
@@ -198,16 +198,27 @@
         const launcher = document.getElementById(`${APP_ID}-launcher`);
         if (!launcher) return;
 
+        // Przycisk tego menedżera ma zawsze pozostać w dolnym rzędzie strony głównej.
+        // Inne menedżery służą wyłącznie jako punkt odniesienia w poziomie.
+        launcher.style.bottom = '18px';
+
         const ref = findReferenceButton();
-        if (!ref || ref === launcher) return;
+        if (!ref || ref === launcher) {
+            launcher.style.left = 'auto';
+            launcher.style.right = '18px';
+            return;
+        }
 
         const rect = ref.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
+        if (!rect.width || !rect.height) {
+            launcher.style.left = 'auto';
+            launcher.style.right = '18px';
+            return;
+        }
 
         const gap = 8;
         launcher.style.right = 'auto';
         launcher.style.left = `${Math.max(8, Math.round(rect.left - launcher.offsetWidth - gap))}px`;
-        launcher.style.bottom = `${Math.max(8, Math.round(innerHeight - rect.bottom))}px`;
     }
 
     function syncLauncherSize() {
