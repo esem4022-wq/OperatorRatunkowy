@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.13
+// @version      3.15.14
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.13';
-    const CAPTURE_KEY = 'or_zr_capture_v31513';
+    const VERSION = '3.15.14';
+    const CAPTURE_KEY = 'or_zr_capture_v31514';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -78,6 +78,10 @@
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .toLowerCase()
+            // `ł`/`Ł` nie rozkłada się w NFD do `l` + znak diakrytyczny.
+            // Bez jawnej zamiany filtry typu `Wydziały Ruchu Drogowego`
+            // nie pasowały do wersji ASCII `wydzialy ...`.
+            .replace(/ł/g, 'l')
             .replace(/\u00a0/g, ' ')
             .replace(/[\/|]/g, ' lub ')
             .replace(/[()[\]{},.:;!?]/g, ' ')
@@ -1825,6 +1829,44 @@
         });
     }
 
+    function extractVehiclesDirectlyFromVisiblePojazdyHeading() {
+        // v3.15.14: najbardziej bezpośredni odczyt tego, co użytkownik widzi
+        // pod nagłówkiem `Pojazdy` na żółtej karcie. Nie używamy tu nazwy misji
+        // ani mission_help, dzięki czemu np. `1 OPI` nie może zniknąć przez
+        // błędne rozpoznanie tytułu lub warunku aktywacji misji.
+        const heading = findVisibleVehiclesHeading();
+        if (!heading) return [];
+
+        const candidates = [];
+        let cur = heading;
+
+        for (let depth = 0; depth < 10 && cur; depth++, cur = cur.parentElement) {
+            if (!cur.isConnected) continue;
+
+            const raw = String(cur.innerText || cur.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+
+            // Po wejściu do kontenera obejmującego `Dostępne jednostki`
+            // jesteśmy już poza właściwą kartą misji.
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) {
+                continue;
+            }
+
+            const vehicles = extractVehiclesFromCardText(raw)
+                .filter(v => Number(v?.count) > 0);
+            if (!vehicles.length) continue;
+
+            candidates.push({ vehicles, len: raw.length, depth });
+        }
+
+        // Najmniejszy kontener zawierający nagłówek + listę jest najbliżej
+        // właściwej żółtej karty i najmniej narażony na obce dane strony.
+        candidates.sort((a, b) => a.len - b.len || a.depth - b.depth);
+        return candidates[0]?.vehicles || [];
+    }
+
     function extractStrictVisibleVehicleSection(missionName = '') {
         // v3.15.13: niezależny, prosty odczyt WYŁĄCZNIE sekcji `Pojazdy`
         // z widocznej żółtej karty. Jest to ostatnia warstwa ochronna przed
@@ -1928,9 +1970,13 @@
     }
 
     function extractAuthoritativeVisibleVehicles(preferredBlock = null, missionName = '') {
-        // v3.15.13: bezwzględnie pierwsza jest ścisła lista z widocznej sekcji
-        // `Pojazdy`. Jeśli ją odczytamy, mission_help nie ma prawa podmienić
-        // OPI/WRD ani dopisać warunku `Wydziały Ruchu Drogowego`.
+        // v3.15.14: najpierw czytamy bezpośrednio kartę wskazaną przez widoczny
+        // nagłówek `Pojazdy`. To omija błędne rozpoznanie nazwy/kontenera i
+        // gwarantuje zachowanie pozycji widocznych na ekranie, np. `1 OPI`.
+        const headingVisible = extractVehiclesDirectlyFromVisiblePojazdyHeading();
+        if (headingVisible.length) return headingVisible;
+
+        // Następny fallback: ścisła lista z widocznej sekcji `Pojazdy`.
         const strictVisible = extractStrictVisibleVehicleSection(missionName);
         if (strictVisible.length) return strictVisible;
 
