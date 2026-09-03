@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.12
+// @version      3.15.13
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.12';
-    const CAPTURE_KEY = 'or_zr_capture_v31512';
+    const VERSION = '3.15.13';
+    const CAPTURE_KEY = 'or_zr_capture_v31513';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -813,7 +813,11 @@
             'wartosc maks',
             'wartosc',
             'srednie kredyty',
-            'rodzaj misji'
+            'rodzaj misji',
+            // v3.15.13: wymaganie posiadania WRD jest warunkiem uruchomienia
+            // misji, a nie pojazdem do wysłania. Nigdy nie może trafić do ZR.
+            'wydzial ruchu drogowego',
+            'wydzialy ruchu drogowego'
         ];
 
         if (bad.some(x => n.includes(x))) return false;
@@ -1821,7 +1825,115 @@
         });
     }
 
+    function extractStrictVisibleVehicleSection(missionName = '') {
+        // v3.15.13: niezależny, prosty odczyt WYŁĄCZNIE sekcji `Pojazdy`
+        // z widocznej żółtej karty. Jest to ostatnia warstwa ochronna przed
+        // danymi technicznymi z mission_help (np. `Wydziały Ruchu Drogowego`).
+        const candidates = [];
+        const seen = new Set();
+        const add = el => {
+            if (!el || !el.isConnected || seen.has(el)) return;
+            seen.add(el);
+            candidates.push(el);
+        };
+
+        add(findMissionCardFromVehiclesHeading());
+        add(findExactMissionCardByTitle());
+        add(findMissionInfoBlock());
+
+        const wantedName = exactMissionNameKey(missionName || currentMissionNameForAutoSelect() || '');
+        const resultFromText = raw => {
+            const result = [];
+            const map = new Map();
+            if (!raw) return result;
+
+            const normalizedRaw = String(raw).replace(/\u00a0/g, ' ').replace(/\r/g, '').trim();
+            if (!normalizedRaw || !/\bPojazdy\b/i.test(normalizedRaw)) return result;
+
+            // Najpierw zachowujemy linie — to najwierniej odpowiada temu, co
+            // użytkownik widzi na żółtej karcie.
+            const lines = cleanLines(normalizedRaw);
+            let start = lines.findIndex(line => normalize(line) === 'pojazdy');
+            if (start < 0) start = lines.findIndex(line => /^pojazdy\b/i.test(line));
+
+            const stopLine = line => {
+                const n = normalize(line);
+                return n === 'pacjenci' || n === 'personel' || n.includes('wiezniow') ||
+                    n.startsWith('specjalne wymagania') || n.startsWith('moze sie rozwinac') ||
+                    n.startsWith('potrzebna woda') || n.startsWith('wymagana woda') || n === 'woda' ||
+                    n.startsWith('potrzebna piana') || n.startsWith('wymagana piana') || n === 'piana' ||
+                    n.startsWith('dostepne jednostki') || n.startsWith('alarmowo');
+            };
+
+            if (start >= 0) {
+                for (let i = start + 1; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (stopLine(line)) break;
+
+                    // Jedna linia może zawierać kilka pozycji. Regex rozcina ją
+                    // na kolejne pary `ilość + nazwa`.
+                    const re = /(?:^|\s)(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+                    let m;
+                    let foundInLine = false;
+                    while ((m = re.exec(line)) !== null) {
+                        foundInLine = true;
+                        const count = Number.parseInt(m[1], 10);
+                        const label = m[2].trim();
+                        if (!count || !looksLikeVehicleLabel(label)) continue;
+                        addVehicle(result, map, label, count, parseChanceFromLabel(label));
+                    }
+
+                    // Wariant DOM: liczba i nazwa w osobnych liniach.
+                    if (!foundInLine && /^\d+$/.test(line) && lines[i + 1] && !stopLine(lines[i + 1])) {
+                        const count = Number.parseInt(line, 10);
+                        const label = lines[++i].trim();
+                        if (count && looksLikeVehicleLabel(label)) {
+                            addVehicle(result, map, label, count, parseChanceFromLabel(label));
+                        }
+                    }
+                }
+            }
+
+            if (result.length) return result;
+
+            // Fallback dla kart, których innerText został spłaszczony do jednego ciągu.
+            const segment = getVehiclesTextSegmentFromCardText(normalizedRaw);
+            const re = /(?:^|\s)(\d+)\s+(.+?)(?=\s+\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]|$)/g;
+            let m;
+            while ((m = re.exec(segment)) !== null) {
+                const count = Number.parseInt(m[1], 10);
+                const label = m[2].trim();
+                if (!count || !looksLikeVehicleLabel(label)) continue;
+                addVehicle(result, map, label, count, parseChanceFromLabel(label));
+            }
+            return result;
+        };
+
+        for (const block of candidates) {
+            const raw = String(block.innerText || block.textContent || '').replace(/\u00a0/g, ' ').trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) continue;
+            if (wantedName) {
+                const blockName = exactMissionNameKey(getMissionName(block) || '');
+                // Nie odrzucamy bloku bez rozpoznanej nazwy, ale jeśli rozpoznano
+                // inną nazwę, nie wolno pobrać z niego pojazdów.
+                if (blockName && blockName !== 'misja bez nazwy' && blockName !== wantedName) continue;
+            }
+            const parsed = resultFromText(raw);
+            if (parsed.length) return parsed;
+        }
+
+        const cardText = findCurrentMissionCardText(missionName);
+        return resultFromText(cardText);
+    }
+
     function extractAuthoritativeVisibleVehicles(preferredBlock = null, missionName = '') {
+        // v3.15.13: bezwzględnie pierwsza jest ścisła lista z widocznej sekcji
+        // `Pojazdy`. Jeśli ją odczytamy, mission_help nie ma prawa podmienić
+        // OPI/WRD ani dopisać warunku `Wydziały Ruchu Drogowego`.
+        const strictVisible = extractStrictVisibleVehicleSection(missionName);
+        if (strictVisible.length) return strictVisible;
+
         // v3.15.06: lista `Pojazdy` widoczna na żółtej karcie jest źródłem
         // prawdy dla ZR. Nie uzależniamy jej od `findCurrentMissionCardText()`,
         // bo ten fallback potrafi nie znaleźć karty mimo że blok DOM jest już
@@ -1956,6 +2068,15 @@
             source = source ? `${source}+explicit_k9` : 'explicit_k9';
             log(`Wymuszone wymaganie K-9 z widocznej karty: ${explicitK9Count}`);
         }
+
+        // v3.15.13: końcowy filtr bezpieczeństwa. Nawet jeśli starszy format
+        // mission_help poda warunek aktywacji jako pojazd, nie może on trafić
+        // do panelu ZR.
+        vehicles = (Array.isArray(vehicles) ? vehicles : []).filter(vehicle => {
+            const n = normalize(vehicle?.label || '');
+            return !n.includes('wydzial ruchu drogowego') &&
+                   !n.includes('wydzialy ruchu drogowego');
+        });
 
         if (hasContaminatedVehicleList(vehicles)) {
             console.warn(TAG, 'Odrzucono zanieczyszczoną listę pojazdów:', vehicles);
