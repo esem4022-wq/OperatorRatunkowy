@@ -1,0 +1,84 @@
+MENEDŻER GENERATOR MISJI SOJUSZU
+Operator Ratunkowy
+
+Plik skryptu:
+menedzer-misji-sojuszu.user.js
+
+Repozytorium:
+https://github.com/esem4022-wq/OperatorRatunkowy
+
+============================================================
+OPIS
+============================================================
+
+Menedżer Generator Misji Sojuszu jest osobnym skryptem Tampermonkey przeznaczonym do przygotowywania dużych misji sojuszu w OperatorRatunkowy.pl.
+
+Skrypt nie zastępuje mechanizmu gry i nie wysyła własnych, odtworzonych żądań tworzenia misji. W oknie menedżera wczytywany jest natywny formularz Operator Ratunkowy. Dzięki temu końcowe zatwierdzenie misji nadal odbywa się mechanizmem gry.
+
+Przycisk menedżera jest wyświetlany wyłącznie na stronie głównej gry.
+
+============================================================
+FUNKCJE WERSJI 4.00
+============================================================
+
+1. Automatyczne wykrywanie strony tworzenia dużej misji sojuszu.
+2. Ręczne podanie adresu generatora, jeżeli automatyczne wykrywanie nie znajdzie strony.
+3. Osadzenie natywnego formularza gry bezpośrednio w oknie menedżera.
+4. Otwieranie natywnego generatora w osobnej karcie.
+5. Szablony misji:
+   - zapis bieżących ustawień formularza,
+   - zastosowanie zapisanego szablonu,
+   - usuwanie szablonów,
+   - zapamiętanie ostatnio używanego szablonu.
+6. Podgląd ustawionych wartości formularza.
+7. Automatyczne rozpoznawanie pól wymagań pojazdów.
+8. Skalowanie wymagań pojazdów wskazanym mnożnikiem, np. x0,5, x1,5 lub x2.
+9. Zerowanie wykrytych wymagań pojazdów.
+10. Pola pacjentów, kredytów, czasu, lokalizacji, wody i piany są celowo pomijane przy automatycznym skalowaniu.
+11. Przycisk zgodny z układem pozostałych menedżerów:
+    - ikona + nazwa w pierwszej linii,
+    - numer wersji w drugiej linii,
+    - wyświetlanie tylko na stronie głównej,
+    - pozycjonowanie obok pozostałych menedżerów.
+12. Aktualizacja z repozytorium GitHub przez @updateURL i @downloadURL.
+
+============================================================
+UŻYCIE
+============================================================
+
+1. Zainstaluj plik menedzer-misji-sojuszu.user.js w Tampermonkey.
+2. Otwórz stronę główną OperatorRatunkowy.pl.
+3. Kliknij przycisk „Misje sojuszu”.
+4. Menedżer spróbuje automatycznie znaleźć natywny generator dużej misji sojuszu.
+5. Jeżeli automatyczne wykrywanie się nie powiedzie:
+   - otwórz w grze stronę tworzenia dużej misji sojuszu,
+   - skopiuj jej adres,
+   - wklej adres w pole „Natywny generator”,
+   - naciśnij Enter.
+6. Ustaw misję w natywnym formularzu.
+7. Opcjonalnie zapisz konfigurację jako szablon.
+8. Ostateczne utworzenie misji wykonuj przyciskiem znajdującym się w natywnym formularzu gry.
+
+============================================================
+UWAGI
+============================================================
+
+- Automatyczne wykrywanie opiera się na aktualnych linkach i treści interfejsu gry. Jeśli gra zmieni nazwy lub strukturę nawigacji, nadal można ręcznie podać adres generatora.
+- Szablony są przechowywane lokalnie w przeglądarce.
+- Skrypt nie zapisuje tokenów bezpieczeństwa formularza.
+- Skalowanie wymagań działa wyłącznie na polach rozpoznanych jako wymagania pojazdów. Przed zatwierdzeniem dużej misji zawsze sprawdź wartości w natywnym formularzu.
+- Funkcje wymagające uprawnień sojuszu pozostają zależne od uprawnień konta w grze.
+
+============================================================
+HISTORIA ZMIAN
+============================================================
+
+Wersja 4.00
+- Pierwsza wersja Menedżera Generatora Misji Sojuszu.
+- Dodano przycisk tylko na stronie głównej zgodny z zasadami projektu Operator Menadżery.
+- Dodano natywny formularz gry w oknie menedżera.
+- Dodano automatyczne i ręczne wskazanie generatora dużej misji sojuszu.
+- Dodano szablony konfiguracji.
+- Dodano podgląd ustawień.
+- Dodano skalowanie i zerowanie wykrytych wymagań pojazdów.
+- Dodano obsługę aktualizacji z GitHuba.
