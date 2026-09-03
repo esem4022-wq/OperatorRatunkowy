@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer Generator Misji Sojuszu
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      4.01
+// @version      4.02
 // @description  Generator dużych misji sojuszu: natywny formularz gry, szablony, podgląd i skalowanie wymagań.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -19,7 +19,7 @@
     'use strict';
 
     const APP_ID = 'or-alliance-mission-manager';
-    const VERSION = '4.01';
+    const VERSION = '4.02';
     const TAG = '[OR Generator Misji Sojuszu]';
     const STORAGE_URL = `${APP_ID}:native-url`;
     const STORAGE_TEMPLATES = `${APP_ID}:templates`;
@@ -129,13 +129,17 @@
         style.id = `${APP_ID}-style`;
         style.textContent = `
 #${APP_ID}-launcher{
-    position:fixed;right:540px;bottom:18px;z-index:99990;border:0;border-radius:999px;
-    padding:8px 16px 7px;background:#337ab7;color:#fff;font:600 13px Arial,sans-serif;
-    box-shadow:0 2px 8px rgba(0,0,0,.28);cursor:pointer;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;gap:2px;white-space:nowrap;line-height:1.05;
+    position:fixed;right:18px;bottom:18px;z-index:99990;
+    width:118px;height:52px;box-sizing:border-box;
+    border:0;border-radius:14px;padding:6px 10px;
+    background:#1565c0;color:#fff;cursor:pointer;
+    box-shadow:0 4px 16px rgba(0,0,0,.28);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:Arial,sans-serif;line-height:1.05;white-space:nowrap;
 }
-#${APP_ID}-launcher:hover{background:#286090}
-#${APP_ID}-launcher .or-ams-version{font-size:9px;font-weight:400;opacity:.82;line-height:1}
+#${APP_ID}-launcher:hover{filter:brightness(1.08)}
+#${APP_ID}-launcher .or-ams-name{font-size:13px;font-weight:700;line-height:1.05}
+#${APP_ID}-launcher .or-ams-version{margin-top:3px;font-size:10px;font-weight:400;opacity:.88;line-height:1}
 #${APP_ID}-overlay{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.62);padding:12px;display:none}
 #${APP_ID}-overlay.or-ams-open{display:flex}
 #${APP_ID}-window{width:min(1740px,calc(100vw - 24px));height:calc(100vh - 24px);margin:auto;background:#fff;
@@ -185,51 +189,105 @@
         document.head.appendChild(style);
     }
 
-    function findReferenceButton() {
-        return document.getElementById('orzr-launcher') ||
-            document.getElementById('or-building-manager-v01-button') ||
-            [...document.querySelectorAll('button,a')].find(el => {
-                const text = normalize(el.textContent);
-                return text.includes('menedzer zr') || text.includes('budynki');
-            }) || null;
+    function findFleetButton() {
+        const byId = document.getElementById('or-fleet-manager-v01-button');
+        if (byId) return byId;
+
+        return [...document.querySelectorAll('button,a')].find(el => {
+            if (el.id === `${APP_ID}-launcher`) return false;
+            const text = normalize(el.textContent);
+            if (!text) return false;
+            return text === 'pojazdy' || text.startsWith('pojazdy v') || text.includes(' menedzer pojazdow');
+        }) || null;
+    }
+
+    function isVisibleFixedButton(el) {
+        if (!el || el.id === `${APP_ID}-launcher`) return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 80 || rect.height < 30) return false;
+        if (rect.bottom < innerHeight - 120) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+        return style.position === 'fixed';
+    }
+
+    function bottomManagerButtons() {
+        const knownIds = new Set([
+            'or-fleet-manager-v01-button',
+            'or-building-manager-v01-button',
+            'or-crew-manager-button',
+            'orzr-list-launcher',
+            'orzr-launcher',
+            'or-um-manager-button'
+        ]);
+
+        const labels = [
+            'pojazdy', 'budynki', 'zaloga', 'zr lista', 'menedzer zr',
+            'moje um', 'um', 'punkty poi'
+        ];
+
+        return [...document.querySelectorAll('button,a')].filter(el => {
+            if (!isVisibleFixedButton(el)) return false;
+            if (knownIds.has(el.id)) return true;
+            const text = normalize(el.textContent);
+            return labels.some(label => text.includes(label));
+        });
+    }
+
+    function syncLauncherSize() {
+        const launcher = document.getElementById(`${APP_ID}-launcher`);
+        if (!launcher) return;
+
+        // Wspólna zasada projektu: Pojazdy są wzorcem WYŁĄCZNIE wymiarów.
+        // Gdy przycisk Pojazdy jest obecny, kopiujemy jego rzeczywisty rozmiar 1:1.
+        const fleet = findFleetButton();
+        const rect = fleet?.getBoundingClientRect();
+        if (rect && rect.width >= 80 && rect.height >= 30) {
+            launcher.style.width = `${Math.round(rect.width)}px`;
+            launcher.style.height = `${Math.round(rect.height)}px`;
+        } else {
+            // Wymiary wzorca Pojazdy z aktualnego układu projektu.
+            launcher.style.width = '118px';
+            launcher.style.height = '52px';
+        }
     }
 
     function positionLauncher() {
         const launcher = document.getElementById(`${APP_ID}-launcher`);
         if (!launcher) return;
 
-        // Przycisk tego menedżera ma zawsze pozostać w dolnym rzędzie strony głównej.
-        // Inne menedżery służą wyłącznie jako punkt odniesienia w poziomie.
+        // Menedżer jest zawsze w dolnym rzędzie strony głównej.
         launcher.style.bottom = '18px';
 
-        const ref = findReferenceButton();
-        if (!ref || ref === launcher) {
+        const others = bottomManagerButtons();
+        if (!others.length) {
             launcher.style.left = 'auto';
             launcher.style.right = '18px';
             return;
         }
 
-        const rect = ref.getBoundingClientRect();
-        if (!rect.width || !rect.height) {
+        const rects = others
+            .map(el => el.getBoundingClientRect())
+            .filter(rect => rect.width > 0 && rect.height > 0);
+
+        if (!rects.length) {
             launcher.style.left = 'auto';
             launcher.style.right = '18px';
             return;
         }
 
+        const leftmost = Math.min(...rects.map(rect => rect.left));
         const gap = 8;
-        launcher.style.right = 'auto';
-        launcher.style.left = `${Math.max(8, Math.round(rect.left - launcher.offsetWidth - gap))}px`;
-    }
+        const wantedLeft = Math.round(leftmost - launcher.offsetWidth - gap);
 
-    function syncLauncherSize() {
-        const launcher = document.getElementById(`${APP_ID}-launcher`);
-        const ref = findReferenceButton();
-        if (!launcher || !ref || ref === launcher) return;
-        const rect = ref.getBoundingClientRect();
-        if (rect.width >= 90 && rect.height >= 32) {
-            launcher.style.width = `${Math.round(rect.width)}px`;
-            launcher.style.height = `${Math.round(rect.height)}px`;
-            launcher.style.padding = '0 8px';
+        if (wantedLeft >= 8) {
+            launcher.style.right = 'auto';
+            launcher.style.left = `${wantedLeft}px`;
+        } else {
+            // Gdy dolny rząd jest pełny, zostawiamy przycisk przy lewej krawędzi,
+            // nadal zachowując jego stały rozmiar i dolne położenie.
+            launcher.style.right = 'auto';
+            launcher.style.left = '8px';
         }
     }
 
@@ -247,7 +305,7 @@
         button.id = `${APP_ID}-launcher`;
         button.type = 'button';
         button.title = 'Menedżer Generator Misji Sojuszu';
-        button.innerHTML = `<span>🤝 Misje sojuszu</span><span class="or-ams-version">v${VERSION}</span>`;
+        button.innerHTML = `<span class="or-ams-name">🤝 Misje sojuszu</span><span class="or-ams-version">v${VERSION}</span>`;
         button.addEventListener('click', openManager);
         document.body.appendChild(button);
         schedulePositioning();

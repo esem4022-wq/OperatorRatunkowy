@@ -40,7 +40,8 @@ FUNKCJE WERSJI 4.00
     - numer wersji w drugiej linii,
     - wyświetlanie tylko na stronie głównej,
     - zawsze w dolnym rzędzie strony,
-    - pozycjonowanie obok pozostałych menedżerów.
+    - stałe położenie w dolnym rzędzie strony,
+    - dokładnie taki sam rozmiar jak przycisk `Pojazdy` (wzorzec wymiarów).
 12. Aktualizacja z repozytorium GitHub przez @updateURL i @downloadURL.
 
 ============================================================
@@ -73,6 +74,16 @@ UWAGI
 ============================================================
 HISTORIA ZMIAN
 ============================================================
+
+Wersja 4.02
+- Dostosowano przycisk do wspólnych zasad projektu „Operator Menadżery”.
+- Wzorem szerokości i wysokości jest wyłącznie przycisk `Pojazdy`.
+- Ustawiono awaryjne wymiary zgodne z aktualnym wzorcem `Pojazdy`: 118 × 52 px.
+- Zachowano układ: ikona + nazwa w pierwszej linii, numer wersji w drugiej linii.
+- Numer wersji na przycisku nie jest pogrubiony.
+- Przycisk pozostaje wyłącznie na stronie głównej i w dolnym rzędzie.
+- Pozycjonowanie omija pozostałe przyciski menedżerów, aby ograniczyć nakładanie.
+- Zachowano stałą nazwę pliku `.user.js` i adresy aktualizacji GitHub.
 
 Wersja 4.01
 - Przeniesiono przycisk „Misje sojuszu” na dół strony głównej.
