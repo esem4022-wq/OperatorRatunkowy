@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.21
+// @version      3.15.22
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.21';
+    const VERSION = '3.15.22';
     const CAPTURE_KEY = 'or_zr_capture_v31521';
     const MAP_KEY = 'or_zr_map_v020';
 
@@ -4100,7 +4100,55 @@
         return null;
     }
 
+    function exactAmbulanceShortcutFromNamedMissionCard(missionName = '') {
+        // v3.15.22: najprostsza i najwyżej priorytetowa reguła dla misji
+        // medycznych widocznych jako:
+        //   Pojazdy -> 1 Ambulans
+        //   Pacjenci -> Dokładnie 1 pacjent
+        // Czytamy kartę dopasowaną po TYTULE aktualnej misji, a nie dowolny
+        // element z napisem `Pojazdy`. Dzięki temu nie przegrywamy z mniejszym
+        // podkontenerem ani z inną częścią interfejsu.
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const liveKey = exactMissionNameKey(liveName);
+        const card = findExactMissionCardByTitle();
+        if (!card || !card.isConnected || !isDisplayedInInterface(card)) return null;
+
+        const raw = String(card.innerText || card.textContent || '')
+            .replace(/\u00a0/g, ' ')
+            .trim();
+        if (!raw || !/\bPojazdy\b/i.test(raw)) return null;
+
+        // Jeśli udało się odczytać nazwę, karta musi należeć dokładnie do
+        // bieżącej misji.
+        if (liveKey && !exactMissionNameKey(raw).includes(liveKey)) return null;
+
+        const onePatient =
+            /\bDokładnie\s+1\s+pacjent\b/i.test(raw) ||
+            /\bDokladnie\s+1\s+pacjent\b/i.test(raw) ||
+            extractMaxPatientsFromText(raw) === 1;
+        if (!onePatient) return null;
+
+        // Bierzemy WYŁĄCZNIE tekst między nagłówkiem Pojazdy i Pacjenci.
+        // Ten zapis działa zarówno przy zachowanych nowych liniach, jak i gdy
+        // Operator spłaszczy cały blok do jednego ciągu.
+        const sectionMatch = raw.match(/\bPojazdy\b([\s\S]*?)(?=\bPacjenci\b|$)/i);
+        if (!sectionMatch) return null;
+
+        const vehicleSection = normalize(sectionMatch[1]);
+        if (vehicleSection !== '1 ambulans') return null;
+
+        // Woda/piana wykluczają skrót Ambulans. Procent transportu i LPR nie.
+        if ((extractResourceFromText(raw, 'water') || 0) > 0) return null;
+        if ((extractResourceFromText(raw, 'foam') || 0) > 0) return null;
+
+        log('Karta po dokładnym tytule: 1 Ambulans + dokładnie 1 pacjent -> ZR Ambulans.');
+        return 'Ambulans';
+    }
+
     function visibleSpecialAutoSelectTarget(missionName = '') {
+        const exactAmbulanceTarget = exactAmbulanceShortcutFromNamedMissionCard(missionName);
+        if (exactAmbulanceTarget) return exactAmbulanceTarget;
+
         const completeCardTarget = universalShortcutTargetFromCompleteCard(missionName);
         if (completeCardTarget) return completeCardTarget;
 
