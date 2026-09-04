@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.22
+Wersja: 3.15.24
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -42,6 +42,21 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.24
+- przebudowano najwyżej priorytetowe rozpoznawanie prostych skrótów bezpośrednio z widocznej żółtej karty misji, niezależnie od `mission_help`,
+- globalna reguła `1 Ambulans` + `Dokładnie 1 pacjent` wymusza ZR `Ambulans`; procent transportu i LPR nie blokują tej reguły,
+- globalna reguła `Pojazdy -> 1 OPI` bez pacjentów, wody i piany wymusza ZR `Radiowóz`,
+- utrzymano analogiczną globalną regułę `Straż` dla jedynego `1 Samochodu pożarniczego`,
+- odczyt skrótów działa na spłaszczonym tekście tylko w obrębie widocznej karty aktualnej misji i wymaga dokładnej zawartości sekcji `Pojazdy`, co zapobiega fałszywym skrótom przy dodatkowych pojazdach,
+- zachowano wszystkie zmiany v3.15.23, w tym pozostawanie na `AZR` po skutecznym zaznaczeniu.
+
+v3.15.23
+- poprawiono auto-zaznaczanie `Ambulans` dla kart `Pojazdy -> 1 Ambulans` + `Pacjenci -> Dokładnie 1 pacjent`,
+- dodano dosłowny odczyt tej kombinacji bez zależności od `mission_help` i parsera pól edytora,
+- skróty `Ambulans`, `Radiowóz` i `Straż` mogą być klikane bezpośrednio po nazwie w widocznej kategorii `AZR`, nawet gdy API listy ZR jest chwilowo opóźnione,
+- jeśli pierwsza próba zakończyła się `notfound`, a pełna karta misji doładuje się później i ujawni regułę skrótową, skrypt ponawia sprawdzenie AZR zamiast pozostawać trwale w stanie `notfound`,
+- obsługa ukrytego AZR nadal pozostaje wyłączona; po skutecznym wyborze skrypt pozostaje na `AZR`.
+
 v3.15.22
 - poprawiono auto-zaznaczanie ZR `Ambulans` dla misji, w których widoczna karta zawiera jednocześnie `1 Ambulans` w sekcji `Pojazdy` oraz `Dokładnie 1 pacjent`,
 - dodano najwyżej priorytetową kontrolę pełnej żółtej karty dopasowanej po dokładnym tytule aktualnej misji; skrypt nie opiera tej reguły na przypadkowym podkontenerze `Pojazdy`,
