@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.15
+Wersja: 3.15.16
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -41,6 +41,13 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.16
+- poprawiono odczyt cysterny z wodą `SCCn`: skrypt ma osobny bezpiecznik wyszukujący wpis typu `1 SCCn` bezpośrednio w widocznej sekcji `Pojazdy`,
+- jeśli widoczny parser pominie `SCCn`, wymaganie jest przywracane z widocznej karty albo z `mission_help`,
+- dodano jawne mapowanie `SCCn` do pola ZR cysterny z wodą / `Cysterna`, aby skrót nie pozostawał jako `— nie przypisano —`,
+- zachowano wszystkie pozostałe wymagania misji, m.in. wodę, pacjentów i pozostałe pojazdy,
+- zmieniono klucz capture na wersję 3.15.16, żeby test nie korzystał ze starego zapisu.
+
 v3.15.15
 - podczas edycji istniejącej ZR skrypt nie zmienia już koloru tła — zachowuje dokładnie wartość zapisaną w edytowanej ZR,
 - pozostawiono ustawianie koloru tekstu na `Automatyczny kolor`,

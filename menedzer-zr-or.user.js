@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.15
+// @version      3.15.16
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.15';
-    const CAPTURE_KEY = 'or_zr_capture_v31515';
+    const VERSION = '3.15.16';
+    const CAPTURE_KEY = 'or_zr_capture_v31516';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1741,6 +1741,52 @@
         return 0;
     }
 
+    function sccnCountFromText(text) {
+        const raw = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!raw) return 0;
+
+        // SCCn = cysterna/samochód-cysterna z wodą.
+        // Ilość musi stać bezpośrednio przed skrótem.
+        const m = raw.match(/(?:^|\s)(\d+)\s+SCCn(?=\s|$)/i);
+        if (!m) return 0;
+        const count = Number.parseInt(m[1], 10);
+        return Number.isFinite(count) && count > 0 ? count : 0;
+    }
+
+    function extractExplicitSCCnCountFromVisibleCard(preferredBlock = null) {
+        const candidates = [];
+        const seen = new Set();
+        const add = el => {
+            if (!el || !el.isConnected || seen.has(el)) return;
+            seen.add(el);
+            candidates.push(el);
+        };
+
+        add(preferredBlock);
+        add(findMissionCardFromVehiclesHeading());
+        add(findExactMissionCardByTitle());
+        add(findMissionInfoBlock());
+
+        for (const block of candidates) {
+            const raw = String(block.innerText || block.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) continue;
+
+            const segment = getVehiclesTextSegmentFromCardText(raw);
+            const count = sccnCountFromText(segment || raw);
+            if (count > 0) return count;
+        }
+
+        const missionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame() || '';
+        const cardText = findCurrentMissionCardText(missionName);
+        return sccnCountFromText(getVehiclesTextSegmentFromCardText(cardText));
+    }
+
     function extractExplicitK9CountFromVisibleCard(preferredBlock = null) {
         // v3.15.03: K-9 czytamy niezależną ścieżką bez polegania na mission_help
         // ani na ogólnym parserze pojazdów. Obsługujemy też nierozdzielającą
@@ -2032,6 +2078,7 @@
         let maxPatients = 0;
         let source = '';
         let helpK9Count = 0;
+        let helpSCCnCount = 0;
 
         // v0.31: pierwszym źródłem jest ukryty #mission_help aktualnej misji.
         // Link zawiera /einsaetze/<typ> + mission_id, więc nie może wskazać
@@ -2057,6 +2104,11 @@
                     return /(?:^|\s)(?:jednostk\S*\s+)?k\s*9(?:\s|$)/.test(n);
                 });
                 helpK9Count = Number(helpK9?.count) || 0;
+
+                const helpSCCn = (Array.isArray(parsed.vehicles) ? parsed.vehicles : []).find(v =>
+                    normalize(v?.label || '') === 'sccn'
+                );
+                helpSCCnCount = Number(helpSCCn?.count) || 0;
 
                 log('Odczyt z dokładnego #mission_help:', helpUrl, parsed);
             } catch (error) {
@@ -2113,6 +2165,22 @@
             vehicles = repairedVehicles;
             source = source ? `${source}+explicit_k9` : 'explicit_k9';
             log(`Wymuszone wymaganie K-9 z widocznej karty: ${explicitK9Count}`);
+        }
+
+        // v3.15.16: SCCn ma osobny bezpiecznik. W części misji (np. Pożar bloku)
+        // ogólny parser potrafił pominąć `1 SCCn`, mimo że wpis był widoczny.
+        const explicitSCCnCount = extractExplicitSCCnCountFromVisibleCard(block);
+        const sccnCount = explicitSCCnCount || helpSCCnCount;
+        if (sccnCount > 0) {
+            const repairedVehicles = [];
+            const repairedMap = new Map();
+            for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
+                addVehicle(repairedVehicles, repairedMap, vehicle.label, vehicle.count, vehicle.chance);
+            }
+            addVehicle(repairedVehicles, repairedMap, 'SCCn', sccnCount, null);
+            vehicles = repairedVehicles;
+            source = source ? `${source}+sccn` : 'sccn';
+            log(`Wymuszone wymaganie SCCn: ${sccnCount}`);
         }
 
         // v3.15.13: końcowy filtr bezpieczeństwa. Nawet jeśli starszy format
@@ -4629,7 +4697,8 @@
             [/sh lub sd/g, ' drabina sh sd '],
             [/slop lub slrr/g, ' oficer operacyjny slop slrr '],
             [/slop slrr/g, ' oficer operacyjny slop slrr '],
-            [/cysterny?/g, ' cysterna '],
+            [/sccn/g, ' sccn cysterna woda '],
+            [/cysterny?/g, ' cysterna woda '],
             [/piana gasnicza/g, ' piana '],
             [/(?:^|\s)k\s*9(?:\s|$)/g, ' k9 pies policyjny '],
             [/^opi$/g, ' opi furgonetka policja '],
@@ -4677,6 +4746,28 @@
         if (manualName) {
             const f = state.fields.find(x => x.name === manualName);
             if (f) return f;
+        }
+
+        // v3.15.16: SCCn mapujemy jawnie do pola cysterny z wodą.
+        if (req.kind === 'vehicle' && normalize(req.label).trim() === 'sccn') {
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+            const exactNames = [
+                'sccn',
+                'cysterna',
+                'cysterna z woda',
+                'cysterna wody',
+                'samochod cysterna',
+                'samochod cysterna z woda',
+                'samochod cysterna wody'
+            ];
+            const exact = vehicleFields.find(x => exactNames.includes(normalize(x.label)));
+            if (exact) return exact;
+
+            const fallback = vehicleFields.find(x => {
+                const n = normalize(x.label);
+                return n.includes('cysterna') && !n.includes('piana');
+            });
+            if (fallback) return fallback;
         }
 
         // v3.15: K-9 ma cyfrę w nazwie, dlatego obsługujemy go jawnie i nie
