@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.19
+// @version      3.15.20
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.19';
-    const CAPTURE_KEY = 'or_zr_capture_v31519';
+    const VERSION = '3.15.20';
+    const CAPTURE_KEY = 'or_zr_capture_v31520';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1423,6 +1423,27 @@
             (nl.includes('pacjent') && nl.includes('maks'))
         ) {
             out.maxPatients = Math.max(out.maxPatients, value);
+            return;
+        }
+
+        // v3.15.20: wymaganie SCCn jest w mission_help opisane jako
+        // `Wymagane cysterny z wodą | 1`. To MUSI zostać rozpoznane przed
+        // ogólną obsługą zasobu `woda`, inaczej liczba cystern była błędnie
+        // traktowana jako ilość litrów wody i SCCn znikało z listy ZR.
+        if (
+            (nl.includes('cysterna') || nl.includes('cysterny')) &&
+            nl.includes('woda') &&
+            (
+                nl.startsWith('wymagane') ||
+                nl.startsWith('wymagany') ||
+                nl.startsWith('wymagana') ||
+                nl.startsWith('potrzebne') ||
+                nl.startsWith('potrzebny') ||
+                nl.startsWith('potrzebna') ||
+                nl.startsWith('potrzeba')
+            )
+        ) {
+            addVehicle(out.vehicles, out.byName, 'SCCn', value, null);
             return;
         }
 

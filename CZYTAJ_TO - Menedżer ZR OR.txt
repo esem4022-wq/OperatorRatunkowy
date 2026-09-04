@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.19
+Wersja: 3.15.20
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -41,6 +41,12 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.20
+- naprawiono właściwą przyczynę braku SCCn: w `mission_help` pozycja jest opisana jako `Wymagane cysterny z wodą`, a wcześniejszy parser widząc słowo `woda` traktował wartość `1` jako zasób wody zamiast pojazdu,
+- wymagania `cysterna/cysterny z wodą` są teraz rozpoznawane przed ogólną obsługą `Woda` i kanonizowane do pojazdu `SCCn`,
+- zachowano osobne wymaganie `42000 Woda` oraz wszystkie pozostałe pojazdy misji,
+- zmieniono klucz capture, aby test nie korzystał z danych zapisanych przez wcześniejsze wersje.
+
 v3.15.19
 - przebudowano po raz kolejny odczyt `SCCn`: dodano niezależny parser `textContent`/`innerText`, który nie wymaga podziału sekcji `Pojazdy` na osobne linie,
 - `SCCn` jest wykrywane również wtedy, gdy gra rozdzieli litery albo ilość i skrót na osobne elementy HTML lub wstawi niewidoczne znaki,
