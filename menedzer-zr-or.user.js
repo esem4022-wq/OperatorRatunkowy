@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.18
+// @version      3.15.19
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.18';
-    const CAPTURE_KEY = 'or_zr_capture_v31518';
+    const VERSION = '3.15.19';
+    const CAPTURE_KEY = 'or_zr_capture_v31519';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1756,6 +1756,126 @@
         return Number.isFinite(count) && count > 0 ? count : 0;
     }
 
+    function looseVehicleSectionText(text) {
+        // v3.15.19: wersja niezależna od podziału DOM na linie. textContent
+        // potrafi skleić elementy karty, dlatego wycinamy sekcję `Pojazdy`
+        // również wtedy, gdy przed/po nagłówku nie ma znaku nowej linii.
+        let raw = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/[\u200B-\u200D\u2060\uFEFF]/g, ' ')
+            .replace(/\r/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!raw) return '';
+
+        const start = raw.search(/\bPojazdy\b/i);
+        if (start < 0) return '';
+        raw = raw.slice(start).replace(/^.*?\bPojazdy\b\s*/i, '');
+
+        const stops = [
+            /\s+Pacjenci\b/i,
+            /\s+Personel\b/i,
+            /\s+Dostępne jednostki\b/i,
+            /\s+Dostepne jednostki\b/i,
+            /\s+Alarmowo\b/i,
+            /\s+Może się rozwinąć\b/i,
+            /\s+Moze sie rozwinac\b/i
+        ];
+        let cut = raw.length;
+        for (const re of stops) {
+            const m = re.exec(raw);
+            if (m && m.index < cut) cut = m.index;
+        }
+        return raw.slice(0, cut).trim();
+    }
+
+    function sccnCountFromLooseText(text) {
+        // `SCCn` może zostać rozdzielone przez niewidoczne znaki albo elementy
+        // HTML. Akceptujemy takie separatory między literami, ale ilość nadal
+        // musi bezpośrednio poprzedzać skrót, aby nie złapać nazwy własnego auta.
+        const raw = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/[\u200B-\u200D\u2060\uFEFF]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!raw) return 0;
+
+        const sep = '[\\s\\-‐‑‒–—―_./]*';
+        const re = new RegExp(`(?:^|\\s)(\\d+)\\s+S${sep}C${sep}C${sep}n(?=\\s|$)`, 'i');
+        const m = raw.match(re);
+        if (!m) return 0;
+        const count = Number.parseInt(m[1], 10);
+        return Number.isFinite(count) && count > 0 ? count : 0;
+    }
+
+    function extractSCCnFromCurrentMissionCard(preferredBlock = null, missionName = '') {
+        // v3.15.19: ostatnia, maksymalnie bezpośrednia ścieżka. Czytamy zarówno
+        // innerText jak i textContent kilku kandydatów karty. Nie korzystamy tu
+        // z ogólnego parsera pojazdów ani z mission_help.
+        const candidates = [];
+        const seen = new Set();
+        const add = el => {
+            if (!el || !el.isConnected || seen.has(el)) return;
+            seen.add(el);
+            candidates.push(el);
+        };
+
+        add(preferredBlock);
+        add(findMissionCardFromVehiclesHeading());
+        add(findExactMissionCardByTitle());
+        add(findMissionInfoBlock());
+
+        for (const el of candidates) {
+            for (const raw of [el.innerText, el.textContent]) {
+                const section = looseVehicleSectionText(raw);
+                if (!section) continue;
+                const count = sccnCountFromLooseText(section);
+                if (count > 0) return count;
+            }
+        }
+
+        // Szukamy elementów zawierających sam skrót i sprawdzamy sekcję Pojazdy
+        // kolejnych rodziców. To obsługuje przypadek, gdy liczba i `SCCn` są
+        // osobnymi spanami/kolumnami.
+        for (const el of document.querySelectorAll('span,div,p,li,td,dd,strong,b')) {
+            if (!el.isConnected) continue;
+            const own = String(el.textContent || '')
+                .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+                .replace(/[^A-Za-z]/g, '')
+                .toLowerCase();
+            if (own !== 'sccn') continue;
+
+            let parent = el;
+            for (let depth = 0; depth < 12 && parent; depth++, parent = parent.parentElement) {
+                const section = looseVehicleSectionText(parent.textContent || parent.innerText || '');
+                if (!section) continue;
+                const count = sccnCountFromLooseText(section);
+                if (count > 0) return count;
+            }
+        }
+
+        // Ostatni fallback jest ograniczony do fragmentu zaczynającego się od
+        // nazwy bieżącej misji, dzięki czemu nie bierzemy SCCn z listy dostępnych
+        // jednostek ani z innego okna misji.
+        const cleanName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect() || exactMissionTitleFromGame());
+        if (cleanName) {
+            for (const whole of [document.body?.innerText || '', document.body?.textContent || '']) {
+                const lower = String(whole).toLocaleLowerCase('pl-PL');
+                const wanted = cleanName.toLocaleLowerCase('pl-PL');
+                let pos = lower.indexOf(wanted);
+                while (pos >= 0) {
+                    const windowText = String(whole).slice(pos, pos + 12000);
+                    const section = looseVehicleSectionText(windowText);
+                    const count = sccnCountFromLooseText(section);
+                    if (count > 0) return count;
+                    pos = lower.indexOf(wanted, pos + Math.max(1, wanted.length));
+                }
+            }
+        }
+
+        return 0;
+    }
+
     function vehicleSectionRawText(text) {
         // Zachowujemy znaki nowych linii i wycinamy tylko sekcję Pojazdy.
         // To jest bardziej odporne niż spłaszczony parser, gdy karta i lista
@@ -2292,6 +2412,7 @@
 
         // v3.15.16: SCCn ma osobny bezpiecznik. W części misji (np. Pożar bloku)
         // ogólny parser potrafił pominąć `1 SCCn`, mimo że wpis był widoczny.
+        const hardVisibleSCCnCount = extractSCCnFromCurrentMissionCard(block, name);
         const directSCCnCount = sccnCountFromText(visibleVehicleSectionTextFromHeading());
         const explicitSCCnCount = extractExplicitSCCnCountFromVisibleCard(block);
         // Ostatni fallback v3.15.18: `1 SCCn` jest bardzo charakterystycznym
@@ -2299,7 +2420,7 @@
         // także widoczny tekst strony. Nazwy własne pojazdów typu SCCn[...] nie
         // pasują do tego wzorca, bo wymagamy dokładnie `liczba + SCCn`.
         const pageSCCnCount = sccnCountFromText(visiblePageText());
-        const sccnCount = directSCCnCount || explicitSCCnCount || helpSCCnCount || pageSCCnCount;
+        const sccnCount = hardVisibleSCCnCount || directSCCnCount || explicitSCCnCount || helpSCCnCount || pageSCCnCount;
         if (sccnCount > 0) {
             const repairedVehicles = [];
             const repairedMap = new Map();
@@ -2309,7 +2430,7 @@
             addVehicle(repairedVehicles, repairedMap, 'SCCn', sccnCount, null);
             vehicles = repairedVehicles;
             source = source ? `${source}+sccn` : 'sccn';
-            log(`Wymuszone wymaganie SCCn: ${sccnCount}`);
+            log(`Wymuszone wymaganie SCCn: ${sccnCount}`, { hardVisibleSCCnCount, directSCCnCount, explicitSCCnCount, helpSCCnCount, pageSCCnCount });
         }
 
         // v3.15.13: końcowy filtr bezpieczeństwa. Nawet jeśli starszy format
