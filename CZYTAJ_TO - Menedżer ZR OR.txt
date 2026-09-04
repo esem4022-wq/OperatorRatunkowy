@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.24
+Wersja: 3.15.25
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -39,9 +39,20 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk `EDYTUJ ZR` wyszukuje ZR dla bieżącej misji we wszystkich kategoriach poza `AZR` i `Bez kategorii`, a następnie otwiera jej pełną edycję.
 - przy zapisie edycji istniejącej zwykłej ZR skrypt wyszukuje ZR o tej samej nazwie w kategorii `AZR`; jeśli istnieje, automatycznie synchronizuje do niej wymagania pojazdów, wodę i pianę; nie tworzy brakującej kopii i nie zmienia nazwy, kategorii ani wyglądu ZR w AZR.
 - podczas edycji istniejącej ZR kolor tła pozostaje dokładnie bez zmian; skrypt ustawia jedynie `Automatyczny kolor` tekstu.
+- wymagany personel SPKP jest automatycznie przeliczany na `Opancerzone Pojazdy SPKP` według standardu 6 osób na pojazd; np. 18 personelu SPKP = 3 pojazdy.
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.25
+- dodano automatyczne przeliczanie specjalnego wymagania `Wymagany personel SPKP` na liczbę `Opancerzonych Pojazdów SPKP`,
+- przyjęty standard użytkownika: 6 przeszkolonych osób SPKP na jeden `Opancerzony Pojazd SPKP`,
+- liczba pojazdów jest zaokrąglana w górę; np. 18 personelu SPKP = 3 pojazdy, 19 personelu = 4 pojazdy,
+- wymaganie SPKP jest odczytywane zarówno z `mission_help`, jak i z widocznej żółtej karty / sekcji `Specjalne wymagania`,
+- widoczna lista `Pojazdy` nie może już nadpisać i zgubić przeliczonego wymagania SPKP,
+- dodano jawne mapowanie do pola ZR `Opancerzony Pojazd SPKP` / `Pojazd SPKP` / `SPKP`,
+- zmieniono klucz capture, aby test nie korzystał ze starego zapisu bez przeliczenia SPKP,
+- zachowano wszystkie funkcje v3.15.24, w tym skróty `Ambulans`, `Radiowóz`, `Straż`, synchronizację z AZR i pozostawanie na AZR po skutecznym zaznaczeniu.
+
 v3.15.24
 - przebudowano najwyżej priorytetowe rozpoznawanie prostych skrótów bezpośrednio z widocznej żółtej karty misji, niezależnie od `mission_help`,
 - globalna reguła `1 Ambulans` + `Dokładnie 1 pacjent` wymusza ZR `Ambulans`; procent transportu i LPR nie blokują tej reguły,

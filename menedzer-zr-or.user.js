@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.24
+// @version      3.15.25
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,9 +24,12 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.24';
-    const CAPTURE_KEY = 'or_zr_capture_v31521';
+    const VERSION = '3.15.25';
+    const CAPTURE_KEY = 'or_zr_capture_v31525';
     const MAP_KEY = 'or_zr_map_v020';
+    // v3.15.25: użytkownik ma standardowo 6 przeszkolonych osób SPKP
+    // przypisanych do jednego `Opancerzonego Pojazdu SPKP`.
+    const SPKP_PERSONNEL_PER_VEHICLE = 6;
 
     const state = {
         capture: loadJSON(CAPTURE_KEY, null),
@@ -1407,6 +1410,36 @@
         return '';
     }
 
+    function extractSPKPPersonnelFromText(text) {
+        const raw = String(text || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!raw) return 0;
+
+        const patterns = [
+            /\b(\d+)\s+Wymagan(?:y|ego)?\s+personel\s+SPKP\b/i,
+            /\b(\d+)\s+Personel\s+SPKP\b/i,
+            /\bWymagan(?:y|ego)?\s+personel\s+SPKP\s*:?\s*(\d+)\b/i,
+            /\bPersonel\s+SPKP\s*:?\s*(\d+)\b/i
+        ];
+
+        let best = 0;
+        for (const re of patterns) {
+            const m = raw.match(re);
+            if (!m) continue;
+            const value = Number.parseInt(m[1], 10) || 0;
+            best = Math.max(best, value);
+        }
+        return best;
+    }
+
+    function spkpVehicleCountForPersonnel(personnel) {
+        const count = Number.parseInt(personnel, 10) || 0;
+        if (count <= 0) return 0;
+        return Math.ceil(count / SPKP_PERSONNEL_PER_VEHICLE);
+    }
+
     function parseRequirementPair(labelRaw, valueRaw, out) {
         const label = String(labelRaw || '').replace(/\s+/g, ' ').trim();
         const valueText = String(valueRaw || '').replace(/\s+/g, ' ').trim();
@@ -1416,6 +1449,17 @@
         if (value == null) return;
 
         const nl = normalize(label);
+
+        // v3.15.25: wymaganie personelu SPKP przeliczamy na liczbę
+        // `Opancerzonych Pojazdów SPKP`. Przy standardzie 6 osób na pojazd
+        // np. 18 wymaganego personelu = 3 pojazdy SPKP.
+        if (nl.includes('personel spkp')) {
+            const requiredVehicles = spkpVehicleCountForPersonnel(value);
+            if (requiredVehicles > 0) {
+                addVehicle(out.vehicles, out.byName, 'Opancerzony Pojazd SPKP', requiredVehicles, null);
+            }
+            return;
+        }
 
         if (
             nl === 'maks pacjenci' ||
@@ -2343,6 +2387,7 @@
         let source = '';
         let helpK9Count = 0;
         let helpSCCnCount = 0;
+        let helpSPKPVehicleCount = 0;
 
         // v0.31: pierwszym źródłem jest ukryty #mission_help aktualnej misji.
         // Link zawiera /einsaetze/<typ> + mission_id, więc nie może wskazać
@@ -2373,6 +2418,12 @@
                     (normalize(v?.label || '') === 'sccn' || normalize(v?.label || '').includes('sccn'))
                 );
                 helpSCCnCount = Number(helpSCCn?.count) || 0;
+
+                const helpSPKP = (Array.isArray(parsed.vehicles) ? parsed.vehicles : []).find(v => {
+                    const n = normalize(v?.label || '');
+                    return n.includes('spkp');
+                });
+                helpSPKPVehicleCount = Number(helpSPKP?.count) || 0;
 
                 log('Odczyt z dokładnego #mission_help:', helpUrl, parsed);
             } catch (error) {
@@ -2452,6 +2503,28 @@
             vehicles = repairedVehicles;
             source = source ? `${source}+sccn` : 'sccn';
             log(`Wymuszone wymaganie SCCn: ${sccnCount}`, { hardVisibleSCCnCount, directSCCnCount, explicitSCCnCount, helpSCCnCount, pageSCCnCount });
+        }
+
+        // v3.15.25: specjalne wymaganie personelu SPKP nie jest zwykłym
+        // pojazdem na żółtej liście `Pojazdy`, dlatego po odczycie karty
+        // przeliczamy je osobno. Standard użytkownika: 6 osób SPKP / pojazd.
+        // Wymaganie 18 personelu -> 3 `Opancerzone Pojazdy SPKP`.
+        const visibleSPKPPersonnel = extractSPKPPersonnelFromText(
+            String(block?.innerText || block?.textContent || '') + '\n' +
+            String(cardText || '')
+        );
+        const visibleSPKPVehicleCount = spkpVehicleCountForPersonnel(visibleSPKPPersonnel);
+        const spkpVehicleCount = Math.max(visibleSPKPVehicleCount, helpSPKPVehicleCount);
+        if (spkpVehicleCount > 0) {
+            const repairedVehicles = [];
+            const repairedMap = new Map();
+            for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
+                addVehicle(repairedVehicles, repairedMap, vehicle.label, vehicle.count, vehicle.chance);
+            }
+            addVehicle(repairedVehicles, repairedMap, 'Opancerzony Pojazd SPKP', spkpVehicleCount, null);
+            vehicles = repairedVehicles;
+            source = source ? `${source}+spkp` : 'spkp';
+            log(`Wymagany personel SPKP: ${visibleSPKPPersonnel || (helpSPKPVehicleCount * SPKP_PERSONNEL_PER_VEHICLE)} -> ${spkpVehicleCount} pojazd(y) SPKP`);
         }
 
         // v3.15.13: końcowy filtr bezpieczeństwa. Nawet jeśli starszy format
@@ -5260,6 +5333,22 @@
         if (manualName) {
             const f = state.fields.find(x => x.name === manualName);
             if (f) return f;
+        }
+
+        // v3.15.25: personel SPKP jest przeliczany na `Opancerzony Pojazd SPKP`.
+        // Pole ZR dobieramy jawnie, żeby fuzzy-matching nie wybrał innego pojazdu policji.
+        if (req.kind === 'vehicle' && normalize(req.label).includes('spkp')) {
+            const vehicleFields = state.fields.filter(x => x.kind === 'vehicle');
+            const exactNames = [
+                'opancerzony pojazd spkp',
+                'pojazd spkp',
+                'spkp'
+            ];
+            const exact = vehicleFields.find(x => exactNames.includes(normalize(x.label)));
+            if (exact) return exact;
+
+            const fallback = vehicleFields.find(x => normalize(x.label).includes('spkp'));
+            if (fallback) return fallback;
         }
 
         // v3.15.16: SCCn mapujemy jawnie do pola cysterny z wodą.
