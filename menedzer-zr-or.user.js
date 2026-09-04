@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.14
+// @version      3.15.15
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.14';
-    const CAPTURE_KEY = 'or_zr_capture_v31514';
+    const VERSION = '3.15.15';
+    const CAPTURE_KEY = 'or_zr_capture_v31515';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -4503,75 +4503,13 @@
     }
 
     function applyAAOEditorAppearanceDefaults() {
-        // v3.15.12: przy edycji istniejącej ZR ustawiamy:
-        // - kolor tła: bez koloru,
-        // - kolor tekstu: automatyczny.
+        // v3.15.15: przy edycji istniejącej ZR NIE zmieniamy koloru tła.
+        // Zachowujemy dokładnie wartość zapisaną w edytowanej ZR.
+        // Jedyną zmianą wyglądu jest włączenie automatycznego koloru tekstu.
         // Nie dotyczy to tworzenia nowej ZR (/aaos/new).
         if (!isExistingAAOEdit()) return;
 
         const named = [...document.querySelectorAll('input[name], select[name]')];
-
-        const backgroundFields = named.filter(control => {
-            const name = String(control.name || '').toLowerCase();
-            const id = String(control.id || '').toLowerCase();
-            return (
-                name === 'aao[color]' ||
-                name === 'color' ||
-                id === 'aao_color' ||
-                /(?:^|_)aao_color$/.test(id)
-            ) && !/text|automatic/.test(`${name} ${id}`);
-        });
-
-        // "Bez koloru" w formularzu gry oznacza pustą wartość koloru.
-        // Preferujemy zwykłe pole tekstowe/hidden/select. Jeśli jedyną nazwaną
-        // kontrolką jest input[type=color], przestajemy wysyłać jego wartość
-        // i dodajemy ukryte pole o tej samej nazwie z pustą wartością.
-        let clearedNamedColor = false;
-        for (const control of backgroundFields) {
-            const type = String(control.type || '').toLowerCase();
-
-            if (control.tagName === 'SELECT') {
-                const option = [...control.options].find(opt => {
-                    const text = normalize(opt.textContent || '');
-                    return String(opt.value ?? '') === '' || text.includes('bez koloru') || text.includes('brak koloru');
-                });
-                if (option) {
-                    control.value = option.value;
-                    dispatchFormControlEvents(control);
-                    clearedNamedColor = true;
-                }
-                continue;
-            }
-
-            if (type !== 'color') {
-                control.value = '';
-                control.setAttribute('value', '');
-                dispatchFormControlEvents(control);
-                if (control.name) clearedNamedColor = true;
-            }
-        }
-
-        if (!clearedNamedColor) {
-            const colorInput = backgroundFields.find(control =>
-                String(control.type || '').toLowerCase() === 'color' && control.name
-            );
-
-            if (colorInput) {
-                const originalName = colorInput.name;
-                colorInput.dataset.orzrOriginalName = originalName;
-                colorInput.removeAttribute('name');
-
-                let hidden = document.querySelector('input[data-orzr-empty-aao-color="1"]');
-                if (!hidden) {
-                    hidden = document.createElement('input');
-                    hidden.type = 'hidden';
-                    hidden.dataset.orzrEmptyAaoColor = '1';
-                    colorInput.insertAdjacentElement('afterend', hidden);
-                }
-                hidden.name = originalName;
-                hidden.value = '';
-            }
-        }
 
         // W API gry za automatyczny dobór koloru odpowiada `automatic_text_color`.
         // Rails może generować hidden + checkbox o tej samej nazwie, dlatego
@@ -4601,7 +4539,7 @@
             }
         }
 
-        log('Edycja ZR: ustawiono tło bez koloru i automatyczny kolor tekstu.');
+        log('Edycja ZR: pozostawiono kolor tła bez zmian; włączono automatyczny kolor tekstu.');
     }
 
     function labelFor(input) {
@@ -5019,8 +4957,8 @@
         if (!isAAOEditor()) return;
         if (document.getElementById('orzr-editor')) return;
 
-        // Przy edycji istniejącej ZR najpierw ustawiamy wygląd zgodnie z
-        // zasadą projektu: białe tło + automatyczny kolor tekstu.
+        // Przy edycji istniejącej ZR nie zmieniamy koloru tła.
+        // Ustawiamy wyłącznie automatyczny kolor tekstu.
         applyAAOEditorAppearanceDefaults();
         collectFields();
 

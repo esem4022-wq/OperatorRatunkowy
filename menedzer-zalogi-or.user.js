@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedżer załogi OR
 // @namespace    operatorratunkowy.local.crewmanager
-// @version      3.03
+// @version      4.00
 // @description  Osobny menedżer personelu i obsady pojazdów w OperatorRatunkowy.pl
 // @author       ChatGPT + użytkownik
 // @license      CC BY-NC-SA 4.0
@@ -17,11 +17,12 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.03';
+  const VERSION = '4.00';
   const APP_ID = 'or-crew-manager-v01';
   const PAGE_SIZE = 200;
   const BUILDING_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/buildings';
   const VEHICLE_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/vehicles';
+  const SCHOOLING_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/schoolings';
 
   if (window.top !== window.self) return;
   if (!isMainPage()) return;
@@ -45,6 +46,16 @@
     vehicleStatus: 'all',
     selectedVehicles: new Set(),
     changedBuildings: new Map(),
+    personnel: [],
+    personnelLoaded: false,
+    personnelLoading: false,
+    personnelPage: 1,
+    personnelTypeId: '',
+    personnelBuildingId: '',
+    personnelTraining: '',
+    hidePersonnelTypeColumn: false,
+    schoolingLabels: {},
+    personnelLoadErrors: 0,
   };
 
   function isMainPage() {
@@ -429,6 +440,483 @@
     });
   }
 
+
+  function filteredPersonnel() {
+    const q = state.query.trim().toLocaleLowerCase('pl');
+    return state.personnel.filter(person => {
+      if (state.personnelTypeId && person.typeId !== state.personnelTypeId) return false;
+      if (state.personnelBuildingId && person.buildingId !== state.personnelBuildingId) return false;
+      if (state.personnelTraining) {
+        if (state.personnelTraining === '__none__') {
+          if (person.trainingKeys.length || person.trainingLabels.length) return false;
+        } else if (!person.trainingKeys.includes(state.personnelTraining) && !person.trainingLabels.includes(state.personnelTraining)) {
+          return false;
+        }
+      }
+      if (q) {
+        const hay = `${person.id} ${person.name} ${person.typeName} ${person.buildingName} ${person.trainingText} ${person.vehicleName || ''}`.toLocaleLowerCase('pl');
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  function flattenSchoolingLabels(catalog) {
+    const labels = {};
+    const ignoredKeys = new Set(['caption', 'name', 'label', 'title', 'duration', 'credits', 'staff', 'school', 'schooling', 'schoolings']);
+
+    function remember(key, label) {
+      key = nonEmptyText(key);
+      label = nonEmptyText(label);
+      if (!key || !label || /^\d+$/.test(key)) return;
+      if (!labels[key]) labels[key] = label;
+    }
+
+    function walk(node, parentKey = '') {
+      if (!node) return;
+      if (Array.isArray(node)) {
+        node.forEach(item => walk(item, parentKey));
+        return;
+      }
+      if (typeof node !== 'object') return;
+
+      const key = nonEmptyText(valueOf(node, ['key', 'identifier', 'education_key', 'schooling_key', 'api', 'value'], null));
+      const label = nonEmptyText(valueOf(node, ['caption', 'name', 'label', 'title'], null));
+      if (key && label) remember(key, label);
+
+      for (const [k, v] of Object.entries(node)) {
+        if (typeof v === 'string') {
+          if (!ignoredKeys.has(k) && !/^\d+$/.test(k)) remember(k, v);
+        } else if (v && typeof v === 'object') {
+          walk(v, k);
+        }
+      }
+    }
+
+    walk(catalog);
+    return labels;
+  }
+
+  function parseFilterableKeys(row) {
+    const keys = [];
+    const raw = nonEmptyText(row?.getAttribute?.('data-filterable-by')) || '';
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) keys.push(...parsed.map(String));
+      } catch (_) {
+        const matches = raw.matchAll(/["']([^"']+)["']/g);
+        for (const match of matches) keys.push(match[1]);
+      }
+    }
+    row?.querySelectorAll?.('[data-education-key],[data-schooling-key]').forEach(el => {
+      const value = nonEmptyText(el.getAttribute('data-education-key') || el.getAttribute('data-schooling-key'));
+      if (value) keys.push(value);
+    });
+    return [...new Set(keys.map(k => String(k).trim()).filter(Boolean))];
+  }
+
+  function normalizeTrainingText(text) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    if (/^(brak|brak wyszkolenia|bez wyszkolenia|bez szkolenia|none|no training|keine ausbildung)$/i.test(text)) return '';
+    return text;
+  }
+
+  function tableColumnIndexes(table) {
+    const headers = [...(table?.querySelectorAll('thead th') || [])].map(th => (th.textContent || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase('pl'));
+    const find = regex => headers.findIndex(text => regex.test(text));
+    return {
+      name: find(/imię|nazw|załog|person|name/),
+      training: find(/wyszkol|szkol|kurs|education|training|ausbild/),
+      vehicle: find(/pojazd|przydz|vehicle|fahrzeug/),
+    };
+  }
+
+  function extractPersonName(row, cells, indexes, personId) {
+    const direct = row.querySelector('[data-personal-name],.personal-name,a[href*="/personals/"],a[href*="/personnel/"]');
+    const directText = normalizeTrainingText(direct?.textContent || '');
+    if (directText) return directText;
+
+    if (indexes.name >= 0 && cells[indexes.name]) {
+      const text = normalizeTrainingText(cells[indexes.name].textContent || '');
+      if (text) return text;
+    }
+
+    for (const cell of cells) {
+      let text = normalizeTrainingText(cell.textContent || '');
+      if (!text) continue;
+      if (/^(przydziel|usuń|edytuj|szkolenie|kurs|pojazd|brak)$/i.test(text)) continue;
+      if (personId && text === String(personId)) continue;
+      return text;
+    }
+    return personId ? `Załogant ${personId}` : 'Załogant';
+  }
+
+  function extractPersonId(row, buildingId, index) {
+    const rowMatch = String(row.id || '').match(/personal[_-](\d+)/i);
+    if (rowMatch) return { id: rowMatch[1], real: true };
+
+    const attr = row.querySelector('[personal_id],[data-personal-id]');
+    const attrValue = nonEmptyText(attr?.getAttribute('personal_id') || attr?.getAttribute('data-personal-id'));
+    if (attrValue && /^\d+$/.test(attrValue)) return { id: attrValue, real: true };
+
+    const link = [...row.querySelectorAll('a[href]')].map(a => a.getAttribute('href') || '').find(href => /\/(?:personals|personnel)\/\d+/i.test(href));
+    const linkMatch = String(link || '').match(/\/(?:personals|personnel)\/(\d+)/i);
+    if (linkMatch) return { id: linkMatch[1], real: true };
+
+    return { id: `${buildingId}:${index + 1}`, real: false };
+  }
+
+  function extractTraining(row, cells, indexes) {
+    const keys = parseFilterableKeys(row);
+    const labels = [];
+
+    row.querySelectorAll('[data-education-key],[data-schooling-key]').forEach(el => {
+      const key = nonEmptyText(el.getAttribute('data-education-key') || el.getAttribute('data-schooling-key'));
+      const text = normalizeTrainingText(el.textContent || el.getAttribute('title') || el.getAttribute('aria-label') || '');
+      if (text) labels.push(text);
+      else if (key && state.schoolingLabels[key]) labels.push(state.schoolingLabels[key]);
+    });
+
+    if (indexes.training >= 0 && cells[indexes.training]) {
+      const cell = cells[indexes.training];
+      const parts = [...cell.querySelectorAll('.label,.badge,a,span')]
+        .map(el => normalizeTrainingText(el.textContent || el.getAttribute('title') || ''))
+        .filter(Boolean);
+      if (parts.length) labels.push(...parts);
+      else {
+        const text = normalizeTrainingText(cell.textContent || '');
+        if (text) labels.push(...text.split(/\s*[;,|]\s*/).map(normalizeTrainingText).filter(Boolean));
+      }
+    }
+
+    for (const key of keys) {
+      if (state.schoolingLabels[key]) labels.push(state.schoolingLabels[key]);
+    }
+
+    const unique = [...new Set(labels.map(normalizeTrainingText).filter(Boolean))];
+    return {
+      keys,
+      labels: unique,
+      text: unique.length ? unique.join(', ') : (keys.length ? keys.map(k => state.schoolingLabels[k] || k).join(', ') : 'Brak wyszkolenia'),
+    };
+  }
+
+  function extractAssignedVehicle(row, cells, indexes) {
+    let link = row.querySelector('a[href^="/vehicles/"]');
+    if (!link && indexes.vehicle >= 0 && cells[indexes.vehicle]) link = cells[indexes.vehicle].querySelector('a[href*="/vehicles/"]');
+    if (!link) return { id: '', name: '' };
+    const href = link.getAttribute('href') || '';
+    const match = href.match(/\/vehicles\/(\d+)/);
+    return {
+      id: match ? match[1] : '',
+      name: normalizeTrainingText(link.textContent || '') || (match ? `Pojazd ${match[1]}` : ''),
+    };
+  }
+
+  function extractPersonnelFromDocument(doc, building) {
+    const table = doc.querySelector('#personal_table') || [...doc.querySelectorAll('table')].find(t => t.querySelector('tr[id^="personal_"]')) || null;
+    const indexes = tableColumnIndexes(table);
+    const rawRows = table
+      ? [...table.querySelectorAll('tbody tr')]
+      : [...doc.querySelectorAll('tr[id^="personal_"],tr[data-filterable-by]')];
+
+    const seen = new Set();
+    const result = [];
+    rawRows.forEach((row, index) => {
+      if (!row || seen.has(row)) return;
+      seen.add(row);
+      const cells = [...row.querySelectorAll(':scope > td')];
+      if (!cells.length) return;
+      const idInfo = extractPersonId(row, building.id, index);
+      const name = extractPersonName(row, cells, indexes, idInfo.real ? idInfo.id : '');
+      const training = extractTraining(row, cells, indexes);
+      const vehicle = extractAssignedVehicle(row, cells, indexes);
+
+      // Odfiltruj wiersze techniczne tabeli, które nie wyglądają jak osoby.
+      if (!idInfo.real && !row.getAttribute('data-filterable-by') && !/person|załog|pracown/i.test(row.className || '')) return;
+
+      result.push({
+        id: idInfo.id,
+        realId: idInfo.real,
+        name,
+        buildingId: building.id,
+        buildingName: building.name,
+        typeId: building.typeId,
+        typeName: building.typeName,
+        trainingKeys: training.keys,
+        trainingLabels: training.labels,
+        trainingText: training.text,
+        vehicleId: vehicle.id,
+        vehicleName: vehicle.name,
+      });
+    });
+    return result;
+  }
+
+  function findNextPersonnelPage(doc, buildingId, currentUrl) {
+    const selectors = [
+      'a[rel="next"][href]',
+      '.pagination .next a[href]',
+      '.pagination li.next a[href]',
+      'a[aria-label*="Nast"][href]',
+      'a[aria-label*="Next"][href]',
+    ];
+    let link = null;
+    for (const selector of selectors) {
+      link = doc.querySelector(selector);
+      if (link) break;
+    }
+    if (!link) {
+      link = [...doc.querySelectorAll('.pagination a[href]')].find(a => /nast|next|weiter|›|»/i.test((a.textContent || '').trim()));
+    }
+    if (!link) return null;
+    try {
+      const url = new URL(link.getAttribute('href'), location.origin);
+      if (url.origin !== location.origin) return null;
+      if (!url.pathname.includes(`/buildings/${buildingId}/personals`)) return null;
+      const path = url.pathname + url.search;
+      return path === currentUrl ? null : path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function fetchBuildingPersonnel(building) {
+    const collected = [];
+    const seenIds = new Set();
+    const visited = new Set();
+    const encodedId = encodeURIComponent(building.id);
+    const candidates = [
+      `/buildings/${encodedId}/personals`,
+      `/buildings/${encodedId}/personnel`,
+      `/buildings/${encodedId}/personal`,
+    ];
+
+    let url = null;
+    let firstDoc = null;
+    let lastError = null;
+
+    for (const candidate of candidates) {
+      try {
+        const html = await fetchText(candidate);
+        const doc = parseHtml(html);
+        const hasPersonnelTable = !!doc.querySelector('#personal_table,tr[id^="personal_"],[personal_id],[data-personal-id]');
+        const titleText = `${doc.title || ''} ${doc.body?.textContent?.slice(0, 1000) || ''}`.toLocaleLowerCase('pl');
+        const looksLikePersonnelPage = hasPersonnelTable || /personel|załog|pracown|personal|personnel/.test(titleText);
+        if (looksLikePersonnelPage) {
+          url = candidate;
+          firstDoc = doc;
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    // Jeżeli znane ścieżki nie zadziałają, znajdź natywny link do personelu na stronie jednostki.
+    if (!url) {
+      try {
+        const doc = parseHtml(await fetchText(`/buildings/${encodedId}`));
+        const link = [...doc.querySelectorAll('a[href]')].find(a => {
+          const href = a.getAttribute('href') || '';
+          const text = `${a.textContent || ''} ${href}`.toLocaleLowerCase('pl');
+          return href.includes(`/buildings/${building.id}/`) && /personel|załog|pracown|personal|personnel/.test(text);
+        });
+        if (link) {
+          const found = new URL(link.getAttribute('href'), location.origin);
+          if (found.origin === location.origin) {
+            url = found.pathname + found.search;
+            firstDoc = parseHtml(await fetchText(url));
+          }
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!url || !firstDoc) {
+      if (building.personnelCurrent <= 0) return [];
+      throw lastError || new Error('Nie znaleziono strony personelu jednostki.');
+    }
+
+    let pages = 0;
+    let doc = firstDoc;
+    while (url && !visited.has(url) && pages < 100) {
+      visited.add(url);
+      pages += 1;
+      const rows = extractPersonnelFromDocument(doc, building);
+      for (const person of rows) {
+        const key = person.realId ? person.id : `${person.buildingId}:${person.id}:${collected.length}`;
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
+        collected.push(person);
+      }
+      const nextUrl = findNextPersonnelPage(doc, building.id, url);
+      if (!nextUrl) break;
+      url = nextUrl;
+      doc = parseHtml(await fetchText(url));
+    }
+    return collected;
+  }
+
+  function rebuildPersonnelFilterOptions() {
+    const typeSelect = document.getElementById(`${APP_ID}-personnel-type`);
+    const buildingSelect = document.getElementById(`${APP_ID}-personnel-building`);
+    const trainingSelect = document.getElementById(`${APP_ID}-personnel-training`);
+
+    if (typeSelect) {
+      const unique = [...new Map(state.personnel.map(p => [p.typeId, p.typeName])).entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }));
+      typeSelect.innerHTML = '<option value="">Wszystkie typy</option>' + unique.map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+      typeSelect.value = state.personnelTypeId;
+    }
+
+    if (buildingSelect) {
+      const idsWithPersonnel = new Set(state.personnel.map(p => p.buildingId));
+      buildingSelect.innerHTML = '<option value="">Wszystkie jednostki</option>' + state.buildings
+        .filter(b => idsWithPersonnel.has(b.id))
+        .map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+      buildingSelect.value = state.personnelBuildingId;
+    }
+
+    if (trainingSelect) {
+      const values = new Map();
+      let hasNone = false;
+      for (const person of state.personnel) {
+        if (!person.trainingKeys.length && !person.trainingLabels.length) hasNone = true;
+        person.trainingKeys.forEach(key => values.set(key, state.schoolingLabels[key] || key));
+        person.trainingLabels.forEach(label => {
+          const existingKey = person.trainingKeys.find(key => (state.schoolingLabels[key] || key) === label);
+          if (!existingKey) values.set(label, label);
+        });
+      }
+      const sorted = [...values.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pl', { numeric: true }));
+      trainingSelect.innerHTML = '<option value="">Wszystkie wyszkolenia</option>' +
+        (hasNone ? '<option value="__none__">Brak wyszkolenia</option>' : '') +
+        sorted.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
+      trainingSelect.value = state.personnelTraining;
+    }
+  }
+
+  function updatePersonnelTypeVisibility() {
+    const table = document.getElementById(`${APP_ID}-personnel-table`);
+    const button = document.getElementById(`${APP_ID}-toggle-personnel-type`);
+    table?.classList.toggle('or-cm-personnel-type-hidden', state.hidePersonnelTypeColumn);
+    if (button) button.textContent = state.hidePersonnelTypeColumn ? 'Pokaż kolumnę Typ' : 'Ukryj kolumnę Typ';
+  }
+
+  function renderPersonnel() {
+    const tbody = document.getElementById(`${APP_ID}-personnel-body`);
+    const pager = document.getElementById(`${APP_ID}-personnel-pager`);
+    if (!tbody || !pager) return;
+
+    const filtered = filteredPersonnel();
+    const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    state.personnelPage = Math.max(1, Math.min(state.personnelPage, pages));
+    const start = (state.personnelPage - 1) * PAGE_SIZE;
+    const rows = filtered.slice(start, start + PAGE_SIZE);
+
+    if (state.personnelLoading && !state.personnel.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="or-cm-empty">Wczytywanie listy załogi ze wszystkich jednostek…</td></tr>';
+    } else {
+      tbody.innerHTML = rows.map(person => {
+        const personIdHtml = person.realId ? esc(person.id) : '—';
+        const vehicleHtml = person.vehicleId
+          ? `<a href="/vehicles/${esc(person.vehicleId)}" target="_blank" rel="noopener">${esc(person.vehicleName || `Pojazd ${person.vehicleId}`)}</a>`
+          : '—';
+        return `
+          <tr>
+            <td>${personIdHtml}</td>
+            <td class="or-cm-personnel-type-col">${esc(person.typeName)}</td>
+            <td><a href="/buildings/${esc(person.buildingId)}" target="_blank" rel="noopener">${esc(person.buildingName)}</a></td>
+            <td><b>${esc(person.name)}</b></td>
+            <td>${esc(person.trainingText)}</td>
+            <td>${vehicleHtml}</td>
+            <td class="or-cm-actions"><a class="or-cm-btn or-cm-btn-small" href="/buildings/${esc(person.buildingId)}/personals" target="_blank" rel="noopener">↗ Załoga jednostki</a></td>
+          </tr>`;
+      }).join('') || '<tr><td colspan="7" class="or-cm-empty">Brak załogi dla wybranych filtrów.</td></tr>';
+    }
+
+    pager.innerHTML = `
+      <button class="or-cm-btn or-cm-btn-small" id="${APP_ID}-personnel-prev" ${state.personnelPage <= 1 ? 'disabled' : ''}>‹ Poprzednia</button>
+      <span>Załoga: <b>${filtered.length}</b> / ${state.personnel.length} • strona ${state.personnelPage}/${pages}${state.personnelLoadErrors ? ` • błędy jednostek: ${state.personnelLoadErrors}` : ''}</span>
+      <button class="or-cm-btn or-cm-btn-small" id="${APP_ID}-personnel-next" ${state.personnelPage >= pages ? 'disabled' : ''}>Następna ›</button>`;
+    document.getElementById(`${APP_ID}-personnel-prev`)?.addEventListener('click', () => { state.personnelPage--; renderPersonnel(); });
+    document.getElementById(`${APP_ID}-personnel-next`)?.addEventListener('click', () => { state.personnelPage++; renderPersonnel(); });
+    updatePersonnelTypeVisibility();
+  }
+
+  async function loadPersonnel(force = false) {
+    if (state.personnelLoading) return;
+    if (state.personnelLoaded && !force) { renderPersonnel(); return; }
+    if (!state.buildings.length) return;
+
+    state.personnelLoading = true;
+    state.personnelLoaded = false;
+    state.personnelLoadErrors = 0;
+    state.personnel = [];
+    setBusy(true);
+    renderPersonnel();
+    setStatus(`Pobieram listę załogi z ${state.buildings.length} jednostek…`, 'info');
+
+    try {
+      if (!Object.keys(state.schoolingLabels).length || force) {
+        const schoolings = await fetchCatalog(SCHOOLING_CATALOG_URL);
+        state.schoolingLabels = flattenSchoolingLabels(schoolings);
+      }
+
+      let cursor = 0;
+      let completed = 0;
+      const all = [];
+      const workers = Math.min(5, Math.max(1, state.buildings.length));
+
+      async function worker() {
+        while (true) {
+          const index = cursor++;
+          if (index >= state.buildings.length) return;
+          const building = state.buildings[index];
+          try {
+            all.push(...await fetchBuildingPersonnel(building));
+          } catch (error) {
+            state.personnelLoadErrors += 1;
+            console.warn(`[OR Crew Manager] Nie udało się pobrać załogi jednostki ${building.id} (${building.name}).`, error);
+          } finally {
+            completed += 1;
+            if (completed === state.buildings.length || completed % 5 === 0) {
+              setStatus(`Pobieram listę załogi: ${completed}/${state.buildings.length} jednostek… znaleziono ${all.length} osób.`, 'info');
+            }
+          }
+        }
+      }
+
+      await Promise.all(Array.from({ length: workers }, () => worker()));
+      all.sort((a, b) =>
+        a.typeName.localeCompare(b.typeName, 'pl', { numeric: true }) ||
+        a.buildingName.localeCompare(b.buildingName, 'pl', { numeric: true }) ||
+        a.name.localeCompare(b.name, 'pl', { numeric: true }) ||
+        String(a.id).localeCompare(String(b.id), 'pl', { numeric: true })
+      );
+      state.personnel = all;
+      state.personnelLoaded = true;
+      state.personnelPage = 1;
+      rebuildPersonnelFilterOptions();
+      renderPersonnel();
+      setStatus(
+        `Wczytano ${state.personnel.length} osób z ${state.buildings.length - state.personnelLoadErrors}/${state.buildings.length} jednostek.`,
+        state.personnelLoadErrors ? 'warn' : 'ok'
+      );
+    } catch (error) {
+      console.error('[OR Crew Manager] Błąd listy załogi:', error);
+      setStatus(`Błąd pobierania listy załogi: ${error.message}`, 'error');
+    } finally {
+      state.personnelLoading = false;
+      setBusy(false);
+      renderPersonnel();
+    }
+  }
+
   function setStatus(text, type = 'info') {
     const el = document.getElementById(`${APP_ID}-status`);
     if (!el) return;
@@ -670,6 +1158,9 @@
       if (force) {
         state.selectedVehicles.clear();
         state.changedBuildings.clear();
+        state.personnel = [];
+        state.personnelLoaded = false;
+        state.personnelPage = 1;
       }
       const [rawBuildings, rawVehicles, buildingCatalog, vehicleCatalog] = await Promise.all([
         fetchBuildings(),
@@ -705,26 +1196,40 @@
     } finally {
       state.loading = false;
       setBusy(false);
+      if (state.activeTab === 'personnel' && !state.personnelLoaded && !state.personnelLoading) void loadPersonnel(false);
     }
   }
 
   function renderCurrentTab() {
     const unitsPanel = document.getElementById(`${APP_ID}-units-panel`);
     const vehiclesPanel = document.getElementById(`${APP_ID}-vehicles-panel`);
+    const personnelPanel = document.getElementById(`${APP_ID}-personnel-panel`);
     const unitsTools = document.getElementById(`${APP_ID}-units-tools`);
     const vehiclesTools = document.getElementById(`${APP_ID}-vehicles-tools`);
+    const personnelTools = document.getElementById(`${APP_ID}-personnel-tools`);
     const unitsTab = document.getElementById(`${APP_ID}-tab-units`);
     const vehiclesTab = document.getElementById(`${APP_ID}-tab-vehicles`);
+    const personnelTab = document.getElementById(`${APP_ID}-tab-personnel`);
 
     const isUnits = state.activeTab === 'buildings';
+    const isVehicles = state.activeTab === 'vehicles';
+    const isPersonnel = state.activeTab === 'personnel';
     if (unitsPanel) unitsPanel.style.display = isUnits ? 'flex' : 'none';
-    if (vehiclesPanel) vehiclesPanel.style.display = isUnits ? 'none' : 'flex';
+    if (vehiclesPanel) vehiclesPanel.style.display = isVehicles ? 'flex' : 'none';
+    if (personnelPanel) personnelPanel.style.display = isPersonnel ? 'flex' : 'none';
     if (unitsTools) unitsTools.style.display = isUnits ? 'flex' : 'none';
-    if (vehiclesTools) vehiclesTools.style.display = isUnits ? 'none' : 'flex';
+    if (vehiclesTools) vehiclesTools.style.display = isVehicles ? 'flex' : 'none';
+    if (personnelTools) personnelTools.style.display = isPersonnel ? 'flex' : 'none';
     unitsTab?.classList.toggle('active', isUnits);
-    vehiclesTab?.classList.toggle('active', !isUnits);
+    vehiclesTab?.classList.toggle('active', isVehicles);
+    personnelTab?.classList.toggle('active', isPersonnel);
 
-    if (isUnits) renderBuildings(); else renderVehicles();
+    if (isUnits) renderBuildings();
+    else if (isVehicles) renderVehicles();
+    else {
+      renderPersonnel();
+      if (state.buildings.length && !state.loading && !state.personnelLoaded && !state.personnelLoading) void loadPersonnel(false);
+    }
   }
 
   function parseHtml(html) {
@@ -1008,7 +1513,7 @@
       #${APP_ID}-button{position:fixed;right:260px;bottom:18px;z-index:2147483000;width:150px;height:52px;box-sizing:border-box;border:0;border-radius:999px;background:#455a64;color:#fff;padding:5px 10px;font-family:Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;white-space:nowrap;line-height:1.05}
       #${APP_ID}-button:hover{background:#37474f}
       #${APP_ID}-button .or-cm-launcher-name{display:block;font-size:13px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-      #${APP_ID}-button .or-cm-launcher-version{display:block;font-size:10px;font-weight:600;opacity:.78;line-height:1.1}
+      #${APP_ID}-button .or-cm-launcher-version{display:block;font-size:10px;font-weight:400;opacity:.78;line-height:1.1}
       #${APP_ID}-modal{display:none;position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.52);align-items:center;justify-content:center;font-family:Arial,sans-serif}
       #${APP_ID}-modal.or-cm-open{display:flex}
       .or-cm-window{width:min(1600px,96vw);height:min(900px,92vh);background:#fff;border-radius:9px;box-shadow:0 10px 40px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden}
@@ -1022,6 +1527,7 @@
       .or-cm-pill{display:inline-block;padding:2px 7px;border-radius:10px;font-weight:700}.or-cm-pill-shortage{background:#ffcdd2;color:#b71c1c}.or-cm-pill-ok{background:#c8e6c9;color:#1b5e20}.or-cm-pill-surplus{background:#bbdefb;color:#0d47a1}.or-cm-pill-unknown{background:#e0e0e0;color:#424242}
       .or-cm-balance-shortage{background:#fff3e0}.or-cm-balance-ok{background:#e8f5e9}.or-cm-balance-surplus{background:#e3f2fd}
       .or-cm-footer{display:flex;gap:8px;align-items:center;justify-content:flex-end;padding:8px 10px;border-top:1px solid #ddd;background:#fafafa}.or-cm-footer>span{margin-right:auto}
+      #${APP_ID}-personnel-table.or-cm-personnel-type-hidden .or-cm-personnel-type-col{display:none}
       .or-cm-status{padding:7px 11px;border-top:1px solid #ddd;font-size:12px}.or-cm-status-info{background:#e3f2fd;color:#0d47a1}.or-cm-status-ok{background:#e8f5e9;color:#1b5e20}.or-cm-status-warn{background:#fff3e0;color:#e65100}.or-cm-status-error{background:#ffebee;color:#b71c1c}
       #${APP_ID}-modal.or-cm-busy button:not(.or-cm-close){opacity:.65}
       @media(max-width:1000px){.or-cm-cards{grid-template-columns:repeat(3,1fr)}.or-cm-window{width:100vw;height:100vh;border-radius:0}}
@@ -1036,8 +1542,8 @@
     const rect = referenceButton.getBoundingClientRect();
     if (rect.width < 80 || rect.height < 34) return false;
 
-    // Wspólna zasada projektu: przyciski menedżerów mają być jednakowej wielkości.
-    // Menedżer ZR Lista jest przyciskiem referencyjnym, bo Załoga OR stoi bezpośrednio po jego lewej stronie.
+    // Wspólna zasada projektu: przyciski menedżerów mają dokładnie wymiary przycisku „Pojazdy”.
+    // Położenie przycisku jest niezależne od wzorca rozmiaru.
     btn.style.width = `${Math.round(rect.width)}px`;
     btn.style.height = `${Math.round(rect.height)}px`;
     return true;
@@ -1047,22 +1553,28 @@
     const btn = document.getElementById(`${APP_ID}-button`);
     if (!btn) return;
 
-    // Priorytet: przycisk Menedżera ZR Lista. Załoga OR ma być zawsze po jego lewej stronie.
+    // Wspólny wzorzec wymiarów: wyłącznie przycisk „Pojazdy”.
+    const vehiclesManagerButton = document.getElementById('or-fleet-manager-v01-button') ||
+      [...document.querySelectorAll('button')].find(el => /(^|\s|🚒|🚑|🚓)pojazdy(\s|v?\d|$)/i.test((el.textContent || '').trim()));
+    if (vehiclesManagerButton) syncLauncherSize(vehiclesManagerButton);
+
+    // Położenie: Załoga pozostaje bezpośrednio po lewej stronie Menedżera ZR.
     const zrButton = document.getElementById('orzr-launcher') ||
       [...document.querySelectorAll('button')].find(el => /menedżer\s*zr/i.test(el.textContent || ''));
 
     if (zrButton) {
-      syncLauncherSize(zrButton);
       const rect = zrButton.getBoundingClientRect();
       btn.style.right = `${Math.max(10, Math.round(window.innerWidth - rect.left + 10))}px`;
       btn.style.bottom = `${Math.max(10, Math.round(window.innerHeight - rect.bottom))}px`;
       return;
     }
 
-    // Fallback, gdy Menedżer ZR nie zdążył się jeszcze załadować.
-    // Do czasu pojawienia się przycisku referencyjnego używany jest rozmiar zapasowy 150×52 px.
-    btn.style.width = '150px';
-    btn.style.height = '52px';
+    // Fallback położenia, gdy Menedżer ZR nie zdążył się jeszcze załadować.
+    // Rozmiar pozostaje zapasowy tylko do czasu pojawienia się przycisku „Pojazdy”.
+    if (!vehiclesManagerButton) {
+      btn.style.width = '150px';
+      btn.style.height = '52px';
+    }
 
     const candidates = [
       document.getElementById('or-building-manager-v01-button'),
@@ -1082,7 +1594,7 @@
     const button = document.createElement('button');
     button.id = `${APP_ID}-button`;
     button.type = 'button';
-    button.innerHTML = `<span class="or-cm-launcher-name">Załoga</span><span class="or-cm-launcher-version">v${VERSION}</span>`;
+    button.innerHTML = `<span class="or-cm-launcher-name">👥 Załoga</span><span class="or-cm-launcher-version">v${VERSION}</span>`;
     document.body.appendChild(button);
 
     const modal = document.createElement('div');
@@ -1090,10 +1602,10 @@
     modal.innerHTML = `
       <div class="or-cm-window" role="dialog" aria-modal="true" aria-label="Menedżer załogi OR">
         <div class="or-cm-header"><h2>👥 Menedżer załogi OR <span style="font-size:12px;color:#b0bec5">v${VERSION}</span></h2><button type="button" class="or-cm-close" title="Zamknij">×</button></div>
-        <div class="or-cm-tabs"><button type="button" class="or-cm-tab active" id="${APP_ID}-tab-units">Jednostki</button><button type="button" class="or-cm-tab" id="${APP_ID}-tab-vehicles">Pojazdy</button></div>
+        <div class="or-cm-tabs"><button type="button" class="or-cm-tab active" id="${APP_ID}-tab-units">Jednostki</button><button type="button" class="or-cm-tab" id="${APP_ID}-tab-vehicles">Pojazdy</button><button type="button" class="or-cm-tab" id="${APP_ID}-tab-personnel">Lista załogi</button></div>
         <div class="or-cm-cards" id="${APP_ID}-summary-cards"></div>
         <div class="or-cm-toolbar">
-          <input id="${APP_ID}-search" class="or-cm-search" type="search" placeholder="Szukaj jednostki, pojazdu, typu lub ID…">
+          <input id="${APP_ID}-search" class="or-cm-search" type="search" placeholder="Szukaj jednostki, pojazdu, załoganta, wyszkolenia, typu lub ID…">
           <button type="button" class="or-cm-btn" id="${APP_ID}-reload">↻ Odśwież</button>
         </div>
         <div class="or-cm-toolbar" id="${APP_ID}-units-tools">
@@ -1111,6 +1623,13 @@
           <button type="button" class="or-cm-btn or-cm-btn-primary" id="${APP_ID}-fill-selected">👥 Przydziel do max</button>
           <b id="${APP_ID}-vehicle-selection">Zaznaczone: 0</b>
         </div>
+        <div class="or-cm-toolbar" id="${APP_ID}-personnel-tools" style="display:none">
+          <select id="${APP_ID}-personnel-type"><option value="">Wszystkie typy</option></select>
+          <select id="${APP_ID}-personnel-building"><option value="">Wszystkie jednostki</option></select>
+          <select id="${APP_ID}-personnel-training"><option value="">Wszystkie wyszkolenia</option></select>
+          <button type="button" class="or-cm-btn or-cm-btn-small" id="${APP_ID}-toggle-personnel-type">Ukryj kolumnę Typ</button>
+          <button type="button" class="or-cm-btn or-cm-btn-small" id="${APP_ID}-reload-personnel">↻ Odśwież listę załogi</button>
+        </div>
         <div class="or-cm-panel" id="${APP_ID}-units-panel">
           <div class="or-cm-table-wrap"><table class="or-cm-table"><thead><tr><th>ID</th><th>Typ</th><th>Jednostka</th><th>Pojazdy</th><th>Pracownicy obecnie</th><th>Docelowo</th><th>Potrzeba załogi</th><th>Bilans</th><th>Rekrutacja</th><th>Status</th><th>Akcje</th></tr></thead><tbody id="${APP_ID}-building-body"><tr><td colspan="11" class="or-cm-empty">Otwórz menedżer, aby pobrać dane.</td></tr></tbody></table></div>
           <div class="or-cm-footer" id="${APP_ID}-building-pager"></div>
@@ -1118,6 +1637,10 @@
         <div class="or-cm-panel" id="${APP_ID}-vehicles-panel" style="display:none">
           <div class="or-cm-table-wrap"><table class="or-cm-table"><thead><tr><th></th><th>ID</th><th>Typ</th><th>Pojazd</th><th>Jednostka</th><th>Max załogi</th><th>Przydzielona</th><th>Brakuje</th><th>Status</th><th>Akcje</th></tr></thead><tbody id="${APP_ID}-vehicle-body"><tr><td colspan="10" class="or-cm-empty">Otwórz menedżer, aby pobrać dane.</td></tr></tbody></table></div>
           <div class="or-cm-footer" id="${APP_ID}-vehicle-pager"></div>
+        </div>
+        <div class="or-cm-panel" id="${APP_ID}-personnel-panel" style="display:none">
+          <div class="or-cm-table-wrap"><table class="or-cm-table" id="${APP_ID}-personnel-table"><thead><tr><th>ID</th><th class="or-cm-personnel-type-col">Typ</th><th>Jednostka</th><th>Załogant</th><th>Wyszkolenie</th><th>Przydzielony pojazd</th><th>Akcje</th></tr></thead><tbody id="${APP_ID}-personnel-body"><tr><td colspan="7" class="or-cm-empty">Przejdź do zakładki „Lista załogi”, aby pobrać dane.</td></tr></tbody></table></div>
+          <div class="or-cm-footer" id="${APP_ID}-personnel-pager"></div>
         </div>
         <div id="${APP_ID}-status" class="or-cm-status or-cm-status-info">Gotowy.</div>
       </div>`;
@@ -1132,7 +1655,11 @@
 
     document.getElementById(`${APP_ID}-tab-units`).addEventListener('click', () => { state.activeTab = 'buildings'; renderCurrentTab(); });
     document.getElementById(`${APP_ID}-tab-vehicles`).addEventListener('click', () => { state.activeTab = 'vehicles'; renderCurrentTab(); });
-    document.getElementById(`${APP_ID}-reload`).addEventListener('click', () => loadData(true));
+    document.getElementById(`${APP_ID}-tab-personnel`).addEventListener('click', () => { state.activeTab = 'personnel'; state.personnelPage = 1; renderCurrentTab(); });
+    document.getElementById(`${APP_ID}-reload`).addEventListener('click', async () => {
+      await loadData(true);
+      if (state.activeTab === 'personnel') await loadPersonnel(true);
+    });
 
     let searchTimer = null;
     document.getElementById(`${APP_ID}-search`).addEventListener('input', e => {
@@ -1141,6 +1668,7 @@
         state.query = e.target.value;
         state.buildingPage = 1;
         state.vehiclePage = 1;
+        state.personnelPage = 1;
         renderCurrentTab();
       }, 120);
     });
@@ -1150,6 +1678,11 @@
     document.getElementById(`${APP_ID}-vehicle-building`).addEventListener('change', e => { state.vehicleBuildingId = e.target.value; state.vehiclePage = 1; state.selectedVehicles.clear(); renderVehicles(); });
     document.getElementById(`${APP_ID}-vehicle-type`).addEventListener('change', e => { state.vehicleTypeId = e.target.value; state.vehiclePage = 1; state.selectedVehicles.clear(); renderVehicles(); });
     document.getElementById(`${APP_ID}-vehicle-status`).addEventListener('change', e => { state.vehicleStatus = e.target.value; state.vehiclePage = 1; state.selectedVehicles.clear(); renderVehicles(); });
+    document.getElementById(`${APP_ID}-personnel-type`).addEventListener('change', e => { state.personnelTypeId = e.target.value; state.personnelPage = 1; renderPersonnel(); });
+    document.getElementById(`${APP_ID}-personnel-building`).addEventListener('change', e => { state.personnelBuildingId = e.target.value; state.personnelPage = 1; renderPersonnel(); });
+    document.getElementById(`${APP_ID}-personnel-training`).addEventListener('change', e => { state.personnelTraining = e.target.value; state.personnelPage = 1; renderPersonnel(); });
+    document.getElementById(`${APP_ID}-toggle-personnel-type`).addEventListener('click', () => { state.hidePersonnelTypeColumn = !state.hidePersonnelTypeColumn; updatePersonnelTypeVisibility(); });
+    document.getElementById(`${APP_ID}-reload-personnel`).addEventListener('click', () => loadPersonnel(true));
 
     document.getElementById(`${APP_ID}-select-visible`).addEventListener('click', () => {
       const filtered = filteredVehicles();
@@ -1165,7 +1698,7 @@
 
     positionButton();
     let tries = 0;
-    const timer = setInterval(() => { tries++; positionButton(); if (tries > 40) clearInterval(timer); }, 250);
+    const timer = setInterval(() => { tries++; positionButton(); if (tries > 160) clearInterval(timer); }, 250);
     window.addEventListener('resize', positionButton);
   }
 

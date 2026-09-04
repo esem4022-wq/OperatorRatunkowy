@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Operator Ratunkowy - Menedzer pojazdow OR
 // @namespace    operatorratunkowy.local.fleetmanager
-// @version      3.02
+// @version      4.00
 // @description  Lista, filtrowanie i masowa zmiana nazw pojazdow w OperatorRatunkowy.pl
 // @author       ChatGPT / adaptacja mechanizmu FuxTools (Fuxaro)
 // @license      CC BY-NC-SA 4.0
@@ -17,9 +17,14 @@
 
 /*
  * Operator Ratunkowy - Menedzer pojazdow OR
- * Wersja 3.02
+ * Wersja 4.00
  *
  * Funkcje:
+ * - v4.00: wspolna numeracja projektu Operator Menadzery 4.xx,
+ * - v4.00: poprawiono nowe/nieznane typy pojazdow w karcie Zaloga,
+ * - v4.00: typ 107 jest rozpoznawany jako "Szef sluzb ratownictwa medycznego" z max. obsada 1,
+ * - v4.00: dla typow spoza katalogu skrypt probuje odczytac max. obsade z natywnej strony ustawien pojazdu,
+ * - v4.00: gdy katalog nie zna wymagan kursow, przydzial wykorzystuje rzeczywiste zielone przyciski /zuweisung jako weryfikacje gry,
  * - v3.02: przycisk główny zgodny ze wspólnymi zasadami projektu: „Pojazdy” + numer wersji pod nazwą,
  * - v3.02: ujednolicony stały rozmiar przycisku; przycisk nadal tylko na stronie głównej,
  * - pobiera wszystkie pojazdy i jednostki z API gry,
@@ -106,7 +111,7 @@
   'use strict';
 
   const APP_ID = 'or-fleet-manager-v01';
-  const VERSION = '3.02';
+  const VERSION = '4.00';
   const STORAGE_KEY = 'orFleetManagerV01Settings';
   const PAGE_SIZE = 200;
   const CREW_PAGE_SIZE = 100;
@@ -115,6 +120,15 @@
   const OWN_CLASS_DETAIL_CONCURRENCY = 4;
   const CREW_DETAIL_CONCURRENCY = 4;
   const VEHICLE_CATALOG_URL = 'https://api.lss-manager.de/pl_PL/vehicles';
+
+  // Awaryjne dane dla nowych typow, ktore pojawily sie w grze szybciej niz w katalogu LSSM.
+  // Sa uzywane tylko, gdy katalog/API/AAO nie dostarczyly pelnych danych.
+  const VEHICLE_TYPE_FALLBACKS = {
+    '107': {
+      caption: 'Szef służb ratownictwa medycznego',
+      maxPersonnel: 1,
+    },
+  };
 
   // Awaryjny zestaw klas z v1.01.
   // W normalnej pracy v1.02 zastepuje go lista odczytana z /aaos/new.
@@ -152,6 +166,7 @@
     vehicleClassesSource: 'fallback',
     vehicleClassesWarning: '',
     vehicleClassDiagnostics: [],
+    vehicleRuntimeMeta: new Map(),
     loading: false,
     saving: false,
     cancelSave: false,
@@ -761,6 +776,10 @@
     );
     if (aaoName) return { name: aaoName, source: 'aao' };
 
+    const localFallback = VEHICLE_TYPE_FALLBACKS?.[String(typeId)] ?? null;
+    const fallbackName = nonEmptyText(localFallback?.caption);
+    if (fallbackName) return { name: fallbackName, source: 'local-fallback' };
+
     return {
       name: `Typ ${nonEmptyText(typeId) || '?'}`,
       source: 'fallback',
@@ -794,10 +813,12 @@
       const maxPersonnelOverride = overrideRaw === null || overrideRaw === ''
         ? null
         : Math.max(0, Number(overrideRaw) || 0);
+      const localTypeFallback = VEHICLE_TYPE_FALLBACKS?.[String(typeId)] ?? null;
       const catalogMaxRaw =
         catalogEntry?.staff?.max ??
         catalogEntry?.maxPersonnel ??
         catalogEntry?.max_personnel ??
+        localTypeFallback?.maxPersonnel ??
         null;
       const catalogMaxPersonnel = catalogMaxRaw === null || catalogMaxRaw === undefined
         ? null
@@ -819,6 +840,8 @@
         assignedPersonnelCount,
         maxPersonnelOverride,
         catalogMaxPersonnel,
+        runtimeMaxPersonnel: null,
+        runtimeMetaSource: '',
         catalogEntry,
         fmsStatus,
       };
@@ -1856,10 +1879,194 @@
     if (vehicle?.maxPersonnelOverride !== null && vehicle?.maxPersonnelOverride !== undefined) {
       return Math.max(0, Number(vehicle.maxPersonnelOverride) || 0);
     }
+    if (vehicle?.runtimeMaxPersonnel !== null && vehicle?.runtimeMaxPersonnel !== undefined) {
+      return Math.max(0, Number(vehicle.runtimeMaxPersonnel) || 0);
+    }
     if (vehicle?.catalogMaxPersonnel !== null && vehicle?.catalogMaxPersonnel !== undefined) {
       return Math.max(0, Number(vehicle.catalogMaxPersonnel) || 0);
     }
     return null;
+  }
+
+  function maxCrewFieldContext(doc, field) {
+    const parts = [field?.name || '', field?.id || '', field?.title || '', field?.getAttribute?.('aria-label') || ''];
+    const id = field?.getAttribute?.('id');
+    if (id) {
+      const label = [...doc.querySelectorAll('label[for]')].find(item => item.getAttribute('for') === id);
+      if (label) parts.push(label.textContent || '');
+    }
+    const container = field?.closest?.('.form-group, .row, .control-group, .field, .form-check, tr') || field?.parentElement;
+    if (container) parts.push(container.textContent || '');
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function numericFieldValues(field) {
+    const values = [];
+    if (!field) return values;
+
+    if (field.tagName === 'SELECT') {
+      for (const option of [...field.options]) {
+        const raw = String(option.value ?? '').trim();
+        if (/^\d+$/.test(raw)) values.push(Number(raw));
+        const text = String(option.textContent ?? '').trim();
+        const match = text.match(/(?:^|\D)(\d{1,3})(?:\D|$)/);
+        if (match) values.push(Number(match[1]));
+      }
+    } else {
+      const raw = String(field.value ?? '').trim();
+      if (/^\d+$/.test(raw)) values.push(Number(raw));
+      const max = String(field.getAttribute?.('max') ?? '').trim();
+      if (/^\d+$/.test(max)) values.push(Number(max));
+    }
+
+    return values.filter(value => Number.isFinite(value) && value >= 0 && value <= 100);
+  }
+
+  function parseMaxCrewFromVehicleDocument(doc) {
+    const fields = [...doc.querySelectorAll('select, input')];
+    const candidates = [];
+
+    for (const field of fields) {
+      const context = maxCrewFieldContext(doc, field);
+      const lower = context.toLocaleLowerCase('pl');
+      let score = 0;
+
+      if (/max[_\s-]*personnel|maxpersonnel|max[_\s-]*staff/.test(lower)) score += 120;
+      if (/(maksymal|maks\.?)[^\n]{0,35}(załog|zalog|personel|osób|osob)/i.test(context)) score += 100;
+      if (/(załog|zalog|personel|osób|osob)[^\n]{0,35}(maksymal|max\.?)/i.test(context)) score += 90;
+      if (/(besatz|personal)[^\n]{0,35}(max|maximal)/i.test(context)) score += 75;
+      if (/(crew|personnel|staff)[^\n]{0,35}(max|maximum)/i.test(context)) score += 75;
+
+      if (score < 60) continue;
+      const values = numericFieldValues(field);
+      if (!values.length) continue;
+      candidates.push({ score, value: Math.max(...values) });
+    }
+
+    candidates.sort((a, b) => b.score - a.score || b.value - a.value);
+    if (candidates.length) return candidates[0].value;
+
+    const text = String(doc.body?.textContent || '').replace(/\s+/g, ' ');
+    const patterns = [
+      /(?:maksymalna|max\.?)[^0-9]{0,35}(?:załoga|zaloga|personel|osób|osob)[^0-9]{0,12}(\d{1,3})/i,
+      /(?:załoga|zaloga|personel|osób|osob)[^0-9]{0,35}(?:maksymalna|max\.?)[^0-9]{0,12}(\d{1,3})/i,
+      /(?:max(?:imum)?\s+(?:personnel|staff|crew))[^0-9]{0,12}(\d{1,3})/i,
+      /(?:maximale?\s+(?:besatzung|personal))[^0-9]{0,12}(\d{1,3})/i,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      const value = match ? Number(match[1]) : NaN;
+      if (Number.isFinite(value) && value >= 0 && value <= 100) return value;
+    }
+    return null;
+  }
+
+  function parseTypeNameFromVehicleDocument(doc) {
+    const selectors = [
+      '[data-vehicle-type-caption]', '[data-vehicle-type-name]',
+      '.vehicle_type_caption', '.vehicle-type-caption', '.vehicle-type-name',
+    ];
+    for (const selector of selectors) {
+      const element = doc.querySelector(selector);
+      const value = nonEmptyText(
+        element?.getAttribute?.('data-vehicle-type-caption') ||
+        element?.getAttribute?.('data-vehicle-type-name') ||
+        element?.textContent
+      );
+      if (value) return value;
+    }
+
+    const labels = [...doc.querySelectorAll('label, th, dt, strong, b')];
+    for (const label of labels) {
+      const text = nonEmptyText(label.textContent);
+      if (!/(typ pojazdu|rodzaj pojazdu|vehicle type|fahrzeugtyp)/i.test(text)) continue;
+      const container = label.closest('tr, .form-group, .row, dl') || label.parentElement;
+      if (!container) continue;
+      const clone = container.cloneNode(true);
+      for (const node of [...clone.querySelectorAll('label, th, dt, strong, b')]) {
+        if (/(typ pojazdu|rodzaj pojazdu|vehicle type|fahrzeugtyp)/i.test(node.textContent || '')) node.remove();
+      }
+      const value = nonEmptyText(clone.textContent);
+      if (value && value.length <= 120) return value.replace(/^[:\s-]+/, '');
+    }
+    return '';
+  }
+
+  async function fetchVehicleRuntimeMeta(vehicle) {
+    const vehicleId = String(vehicle?.id || '');
+    if (!vehicleId) return null;
+
+    const cached = state.vehicleRuntimeMeta.get(vehicleId);
+    if (cached?.status === 'loaded') return cached.data;
+    if (cached?.status === 'loading') return cached.promise;
+
+    const promise = (async () => {
+      const urls = [
+        `/vehicles/${encodeURIComponent(vehicleId)}/edit`,
+        `/vehicles/${encodeURIComponent(vehicleId)}`,
+        `/vehicles/${encodeURIComponent(vehicleId)}/zuweisung`,
+      ];
+      let maxCrew = null;
+      let typeName = '';
+      let sourceUrl = '';
+
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' },
+          });
+          if (!response.ok) continue;
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          if (maxCrew === null) maxCrew = parseMaxCrewFromVehicleDocument(doc);
+          if (!typeName) typeName = parseTypeNameFromVehicleDocument(doc);
+          if ((maxCrew !== null || typeName) && !sourceUrl) sourceUrl = url;
+          if (maxCrew !== null && typeName) break;
+        } catch (_) {}
+      }
+
+      const data = { maxCrew, typeName, sourceUrl };
+      state.vehicleRuntimeMeta.set(vehicleId, { status: 'loaded', data });
+
+      if (maxCrew !== null && vehicle.maxPersonnelOverride == null) {
+        vehicle.runtimeMaxPersonnel = maxCrew;
+        vehicle.runtimeMetaSource = sourceUrl || 'vehicle-page';
+      }
+      if (typeName && vehicle.typeNameSource === 'fallback') {
+        vehicle.typeName = typeName;
+        vehicle.typeNameSource = 'vehicle-page';
+      }
+      return data;
+    })().catch(error => {
+      state.vehicleRuntimeMeta.set(vehicleId, { status: 'error', error: error?.message || String(error) });
+      return null;
+    });
+
+    state.vehicleRuntimeMeta.set(vehicleId, { status: 'loading', promise });
+    return promise;
+  }
+
+  async function ensureVehicleRuntimeMetaForVehicles(vehicles) {
+    const targets = (vehicles || []).filter(vehicle => {
+      if (!(vehicleMaxCrew(vehicle) === null || vehicle.typeNameSource === 'fallback')) return false;
+      const cached = state.vehicleRuntimeMeta.get(String(vehicle.id));
+      // Po jednej pełnej próbie nie odpytujemy tych samych stron w pętli.
+      return !cached || cached.status === 'loading';
+    });
+    if (!targets.length) return;
+
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const vehicle = targets[cursor++];
+        await fetchVehicleRuntimeMeta(vehicle);
+        await sleep(60);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, targets.length) }, () => worker()));
+    rebuildCrewFilterOptions();
+    renderCrewTable();
   }
 
   function effectiveAssignedCrew(vehicle) {
@@ -2420,9 +2627,16 @@
     const title = `${trainingRequirementText(training)} | Personel: ${detail.totalCount ?? detail.personnel.length}; wolni: ${freePeople.length}; przypisani: ${detail.assignedCount ?? 0}; na szkoleniu: ${detail.inSchoolCount ?? 0}`;
 
     if (!training.known) {
+      if (freePeople.length >= missing) {
+        return {
+          kind: 'ok', label: 'TAK*',
+          detail: `Personelu liczbowo wystarcza (${freePeople.length}/${missing}). Katalog nie zna jeszcze kursów; przy przydziale uprawnienia zweryfikuje natywna strona pojazdu.`,
+          title: `${title} | Wymagania kursów zostaną zweryfikowane przez /zuweisung.`,
+        };
+      }
       return {
-        kind: 'unknown', label: '?',
-        detail: `Wolnych osób: ${freePeople.length}; nieznane wymagania kursów dla tego typu.`,
+        kind: 'bad', label: 'NIE',
+        detail: `Wolnych osób: ${freePeople.length}; potrzeba ${missing}. Katalog nie zna jeszcze wymagań kursów.`,
         title,
       };
     }
@@ -2543,7 +2757,26 @@
 
     const training = extractTrainingDefinition(vehicle.typeId, maxCrew);
     if (!training.known) {
-      return { ok: false, error: 'Nie znam wymagań kursów dla tego typu pojazdu.' };
+      // Dla nowych typow, ktorych katalog LSSM jeszcze nie zna, nie zgadujemy kursow.
+      // Zielony przycisk na /zuweisung jest autorytatywna informacja gry, ze dana osoba
+      // moze zostac przypisana do TEGO konkretnego pojazdu.
+      const assignable = detail.personnel.filter(person =>
+        person.available && person.assignHref && person.canAssignReferenceVehicle
+      );
+      if (assignable.length < missing) {
+        return {
+          ok: false,
+          error: `Gra pozwala przypisać ${assignable.length} wolnych osób; potrzeba ${missing}. ` +
+            `Typ ${vehicle.typeId} nie ma jeszcze danych kursów w katalogu, więc używam bezpośrednio strony /zuweisung.`,
+        };
+      }
+      return {
+        ok: true,
+        people: assignable.slice(0, missing),
+        missing,
+        maxCrew,
+        trainingFallback: 'zuweisung',
+      };
     }
 
     const allKeys = training.requirements.filter(req => req.all).map(req => req.key);
@@ -2943,6 +3176,11 @@
 
   async function ensureCrewDetailsForVehicles(vehicles, force = false) {
     if (!vehicles?.length) return;
+
+    // Nowe typy pojazdow moga pojawic sie w grze przed aktualizacja katalogu LSSM.
+    // W takim przypadku probujemy uzupelnic max. obsade i nazwe typu z natywnych stron gry.
+    await ensureVehicleRuntimeMetaForVehicles(vehicles);
+
     const buildingIds = [...new Set(vehicles.map(v => String(v.buildingId)).filter(Boolean))];
     const queue = buildingIds.filter(buildingId => {
       const cached = state.crewDetails.get(buildingId);

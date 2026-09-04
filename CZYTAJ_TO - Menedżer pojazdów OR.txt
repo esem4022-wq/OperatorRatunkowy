@@ -1,7 +1,7 @@
 ﻿MENEDŻER POJAZDÓW OR
 OperatorRatunkowy.pl
 
-AKTUALNA WERSJA: 3.01
+AKTUALNA WERSJA: 4.00
 
 ============================================================
 GITHUB / AKTUALIZACJE TAMPERMONKEY
@@ -24,11 +24,20 @@ Przy wydawaniu kolejnej wersji:
 5. Numer wersji zmienia się w metadanych @version, ale nazwa pliku .user.js pozostaje stała.
 
 ZIP może mieć numer wersji w nazwie, np.:
-menedzer-pojazdow-or-v3.02.zip
+menedzer-pojazdow-or-v4.00.zip
 
 ============================================================
 HISTORIA WERSJI
 ============================================================
+
+v4.00
+- wdrożono wspólną numerację projektu „Operator Menadżery” 4.xx,
+- przycisk pozostaje zgodny ze wspólnymi zasadami: tylko strona główna, ikona + nazwa „Pojazdy”, numer wersji w drugiej linii,
+- poprawiono obsługę nowych typów pojazdów, które pojawiają się w grze wcześniej niż w katalogu LSSM,
+- typ 107 jest rozpoznawany jako „Szef służb ratownictwa medycznego” z maksymalną obsadą 1,
+- dla nieznanych typów karta „Załoga” próbuje dodatkowo odczytać maksymalną obsadę z natywnej strony ustawień pojazdu,
+- jeżeli katalog nie zna jeszcze wymaganych kursów, przydzielanie korzysta z rzeczywistych przycisków dostępnych na /vehicles/{id}/zuweisung; dzięki temu wymagania kursów weryfikuje sama gra,
+- zachowano wszystkie wcześniejsze funkcje: Nazwy, Załoga, Stan, Klasa, GitHub/Tampermonkey i eksporty.
 
 v3.02
 - przycisk główny ma nazwę „Pojazdy”,

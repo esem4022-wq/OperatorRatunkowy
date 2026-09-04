@@ -1,4 +1,4 @@
-Menedżer załogi OR v3.03
+Menedżer załogi OR v4.00
 
 Plik instalacyjny Tampermonkey:
 menedzer-zalogi-or.user.js
@@ -10,6 +10,8 @@ Zakres:
 - osobny menedżer, bez usuwania funkcji z Menedżera budynków lub Menedżera pojazdów,
 - zakładka Jednostki: personel obecny, docelowy, potrzeba, bilans i rekrutacja,
 - zakładka Pojazdy: maksymalna/przydzielona/brakująca załoga,
+- zakładka Lista załogi: lista pracowników pobierana z jednostek, z informacją o typie jednostki, jednostce, wyszkoleniu i przypisanym pojeździe,
+- w Liście załogi filtry po typie, jednostce i wyszkoleniu oraz przycisk ukrywania/pokazywania kolumny Typ,
 - filtry braków/OK/nadmiaru,
 - zaznaczanie wielu pojazdów i próba przydziału do maksymalnej obsady przez natywny formularz gry,
 - bezpieczny fallback do otwarcia natywnej strony, jeżeli formularza nie da się automatycznie znaleźć.
@@ -61,3 +63,21 @@ v3.03
 - zmieniono nazwę wyświetlaną na przycisku głównym z „Menedżer załogi OR” na „Załoga”,
 - numer wersji nadal jest wyświetlany w osobnym, mniejszym wierszu pod nazwą,
 - pozostałe zasady wyglądu, pozycjonowania i działania przycisku pozostają bez zmian.
+
+v4.00
+- przejście Menedżera załogi OR na wspólną numerację projektu 4.xx,
+- dodano trzecią zakładkę `Lista załogi`,
+- lista załogi jest pobierana z natywnych stron personelu poszczególnych jednostek (`/buildings/{ID}/personals`), bez usuwania dotychczasowych funkcji z zakładek Jednostki i Pojazdy,
+- dodano filtr `Typ` (typ jednostki),
+- dodano filtr `Jednostka`,
+- dodano filtr `Wyszkolenie`, w tym pozycję `Brak wyszkolenia`, jeśli występują osoby bez kursów,
+- dodano przycisk `Ukryj kolumnę Typ` / `Pokaż kolumnę Typ`,
+- w tabeli listy załogi dodano kolumny: ID, Typ, Jednostka, Załogant, Wyszkolenie, Przydzielony pojazd i Akcje,
+- szkolenia są odczytywane z natywnych danych strony i, gdy to możliwe, tłumaczone za pomocą katalogu szkoleń LSS-Manager,
+- lista załogi jest ładowana dopiero po wejściu do tej zakładki, aby nie spowalniać otwierania podstawowych zakładek,
+- dodano osobny przycisk odświeżenia listy załogi,
+- zgodnie ze wspólnymi zasadami projektu przycisk główny ma ikonę `👥`, nazwę `Załoga` w pierwszej linii i numer wersji w drugiej linii bez pogrubienia,
+- rozmiar przycisku jest synchronizowany wyłącznie z przyciskiem `Pojazdy`, który jest wspólnym wzorcem wymiarów,
+- zachowano pozycję przycisku Załoga po lewej stronie Menedżera ZR oraz wyświetlanie tylko na stronie głównej,
+- zachowano pełną wcześniejszą historię wersji.
+

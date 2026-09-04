@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.14
+Wersja: 3.15.15
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -37,9 +37,18 @@ NAJWAŻNIEJSZE FUNKCJE
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
 - automatyczne zaznaczenie istniejącej ZR po nazwie misji; skróty `Ambulans`, `Radiowóz` i `Straż` mają pierwszeństwo tylko wtedy, gdy pełna widoczna karta jednoznacznie potwierdza ich warunki,
 - przycisk `EDYTUJ ZR` wyszukuje ZR dla bieżącej misji we wszystkich kategoriach poza `AZR` i `Bez kategorii`, a następnie otwiera jej pełną edycję.
+- podczas edycji istniejącej ZR kolor tła pozostaje dokładnie bez zmian; skrypt ustawia jedynie `Automatyczny kolor` tekstu.
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.15
+- podczas edycji istniejącej ZR skrypt nie zmienia już koloru tła — zachowuje dokładnie wartość zapisaną w edytowanej ZR,
+- pozostawiono ustawianie koloru tekstu na `Automatyczny kolor`,
+- usunięto logikę wymuszającą `Bez koloru`, pustą wartość lub zastępcze pole hidden dla tła,
+- tworzenie nowej ZR pozostaje bez zmian,
+- pola wyglądu nadal są wykluczone z dopasowywania wymagań i działania `Zastąp ZR`,
+- zmieniono klucz capture na wersję 3.15.15.
+
 v3.15.14
 - naprawiono filtr `Wydziały Ruchu Drogowego`: znak `ł` jest teraz normalizowany do `l`, więc warunek aktywacji misji nie może już przejść jako wymagany pojazd,
 - dodano bezpośredni odczyt pojazdów z widocznego nagłówka `Pojazdy` i najbliższej żółtej karty, bez zależności od rozpoznania nazwy misji,
