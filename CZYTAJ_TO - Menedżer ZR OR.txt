@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.25
+Wersja: 3.15.26
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -43,6 +43,12 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.26
+- poprawiono auto-zaznaczanie ZR `Radiowóz` dla wszystkich misji, w których jedynym wymaganiem pojazdowym jest dokładnie `1 OPI`,
+- dodano niezależny od `mission_help` odczyt bezpośrednio z widocznej żółtej karty misji,
+- puste/techniczne wystąpienie nagłówka `Pacjenci` nie blokuje już `Radiowóz`; skrót jest blokowany dopiero przez rzeczywiste dodatnie wymaganie pacjenta, wodę, pianę lub dodatkowy pojazd,
+- zachowano przelicznik SPKP 6 osób na 1 Opancerzony Pojazd SPKP oraz wszystkie poprawki v3.15.25.
+
 v3.15.25
 - dodano automatyczne przeliczanie specjalnego wymagania `Wymagany personel SPKP` na liczbę `Opancerzonych Pojazdów SPKP`,
 - przyjęty standard użytkownika: 6 przeszkolonych osób SPKP na jeden `Opancerzony Pojazd SPKP`,

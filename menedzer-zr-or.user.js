@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.25
+// @version      3.15.26
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,7 +24,7 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.25';
+    const VERSION = '3.15.26';
     const CAPTURE_KEY = 'or_zr_capture_v31525';
     const MAP_KEY = 'or_zr_map_v020';
     // v3.15.25: użytkownik ma standardowo 6 przeszkolonych osób SPKP
@@ -4357,7 +4357,77 @@
         return null;
     }
 
+    function hardOnlyOneOPIFromCurrentMissionCard(missionName = '') {
+        // v3.15.26: bezpośrednia, niezależna reguła dla misji, w której
+        // jedynym wymaganiem pojazdowym jest dokładnie `1 OPI`.
+        // Nie opieramy się na mission_help ani na ogólnym snapshotcie, bo
+        // Operator potrafi doładowywać fragmenty karty w różnej kolejności.
+        const liveName = sanitizeMissionName(missionName || currentMissionNameForAutoSelect());
+        const liveKey = exactMissionNameKey(liveName);
+        const candidates = [];
+        const seen = new Set();
+
+        const addCandidate = el => {
+            if (!el || seen.has(el) || !el.isConnected || !isDisplayedInInterface(el)) return;
+            seen.add(el);
+
+            const raw = String(el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+            if (!raw || raw.length > 7000 || !/\bPojazdy\b/i.test(raw)) return;
+            if (/Dostępne jednostki|Dostepne jednostki|Alarmowo/i.test(raw)) return;
+
+            const hasCurrentTitle = !!(liveKey && exactMissionNameKey(raw).includes(liveKey));
+            const paleCard = isPaleMissionCardBackground(el);
+            if (liveKey && !hasCurrentTitle && !paleCard) return;
+
+            const compact = raw.replace(/\s+/g, ' ').trim();
+            const m = compact.match(
+                /\bPojazdy\b\s*(.*?)(?=\s+(?:Pacjenci\b|Personel\b|Woda\b|Piana\b|Specjalne\s+wymagania\b|\d+\s+Wi[eę]źni[oó]w\b|Wi[eę]źni[oó]w\b|Mo(?:ż|z)e\s+si[eę]\s+rozwin[aąć]\b)|$)/i
+            );
+            if (!m) return;
+
+            const vehicleKey = normalize(m[1]);
+            if (vehicleKey !== '1 opi') return;
+
+            // Sama obecność pustego nagłówka `Pacjenci` nie blokuje skrótu.
+            // Blokuje go dopiero rzeczywiste dodatnie wymaganie pacjenta.
+            const hasPositivePatientRequirement =
+                /\b(?:Dokładnie|Dokladnie|Minimum|Maksimum)\s+[1-9]\d*\s+pacjent/i.test(raw) ||
+                (extractMaxPatientsFromText(raw) || 0) > 0;
+            if (hasPositivePatientRequirement) return;
+            if ((extractResourceFromText(raw, 'water') || 0) > 0) return;
+            if ((extractResourceFromText(raw, 'foam') || 0) > 0) return;
+
+            let score = 0;
+            if (hasCurrentTitle) score += 120;
+            if (paleCard) score += 60;
+            score -= Math.floor(raw.length / 200);
+            candidates.push({ score, len: raw.length, raw });
+        };
+
+        addCandidate(findExactMissionCardByTitle());
+        addCandidate(findMissionCardFromVehiclesHeading());
+        addCandidate(findMissionInfoBlock());
+
+        // Fallback po widocznych żółtych/panelowych kontenerach, gdy Operator
+        // zmieni strukturę DOM, ale zachowa tekst karty.
+        for (const el of document.querySelectorAll('.alert-warning,.panel-warning,.alert,.panel,.well,section,article,aside,div')) {
+            addCandidate(el);
+        }
+
+        candidates.sort((a, b) => b.score - a.score || a.len - b.len);
+        if (candidates.length) {
+            log('v3.15.26: jedyne wymaganie 1 OPI -> ZR Radiowóz.');
+            return 'Radiowóz';
+        }
+        return null;
+    }
+
     function visibleSpecialAutoSelectTarget(missionName = '') {
+        const hardOPITarget = hardOnlyOneOPIFromCurrentMissionCard(missionName);
+        if (hardOPITarget) return hardOPITarget;
+
         const hardLiteralTarget = hardLiteralShortcutFromVisibleMissionCard(missionName);
         if (hardLiteralTarget) return hardLiteralTarget;
 
