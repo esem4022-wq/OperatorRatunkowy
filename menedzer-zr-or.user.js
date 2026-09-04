@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.20
+// @version      3.15.21
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.20';
-    const CAPTURE_KEY = 'or_zr_capture_v31520';
+    const VERSION = '3.15.21';
+    const CAPTURE_KEY = 'or_zr_capture_v31521';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -5346,6 +5346,180 @@
         renderEditor();
     }
 
+    function currentEditedAAOId() {
+        const match = location.pathname.match(/^\/aaos\/(\d+)\/edit\/?$/);
+        return match ? String(match[1]) : '';
+    }
+
+    function currentEditorCaption() {
+        const caption = state.fields.find(field => field.kind === 'caption');
+        const value = caption?.input?.value || state.capture?.name || '';
+        return sanitizeMissionName(value);
+    }
+
+    function currentEditorRequirementValues() {
+        const values = new Map();
+        for (const field of state.fields) {
+            if (!['vehicle', 'water', 'foam'].includes(field.kind)) continue;
+            if (!field.name || !field.input) continue;
+            values.set(field.name, String(field.input.value ?? ''));
+        }
+        return values;
+    }
+
+    async function findMatchingAZRAAOForEditor(caption) {
+        const wanted = new Set(
+            zrNameCandidates(caption)
+                .map(exactMissionNameKey)
+                .filter(Boolean)
+        );
+        if (!wanted.size) return null;
+
+        const [categoryId, aaos] = await Promise.all([
+            loadAZRCategoryId(false),
+            loadAAOsForAutoSelect(true)
+        ]);
+
+        if (categoryId == null || categoryId === '') return null;
+
+        return (Array.isArray(aaos) ? aaos : []).find(aao => {
+            if (!aaoBelongsToCategory(aao, categoryId)) return false;
+            const aaoCaption = aao?.caption ?? aao?.name ?? aao?.title ?? '';
+            return wanted.has(exactMissionNameKey(aaoCaption));
+        }) || null;
+    }
+
+    function findAAOEditFormInDocument(doc, aaoId) {
+        const forms = [...doc.querySelectorAll('form')];
+        const id = String(aaoId || '');
+
+        return forms.find(form => {
+            const action = String(form.getAttribute('action') || '');
+            return id && (
+                action.includes(`/aaos/${id}`) ||
+                action.includes(`/aaos/${id}/`)
+            );
+        }) || forms.find(form => {
+            const action = String(form.getAttribute('action') || '');
+            return /\/aaos\/\d+/.test(action);
+        }) || null;
+    }
+
+    async function synchronizeEditedAAOToAZR() {
+        if (!isExistingAAOEdit()) return { status: 'skip' };
+
+        const sourceId = currentEditedAAOId();
+        const caption = currentEditorCaption();
+        if (!sourceId || !caption) return { status: 'skip' };
+
+        const targetAAO = await findMatchingAZRAAOForEditor(caption);
+        if (!targetAAO) {
+            log(`Synchronizacja AZR: brak ZR „${caption}” w AZR — pomijam.`);
+            return { status: 'missing' };
+        }
+
+        const targetId = String(targetAAO?.id ?? targetAAO?.aao_id ?? '');
+        if (!targetId || targetId === sourceId) {
+            // Jeżeli użytkownik edytuje samą kopię AZR, nie synchronizujemy jej z nią samą.
+            return { status: 'skip' };
+        }
+
+        const requirementValues = currentEditorRequirementValues();
+        if (!requirementValues.size) return { status: 'skip' };
+
+        const editUrl = new URL(`/aaos/${targetId}/edit`, location.origin).href;
+        const html = await xhrText(editUrl);
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const targetForm = findAAOEditFormInDocument(doc, targetId);
+        if (!targetForm) throw new Error(`Nie znaleziono formularza edycji ZR AZR #${targetId}.`);
+
+        // Kopiujemy WYŁĄCZNIE wymagania. Nazwa, kategoria, opis i ustawienia
+        // wyglądu kopii AZR pozostają dokładnie takie, jak były.
+        for (const [name, value] of requirementValues.entries()) {
+            let controls = [];
+            try {
+                controls = [...targetForm.querySelectorAll(`[name="${CSS.escape(name)}"]`)];
+            } catch {
+                controls = [...targetForm.querySelectorAll('[name]')].filter(el => el.getAttribute('name') === name);
+            }
+
+            for (const control of controls) {
+                const type = String(control.type || '').toLowerCase();
+                if (['checkbox', 'radio', 'hidden', 'submit', 'button'].includes(type)) continue;
+                control.value = value;
+            }
+        }
+
+        const action = new URL(
+            targetForm.getAttribute('action') || `/aaos/${targetId}`,
+            location.origin
+        ).href;
+        const method = String(targetForm.getAttribute('method') || 'post').toUpperCase();
+        const body = new FormData(targetForm);
+
+        const response = await fetch(action, {
+            method,
+            credentials: 'same-origin',
+            cache: 'no-store',
+            body
+        });
+
+        if (!response.ok) {
+            throw new Error(`Aktualizacja ZR w AZR nie powiodła się (HTTP ${response.status}).`);
+        }
+
+        // Czyścimy cache listy ZR, aby kolejne operacje widziały świeży stan.
+        state.aaosPromise = null;
+        state.aaosLoadedAt = 0;
+        log(`Synchronizacja AZR: zaktualizowano ZR „${caption}” (#${targetId}).`);
+        return { status: 'updated', targetId };
+    }
+
+    function installAZRSyncOnEditorSave(form) {
+        if (!form || !isExistingAAOEdit() || form.dataset.orzrAzrSyncInstalled === '1') return;
+        form.dataset.orzrAzrSyncInstalled = '1';
+
+        form.addEventListener('submit', async event => {
+            // Drugi przebieg jest właściwym, końcowym zapisem formularza po synchronizacji.
+            if (form.dataset.orzrAzrSyncBypass === '1') return;
+            if (form.dataset.orzrAzrSyncBusy === '1') {
+                event.preventDefault();
+                return;
+            }
+
+            event.preventDefault();
+            form.dataset.orzrAzrSyncBusy = '1';
+            const submitter = event.submitter || null;
+
+            try {
+                await synchronizeEditedAAOToAZR();
+            } catch (error) {
+                console.warn(TAG, 'Synchronizacja edytowanej ZR z AZR nie powiodła się:', error);
+                alert(
+                    'Menedżer ZR: nie udało się zaktualizować istniejącej kopii w AZR.\n\n' +
+                    (error?.message || String(error)) +
+                    '\n\nZwykła ZR zostanie zapisana normalnie.'
+                );
+            } finally {
+                form.dataset.orzrAzrSyncBypass = '1';
+                delete form.dataset.orzrAzrSyncBusy;
+
+                // requestSubmit zachowuje natywną obsługę formularza i ewentualną
+                // nazwę klikniętego przycisku. Flaga bypass zapobiega pętli.
+                try {
+                    if (typeof form.requestSubmit === 'function') {
+                        if (submitter && submitter.isConnected) form.requestSubmit(submitter);
+                        else form.requestSubmit();
+                    } else {
+                        HTMLFormElement.prototype.submit.call(form);
+                    }
+                } catch {
+                    HTMLFormElement.prototype.submit.call(form);
+                }
+            }
+        }, true);
+    }
+
     function buildEditorPanel() {
         if (!isAAOEditor()) return;
         if (document.getElementById('orzr-editor')) return;
@@ -5380,6 +5554,10 @@
 
         const form = document.querySelector('form');
         if (!form) return;
+
+        // v3.15.21: przy zapisie istniejącej zwykłej ZR aktualizujemy również
+        // istniejącą ZR o tej samej nazwie w kategorii AZR.
+        installAZRSyncOnEditorSave(form);
 
         const panel = document.createElement('div');
         panel.id = 'orzr-editor';
