@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.16
+// @version      3.15.17
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.16';
-    const CAPTURE_KEY = 'or_zr_capture_v31516';
+    const VERSION = '3.15.17';
+    const CAPTURE_KEY = 'or_zr_capture_v31517';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1756,6 +1756,36 @@
         return Number.isFinite(count) && count > 0 ? count : 0;
     }
 
+    function vehicleSectionRawText(text) {
+        // Zachowujemy znaki nowych linii i wycinamy tylko sekcję Pojazdy.
+        // To jest bardziej odporne niż spłaszczony parser, gdy karta i lista
+        // `Dostępne jednostki` znajdują się w jednym większym kontenerze DOM.
+        const raw = String(text || '').replace(/\u00a0/g, ' ').replace(/\r/g, '').trim();
+        if (!raw) return '';
+
+        const startMatch = /(?:^|\n)\s*Pojazdy\s*(?:\n|$)/i.exec(raw);
+        let start = startMatch ? startMatch.index + startMatch[0].length : raw.search(/\bPojazdy\b/i);
+        if (start < 0) return '';
+
+        let segment = raw.slice(start);
+        const stopPatterns = [
+            /(?:^|\n)\s*Pacjenci\b/i,
+            /(?:^|\n)\s*Personel\b/i,
+            /(?:^|\n)\s*Dostępne jednostki\b/i,
+            /(?:^|\n)\s*Dostepne jednostki\b/i,
+            /(?:^|\n)\s*Alarmowo\b/i,
+            /(?:^|\n)\s*Może się rozwinąć\b/i,
+            /(?:^|\n)\s*Moze sie rozwinac\b/i
+        ];
+
+        let cut = segment.length;
+        for (const re of stopPatterns) {
+            const m = re.exec(segment);
+            if (m && m.index < cut) cut = m.index;
+        }
+        return segment.slice(0, cut).trim();
+    }
+
     function extractExplicitSCCnCountFromVisibleCard(preferredBlock = null) {
         const candidates = [];
         const seen = new Set();
@@ -1770,21 +1800,79 @@
         add(findExactMissionCardByTitle());
         add(findMissionInfoBlock());
 
+        // 1. Czytamy dokładnie sekcję `Pojazdy` z każdego sensownego kontenera.
+        // Nie odrzucamy już kontenera tylko dlatego, że jego dalsza część zawiera
+        // `Dostępne jednostki` — sekcja zostaje wcześniej bezpiecznie odcięta.
         for (const block of candidates) {
             const raw = String(block.innerText || block.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .trim();
             if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
-            if (/\bDostępne jednostki\b|\bDostepne jednostki\b|\bAlarmowo\b/i.test(raw)) continue;
 
-            const segment = getVehiclesTextSegmentFromCardText(raw);
-            const count = sccnCountFromText(segment || raw);
+            const section = vehicleSectionRawText(raw);
+            const count = sccnCountFromText(section);
             if (count > 0) return count;
         }
 
+        // 2. Bardzo bezpośredni fallback: szukamy widocznego wiersza `1 SCCn`.
+        // To działa również wtedy, gdy liczba i skrót są wyrenderowane w osobnych
+        // elementach, a nadrzędny kontener obejmuje większą część okna misji.
+        for (const el of document.querySelectorAll('li,p,span,div,td,dd,strong,b')) {
+            if (!isVisible(el)) continue;
+            const text = String(el.innerText || el.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!text || text.length > 80) continue;
+
+            let count = sccnCountFromText(text);
+            if (!count && /^SCCn$/i.test(text)) {
+                const prev = String(el.previousElementSibling?.textContent || '').trim();
+                if (/^\d+$/.test(prev)) count = Number.parseInt(prev, 10) || 0;
+                if (!count) {
+                    const parentText = String(el.parentElement?.innerText || el.parentElement?.textContent || '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    count = sccnCountFromText(parentText);
+                }
+            }
+            if (!count) continue;
+
+            let parent = el;
+            for (let depth = 0; depth < 10 && parent; depth++, parent = parent.parentElement) {
+                const parentRaw = String(parent.innerText || parent.textContent || '')
+                    .replace(/\u00a0/g, ' ')
+                    .trim();
+                if (!/\bPojazdy\b/i.test(parentRaw)) continue;
+                const section = vehicleSectionRawText(parentRaw);
+                if (sccnCountFromText(section) === count) return count;
+            }
+        }
+
+        // 3. Fallback po tekście aktualnej karty.
         const missionName = currentMissionNameForAutoSelect() || exactMissionTitleFromGame() || '';
         const cardText = findCurrentMissionCardText(missionName);
-        return sccnCountFromText(getVehiclesTextSegmentFromCardText(cardText));
+        let count = sccnCountFromText(vehicleSectionRawText(cardText));
+        if (count > 0) return count;
+
+        // 4. Ostatni bezpiecznik: fragment tekstu strony zaczynający się od nazwy
+        // bieżącej misji. Szukamy SCCn wyłącznie przed końcem sekcji Pojazdy.
+        if (missionName) {
+            const bodyText = String(document.body?.innerText || '').replace(/\u00a0/g, ' ');
+            const bodyLower = bodyText.toLocaleLowerCase('pl-PL');
+            const nameLower = missionName.toLocaleLowerCase('pl-PL');
+            let pos = bodyLower.indexOf(nameLower);
+            while (pos >= 0) {
+                const windowText = bodyText.slice(pos, pos + 8000);
+                const section = vehicleSectionRawText(windowText);
+                count = sccnCountFromText(section);
+                if (count > 0) return count;
+                pos = bodyLower.indexOf(nameLower, pos + Math.max(1, nameLower.length));
+            }
+        }
+
+        return 0;
     }
 
     function extractExplicitK9CountFromVisibleCard(preferredBlock = null) {
@@ -2106,7 +2194,7 @@
                 helpK9Count = Number(helpK9?.count) || 0;
 
                 const helpSCCn = (Array.isArray(parsed.vehicles) ? parsed.vehicles : []).find(v =>
-                    normalize(v?.label || '') === 'sccn'
+                    (normalize(v?.label || '') === 'sccn' || normalize(v?.label || '').includes('sccn'))
                 );
                 helpSCCnCount = Number(helpSCCn?.count) || 0;
 
