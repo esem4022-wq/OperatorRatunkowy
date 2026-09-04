@@ -1,5 +1,5 @@
 MENEDŻER ZR OR
-Wersja: 3.15.17
+Wersja: 3.15.18
 Osobny skrypt do tworzenia ZR z poziomu otwartej misji w OperatorRatunkowy.pl.
 
 ZAWARTOŚĆ ZIP
@@ -32,7 +32,7 @@ NAJWAŻNIEJSZE FUNKCJE
 - ZR `Straż` jest auto-zaznaczana tylko wtedy, gdy jedynym wymaganiem jest dokładnie 1 samochód/wóz pożarniczy; pacjenci, woda, piana lub inne wymagania wyłączają tę regułę,
 - misja `Transport pacjenta`: auto-zaznacz ZR `Ambulans T` z kategorii `AZR`,
 - misja, której nazwa zaczyna się od `Transport krytyczny`: auto-zaznacz ZR `A TK` z kategorii `AZR`,
-- jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`,
+- jeśli nie ma pasującej ZR w `AZR`, skrypt wraca do pierwszej kategorii `Pożary`; jeśli ZR została znaleziona i zaznaczona, skrypt pozostaje na `AZR` i nie przełącza z powrotem na `Pożary`,
 - zabezpieczenie przed pobieraniem nazw własnych pojazdów z listy „Dostępne jednostki”,
 - czyszczenie nazwy ZR z dodatkowych informacji typu POI,
 - automatyczne zaznaczenie istniejącej ZR po nazwie misji; skróty `Ambulans`, `Radiowóz` i `Straż` mają pierwszeństwo tylko wtedy, gdy pełna widoczna karta jednoznacznie potwierdza ich warunki,
@@ -41,6 +41,14 @@ NAJWAŻNIEJSZE FUNKCJE
 - przycisk przejścia do tworzenia/edycji ZR.
 
 HISTORIA WERSJI
+v3.15.18
+- poprawiono ponownie odczyt `SCCn`: dodano najprostszą ścieżkę czytającą tekst bezpośrednio spod widocznego nagłówka `Pojazdy` oraz końcowy fallback `liczba + SCCn` z widocznego tekstu strony,
+- `SCCn` jest ponownie dopisywane do wymagań po odczycie widocznej karty i nadal mapowane do pola cysterny z wodą,
+- usunięto podwójne wymaganie ambulansu przy misjach typu `1 Ambulans` + pacjenci: zwykły `Ambulans` oraz `Ambulans S/P` są scalane do jednego wiersza `Ambulans S lub P`; ilość to większa z wartości: jawny Ambulans lub maksymalna liczba pacjentów,
+- po znalezieniu i skutecznym zaznaczeniu ZR w `AZR` skrypt pozostaje na kategorii `AZR`; nie wraca automatycznie do `Pożary` ani poprzedniej kategorii,
+- powrót do `Pożary` pozostaje tylko dla przypadku, gdy pasującej ZR w `AZR` nie znaleziono,
+- zmieniono klucz capture na wersję 3.15.18, aby test nie korzystał ze starego zapisu.
+
 v3.15.17
 - przebudowano odczyt `SCCn`: skrypt wycina surową sekcję `Pojazdy` z zachowaniem nowych linii zamiast polegać wyłącznie na spłaszczonym tekście karty,
 - kontener nie jest już odrzucany tylko dlatego, że niżej zawiera `Dostępne jednostki`; ta część jest bezpiecznie odcinana przed analizą,

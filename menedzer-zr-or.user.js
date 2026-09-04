@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Menedżer ZR OR
 // @namespace    https://www.operatorratunkowy.pl/
-// @version      3.15.17
+// @version      3.15.18
 // @description  Tworzenie ZR z aktualnie otwartej misji – przycisk w nagłówku misji.
 // @author       ChatGPT + użytkownik
 // @homepageURL  https://github.com/esem4022-wq/OperatorRatunkowy
@@ -24,8 +24,8 @@
     'use strict';
 
     const TAG = '[OR Menedżer ZR]';
-    const VERSION = '3.15.17';
-    const CAPTURE_KEY = 'or_zr_capture_v31517';
+    const VERSION = '3.15.18';
+    const CAPTURE_KEY = 'or_zr_capture_v31518';
     const MAP_KEY = 'or_zr_map_v020';
 
     const state = {
@@ -1786,7 +1786,42 @@
         return segment.slice(0, cut).trim();
     }
 
+    function visibleVehicleSectionTextFromHeading() {
+        // v3.15.18: najprostsze źródło prawdy dla listy pojazdów to tekst
+        // bezpośrednio pod widocznym nagłówkiem `Pojazdy`. Wspinamy się po
+        // rodzicach i wybieramy najmniejszy fragment zawierający rzeczywiste
+        // pozycje `ilość + nazwa`, a następnie odcinamy Pacjentów/jednostki.
+        const heading = findVisibleVehiclesHeading();
+        if (!heading) return '';
+
+        const candidates = [];
+        let cur = heading;
+        for (let depth = 0; depth < 12 && cur; depth++, cur = cur.parentElement) {
+            if (!cur.isConnected) continue;
+            const raw = String(cur.innerText || cur.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\r/g, '')
+                .trim();
+            if (!raw || !/\bPojazdy\b/i.test(raw)) continue;
+
+            const section = vehicleSectionRawText(raw);
+            if (!section) continue;
+            if (!/(?:^|\n|\s)\d+\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(section)) continue;
+
+            candidates.push({ section, len: section.length, depth });
+        }
+
+        candidates.sort((a, b) => a.len - b.len || a.depth - b.depth);
+        return candidates[0]?.section || '';
+    }
+
     function extractExplicitSCCnCountFromVisibleCard(preferredBlock = null) {
+        // v3.15.18: najpierw sprawdzamy dosłownie tekst pod widocznym nagłówkiem
+        // `Pojazdy`. Ta ścieżka nie zależy od nazwy misji ani mission_help.
+        const directSection = visibleVehicleSectionTextFromHeading();
+        const directCount = sccnCountFromText(directSection);
+        if (directCount > 0) return directCount;
+
         const candidates = [];
         const seen = new Set();
         const add = el => {
@@ -2257,8 +2292,14 @@
 
         // v3.15.16: SCCn ma osobny bezpiecznik. W części misji (np. Pożar bloku)
         // ogólny parser potrafił pominąć `1 SCCn`, mimo że wpis był widoczny.
+        const directSCCnCount = sccnCountFromText(visibleVehicleSectionTextFromHeading());
         const explicitSCCnCount = extractExplicitSCCnCountFromVisibleCard(block);
-        const sccnCount = explicitSCCnCount || helpSCCnCount;
+        // Ostatni fallback v3.15.18: `1 SCCn` jest bardzo charakterystycznym
+        // wpisem. Jeśli struktura karty nie pozwoliła go przypisać, sprawdzamy
+        // także widoczny tekst strony. Nazwy własne pojazdów typu SCCn[...] nie
+        // pasują do tego wzorca, bo wymagamy dokładnie `liczba + SCCn`.
+        const pageSCCnCount = sccnCountFromText(visiblePageText());
+        const sccnCount = directSCCnCount || explicitSCCnCount || helpSCCnCount || pageSCCnCount;
         if (sccnCount > 0) {
             const repairedVehicles = [];
             const repairedMap = new Map();
@@ -4018,6 +4059,7 @@
         }
 
         const previous = activeAAOCategoryControl(group);
+        let selected = false;
 
         try {
             showAZRCategory(azrControl);
@@ -4029,10 +4071,15 @@
             target.classList.add('orzr-auto-selected-aao');
             target.title = `${target.title ? target.title + ' | ' : ''}Automatycznie wybrane przez Menedżer ZR z kategorii AZR`;
             target.click();
+            selected = true;
             await waitMs(120);
+            // v3.15.18: po skutecznym wyborze ZR pozostajemy na AZR.
+            // Nie wracamy automatycznie do Pożary ani do poprzedniej kategorii.
             return { ok: true, target };
         } finally {
-            if (previous && previous !== azrControl && isDisplayedInInterface(previous)) {
+            // Poprzednią kategorię przywracamy wyłącznie wtedy, gdy wybór ZR
+            // NIE doszedł do skutku. Po sukcesie AZR ma pozostać aktywna.
+            if (!selected && previous && previous !== azrControl && isDisplayedInInterface(previous)) {
                 try { previous.click(); } catch {}
             }
         }
@@ -5002,25 +5049,50 @@
     function requirements() {
         if (!state.capture) return [];
 
-        const list = state.capture.vehicles.map(v => ({
-            kind: 'vehicle',
-            label: v.label,
-            value: v.count,
-            chance: v.chance
-        }));
+        const list = [];
+        let explicitPatientAmbulances = 0;
+
+        // v3.15.18: `1 Ambulans` z żółtej karty przy pacjentach nie może tworzyć
+        // drugiego, równoległego wiersza obok `Ambulans S lub P`. Wszystkie
+        // zwykłe warianty Ambulans/S/P scalimy z regułą maks. liczby pacjentów.
+        for (const v of (Array.isArray(state.capture.vehicles) ? state.capture.vehicles : [])) {
+            const n = normalize(v?.label || '').trim();
+            const count = Number(v?.count) || 0;
+            const isPatientAmbulance = [
+                'ambulans', 'ambulanse',
+                'ambulans s', 'ambulans p',
+                'ambulans s lub p', 'ambulans p lub s',
+                'ambulans ratunkowy', 'ambulanse s lub p', 'ambulanse p lub s'
+            ].includes(n);
+
+            if (isPatientAmbulance) {
+                explicitPatientAmbulances = Math.max(explicitPatientAmbulances, count);
+                continue;
+            }
+
+            list.push({
+                kind: 'vehicle',
+                label: v.label,
+                value: v.count,
+                chance: v.chance
+            });
+        }
 
         if (state.capture.water > 0) list.push({ kind: 'water', label: 'Woda', value: state.capture.water });
         if (state.capture.foam > 0) list.push({ kind: 'foam', label: 'Piana', value: state.capture.foam });
 
         // Zasada Menedżera ZR OR:
         // maksymalna liczba pacjentów = dokładnie tyle Ambulansów S lub P.
-        const maxPatients = Number.parseInt(state.capture.maxPatients, 10);
+        // Jeśli karta wymaga jawnie większej liczby Ambulansów, zachowujemy
+        // większą wartość, ale nadal jako JEDEN wiersz `Ambulans S lub P`.
+        const maxPatients = Number.parseInt(state.capture.maxPatients, 10) || 0;
+        const patientAmbulances = Math.max(maxPatients, explicitPatientAmbulances);
 
-        if (Number.isFinite(maxPatients) && maxPatients > 0) {
+        if (patientAmbulances > 0) {
             list.push({
                 kind: 'vehicle',
                 label: 'Ambulans S lub P',
-                value: maxPatients,
+                value: patientAmbulances,
                 chance: null
             });
         }
